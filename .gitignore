@@ -20,6 +20,11 @@ lerna-debug.log*
 # Dependencies and build output
 node_modules
 dist
+dist-bun
+dist-bun-build
+dist-bun-dev
+dist-bun-stage-*
+dist-bun-backup-*
 dist-ssr
 *.local
 *.tsbuildinfo

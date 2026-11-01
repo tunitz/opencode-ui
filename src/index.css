@@ -141,14 +141,11 @@
     }
 }
 
-/* App viewport on mobile: dynamic units with a progressive fallback, then the
-   visualViewport pixel override synced by useAppViewportHeight. Desktop uses
+/* App viewport on mobile: the visualViewport pixel override synced by
+   useAppViewportHeight, with a viewport-unit fallback. Desktop uses
    the Tailwind md:h-svh (see App.tsx) and is deliberately not covered here. */
     .app-height {
-        height: 100vh;
-        height: 100svh;
-        height: 100dvh;
-        height: var(--app-viewport-height, 100dvh);
+        height: var(--app-viewport-height, 100vh);
     }
 
     /* Pin the mobile shell to the visual viewport, not just its height. iOS

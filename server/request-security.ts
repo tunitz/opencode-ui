@@ -55,7 +55,7 @@ const ALLOWED_METHODS = new Set([
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
-const SECURITY_HEADERS: Record<string, string> = {
+export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
@@ -79,6 +79,7 @@ export type RequestSecurityInput = {
   contentType: string | undefined
   contentLength: string | undefined
   transferEncoding: string | undefined
+  hasBody?: boolean
 }
 
 export type SecurityDecision =
@@ -106,7 +107,7 @@ function normalizedHost(value: string | undefined): string | null {
 }
 
 export function isProtectedPath(pathname: string): boolean {
-  return pathname === "/openapi.json" || pathname.startsWith("/api/")
+  return pathname === "/openapi.json" || pathname === "/api" || pathname.startsWith("/api/")
 }
 
 export function isAllowedApiPath(
@@ -197,10 +198,10 @@ export function evaluateRequest(
 
   if (
     isStateChanging(method) &&
-    hasRequestBody({
+    (input.hasBody || hasRequestBody({
       contentLength: input.contentLength,
       transferEncoding: input.transferEncoding,
-    }) &&
+    })) &&
     !isJsonContentType(input.contentType)
   ) {
     return { allowed: false, status: 415, reason: "browser mutation must be JSON" }
