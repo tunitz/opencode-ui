@@ -31,7 +31,7 @@ import {
 } from "@/lib/notifications"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
-type Notice = { kind: NotificationKind; sessionID: string; text: string }
+type Notice = { kind: NotificationKind; sessionID: string; text: string; test?: boolean }
 
 type NotificationsContextValue = {
   support: ReturnType<typeof notificationFeatureState>
@@ -112,9 +112,13 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const sessionsRef = useRef(sessions)
+  const activeSessionIDRef = useRef(nav.activeSessionID)
   useEffect(() => {
     sessionsRef.current = sessions
   }, [sessions])
+  useEffect(() => {
+    activeSessionIDRef.current = nav.activeSessionID
+  }, [nav.activeSessionID])
   const watchRequest = useRef(0)
   const watchQueue = useRef<Promise<void>>(Promise.resolve())
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -349,7 +353,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
     try {
       if (!enabled) throw new Error("Enable notifications first.")
       const result = await testNotificationDevice(deviceID)
-      if (!result.sent) showNotice({ kind: "completion", sessionID: nav.activeSessionID ?? "", text: "Test in-app alert. Notifications are not using Web Push on this device." })
+      if (!result.sent) showNotice({ kind: "completion", sessionID: nav.activeSessionID ?? "", text: "Test in-app alert. Notifications are not using Web Push on this device.", test: true })
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Could not send the test notification.")
     }
@@ -378,7 +382,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
         if (seenRef.current.has(key)) return
         seenRef.current.add(key)
         if (seenRef.current.size > 200) seenRef.current = new Set([...seenRef.current].slice(-100))
-        if (document.visibilityState !== "visible") return
+        if (document.visibilityState !== "visible" || notification.sessionID === activeSessionIDRef.current) return
         showNotice({ kind: notification.kind, sessionID: notification.sessionID, text: noticeCopy(notification.kind) })
       } catch {
         // Ignore malformed/non-app SSE frames.
@@ -441,7 +445,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
   return (
     <NotificationsContext.Provider value={value}>
       {children}
-      {notice ? (
+      {notice && (notice.test || !notice.sessionID || notice.sessionID !== nav.activeSessionID) ? (
         <Alert className="fixed inset-x-3 top-16 z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
           <BellIcon aria-hidden="true" />
           <AlertTitle>
