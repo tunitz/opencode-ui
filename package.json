@@ -1,5 +1,8 @@
 {
-  "name": "opencode-ui",
+  "name": "@tunitz/opencode-ui",
+  "publishConfig": {
+    "access": "public"
+  },
   "version": "0.1.0",
   "type": "module",
   "packageManager": "bun@1.4.4",
