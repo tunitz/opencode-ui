@@ -1,14 +1,39 @@
 {
   "name": "opencode-ui",
-  "private": true,
   "version": "0.1.0",
   "type": "module",
   "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": "1.4.4"
+  },
+  "bin": {
+    "opencode-ui": "bin/opencode-ui.ts"
+  },
+  "files": [
+    "bin/opencode-ui.ts",
+    "server/bun-server.ts",
+    "server/bun-config.ts",
+    "server/bun-application.ts",
+    "server/agent-config.ts",
+    "server/artifact-delivery.ts",
+    "server/notifications.ts",
+    "server/pty-websocket-bridge.ts",
+    "server/request-security.ts",
+    "server/web-dispatch.ts",
+    "server/web-gateway.ts",
+    "server/web-proxy.ts",
+    "server/web-security.ts",
+    "server/web-static.ts",
+    "src/lib/agent-config-types.ts",
+    "dist-bun-build/",
+    "README.md"
+  ],
   "scripts": {
     "dev": "bun scripts/dev-bun.mjs",
     "dev:bun": "bun scripts/dev-bun.mjs",
     "build": "tsc -b && bun scripts/build-bun.ts",
     "build:bun": "bun scripts/build-bun.ts",
+    "prepack": "OPENCODE_UI_BUILD_TARGET=production bun run build:bun",
     "start:bun": "bun server/bun-server.ts",
     "test:bun": "bun run build:bun && bun test server/*.test.mjs",
     "lint": "eslint .",

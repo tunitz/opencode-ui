@@ -380,10 +380,10 @@ export function createNotificationService(options: ServiceOptions = {}) {
     try {
       const headers = { authorization, accept: "application/json" }
       const [permissions, forms] = await Promise.all([
-        fetch(`${opencodeBaseUrl}/api/permission/request`, { headers })
+        fetch(`${opencodeBaseUrl}/api/permission/request`, { headers, redirect: "manual", signal: AbortSignal.timeout(10_000) })
           .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : null))
           .catch(() => null),
-        fetch(`${opencodeBaseUrl}/api/form`, { headers })
+        fetch(`${opencodeBaseUrl}/api/form`, { headers, redirect: "manual", signal: AbortSignal.timeout(10_000) })
           .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : null))
           .catch(() => null),
       ])
@@ -434,6 +434,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
       try {
         const response = await fetch(`${opencodeBaseUrl}/api/event`, {
           headers: { authorization, accept: "text/event-stream" },
+          redirect: "manual",
           signal: controller.signal,
           cache: "no-store",
         })

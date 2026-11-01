@@ -1084,6 +1084,8 @@ export function createAgentConfigService(
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         headers: authorization ? { authorization } : {},
+        // Never forward the selected engine's credential to a redirect target.
+        redirect: "manual",
         signal: AbortSignal.timeout(10_000),
       })
     } catch {

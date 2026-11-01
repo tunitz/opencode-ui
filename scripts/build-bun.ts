@@ -1,8 +1,8 @@
-// Experimental parallel frontend build using Bun's native bundler.
+// Production frontend build using Bun's native bundler.
 //
-// This does not replace the Vite build. It produces a self-contained static
-// site in dist-bun/ from the same index.html and src/main.tsx entrypoint, and
-// keeps public/ copied alongside the emitted assets.
+// Produces the package's self-contained dist-bun-build/ site (dist-bun-dev/
+// for development), including public/ and all emitted assets. The deployment
+// directory dist-bun/ is deliberately left untouched.
 //
 // Bun 1.4 has no Tailwind CSS transform, so this script drives the Tailwind
 // compiler from @tailwindcss/node (the same engine @tailwindcss/vite uses) and

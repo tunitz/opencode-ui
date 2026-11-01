@@ -88,7 +88,8 @@ type ArtifactDeliveryOptions = {
 }
 
 function normalizeRoots(roots: readonly string[] | undefined): string[] {
-  const values = roots?.length ? roots : DEFAULT_ARTIFACT_ROOTS
+  // An explicit empty list disables local file delivery; only omission uses legacy roots.
+  const values = roots ?? DEFAULT_ARTIFACT_ROOTS
   const normalized: string[] = []
   for (const value of values) {
     if (!value || !isAbsolute(value)) continue
@@ -446,6 +447,7 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
         `${options.opencodeBaseUrl.replace(/\/$/, "")}/api/session/${encodeURIComponent(sessionID)}/message?limit=200&order=desc`,
         {
           headers: { authorization: options.authorization, accept: "application/json" },
+          redirect: "manual",
           signal: controller.signal,
         }
       )
