@@ -192,6 +192,15 @@ export function FilesPanel({
     [directory, sessionID]
   )
 
+  const cancelRequests = useCallback(() => {
+    request.current++
+    viewRequest.current++
+    searchRequest.current++
+    abortRef.current?.abort()
+    viewAbortRef.current?.abort()
+    searchAbortRef.current?.abort()
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     void Promise.resolve().then(() => {
@@ -211,14 +220,9 @@ export function FilesPanel({
     })
     return () => {
       cancelled = true
-      request.current++
-      viewRequest.current++
-      searchRequest.current++
-      abortRef.current?.abort()
-      viewAbortRef.current?.abort()
-      searchAbortRef.current?.abort()
+      cancelRequests()
     }
-  }, [loadDirectory, sessionID])
+  }, [cancelRequests, loadDirectory, sessionID])
 
   const openEntry = (entry: ProjectEntry) => {
     setAttachError(null)
@@ -739,15 +743,19 @@ export function ChangesPanel({
     }
   }, [context, directory])
 
+  const cancelRequest = useCallback(() => {
+    request.current++
+    abortRef.current?.abort()
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     void Promise.resolve().then(() => { if (!cancelled) void loadDiff() })
     return () => {
       cancelled = true
-      request.current++
-      abortRef.current?.abort()
+      cancelRequest()
     }
-  }, [loadDiff, reloadKey])
+  }, [cancelRequest, loadDiff, reloadKey])
 
   useEffect(() => {
     if (!refreshRef) return
