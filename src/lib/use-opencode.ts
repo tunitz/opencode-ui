@@ -1998,7 +1998,7 @@ export function useOpenCode(): OpenCodeController {
         key,
         seq: running ? (existing as LiveRun).nextSeq : 0,
         id: null,
-        text: trimmed,
+        text,
         delivery: requestedDelivery,
         requestedSteer: steer,
         requestedDelivery,
@@ -2036,7 +2036,7 @@ export function useOpenCode(): OpenCodeController {
       try {
         const inbox = await openCode.session.prompt({
           sessionID,
-          text: trimmed,
+          text,
           ...(submittedAttachments.length > 0
             ? {
                 files: submittedAttachments.map(promptFileForAttachment),
@@ -2159,6 +2159,10 @@ export function useOpenCode(): OpenCodeController {
             : {}),
           ...(running ? { delivery: "steer" as const } : {}),
         })
+        const submittedIDs = new Set(submittedAttachments.map((attachment) => attachment.id))
+        setSessionAttachments(sessionID, (current) =>
+          current.filter((attachment) => !submittedIDs.has(attachment.id))
+        )
         return null
       } catch (error) {
         return errorMessage(error)
@@ -2171,7 +2175,7 @@ export function useOpenCode(): OpenCodeController {
         })
       }
     },
-    [sessions]
+    [sessions, setSessionAttachments]
   )
 
   const interruptSession = useCallback(async () => {

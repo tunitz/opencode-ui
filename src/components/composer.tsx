@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -21,6 +22,8 @@ import {
 } from "lucide-react"
 
 import { BtwDialog } from "@/components/btw-dialog"
+import { FilesPanel } from "@/components/files-panel"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { ModelSettingsDrawer } from "@/components/model-settings"
 import {
   SessionCommandDialogs,
@@ -44,9 +47,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import {
   InputGroup,
-  InputGroupTextarea,
 } from "@/components/ui/input-group"
-import { canSendPrompt } from "@/lib/composer-state"
+import { canSendPrompt, createSessionSubmissionLock, createSessionCompositionState } from "@/lib/composer-state"
 import {
   filterSlashCommands,
   findSlashCommand,
@@ -67,6 +69,9 @@ import {
   isSafeImageMime,
 } from "@/lib/files"
 import { readDraft, readDrafts, updateDraft } from "@/lib/drafts"
+import { fileQueryRange, fileReference } from "@/lib/file-references"
+import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer-editor"
+import { fsFindUrl, type ProjectEntry } from "@/lib/files"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -119,25 +124,28 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
   const [skillsBySession, setSkillsBySession] = useState<
     Record<string, SelectedSkill[]>
   >({})
-  const [pendingDelivery, setPendingDelivery] = useState<
-    "steer" | "queue" | null
-  >(null)
+  const [pendingDelivery, setPendingDelivery] = useState<Record<string, "steer" | "queue" | null>>({})
   const [commandIndex, setCommandIndex] = useState(0)
+  const [fileQuery, setFileQuery] = useState<{ query: string; start: number; end: number; sessionID: string } | null>(null)
+  const [fileResults, setFileResults] = useState<ProjectEntry[]>([])
+  const [fileStatus, setFileStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")
+  const [fileIndex, setFileIndex] = useState(0)
+  const [preview, setPreview] = useState<{ sessionID: string; path: string } | null>(null)
   const [commandPickerDismissed, setCommandPickerDismissed] = useState(false)
   const [commandFeedback, setCommandFeedback] = useState<{
     tone: "status" | "error"
     text: string
   } | null>(null)
-  const [executingCommand, setExecutingCommand] = useState<string | null>(null)
+  const [executingCommand, setExecutingCommand] = useState<Record<string, string>>({})
   const [sessionDialog, setSessionDialog] =
     useState<SessionCommandDialogKind | null>(null)
   const [sessionDialogText, setSessionDialogText] = useState("")
   const [integrationDialog, setIntegrationDialog] =
     useState<IntegrationCommandDialogKind | null>(null)
   const [btwQuestion, setBtwQuestion] = useState<string | null>(null)
-  const composingRef = useRef(false)
-  const submittingRef = useRef(false)
-  const commandSubmittingRef = useRef(false)
+  const composingRef = useRef(createSessionCompositionState())
+  const activeDraftKeyRef = useRef<string | null>(null)
+  const submittingRef = useRef(createSessionSubmissionLock())
   const serverCommandOverrideRef = useRef<string | null>(null)
   const lastPlainDraftRef = useRef<Record<string, string>>({})
   const draftRevisionsRef = useRef<Record<string, number>>({})
@@ -149,7 +157,7 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
   }, [drafts])
   const pickerId = useId()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<ComposerEditorHandle>(null)
   const attachmentSequenceRef = useRef(0)
   const skillSequenceRef = useRef(0)
 
@@ -159,12 +167,16 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
 
   const activeSession = nav.activeSession
   const draftKey = nav.activeSessionID ?? "__none__"
+  useLayoutEffect(() => {
+    activeDraftKeyRef.current = draftKey
+    composingRef.current.switchTo(draftKey)
+  }, [draftKey])
   const draft = drafts[draftKey] ?? ""
   function persistDraft(key: string, value: string) {
     const baseline = persistedDraftsRef.current!
     const result = updateDraft(key, value, baseline[key] ?? "")
     if (result === "saved") {
-      baseline[key] = value.trim() ? value : ""
+      baseline[key] = value
       setStorageConflictKey((current) => (current === key ? null : current))
     } else if (result === "conflict") {
       setStorageConflictKey(key)
@@ -180,6 +192,67 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     persistDraft(draftKey, value)
     setDrafts((current) => ({ ...current, [draftKey]: value }))
   }
+
+  function updateFileQuery(value: string, start: number, end: number) {
+    const range = fileQueryRange(value, start, end)
+    setFileQuery(range ? { ...range, sessionID: draftKey } : null)
+    setFileResults([])
+    setFileStatus("idle")
+    setFileIndex(0)
+  }
+
+  function insertReference(path: string, range?: { start: number; end: number }) {
+    const selection = editorRef.current?.selection()
+    const start = range?.start ?? selection?.start ?? draft.length
+    const end = range?.end ?? selection?.end ?? start
+    const reference = fileReference(path)
+    const prefix = start > 0 && !/\s/.test(draft[start - 1]) ? " " : ""
+    const suffix = end < draft.length && /\s/.test(draft[end]) ? "" : " "
+    setDraft(draft.slice(0, start) + prefix + reference + suffix + draft.slice(end))
+    setFileQuery(null)
+    requestAnimationFrame(() => {
+      editorRef.current?.focus()
+      const caret = start + prefix.length + reference.length + suffix.length
+      editorRef.current?.setCaret(caret)
+    })
+  }
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionID: string; path: string }>).detail
+      if (!composingRef.current.isComposing(draftKey) && detail?.sessionID === nav.activeSessionID && typeof detail.path === "string") insertReference(detail.path)
+    }
+    window.addEventListener("composer-insert-project-reference", listener)
+    return () => window.removeEventListener("composer-insert-project-reference", listener)
+  })
+
+  useEffect(() => {
+    const directory = activeSession?.location?.directory
+    if (!fileQuery || fileQuery.sessionID !== draftKey || !directory || !fileQuery.query.trim()) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setFileStatus("loading")
+      fetch(fsFindUrl(directory, fileQuery.query), { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Search failed")
+          return await response.json() as { data: ProjectEntry[] }
+        })
+        .then((body) => { if (!controller.signal.aborted) { setFileResults((body.data ?? []).filter((entry) => entry.type === "file")); setFileStatus("ready") } })
+        .catch(() => { if (!controller.signal.aborted) setFileStatus("error") })
+    }, 200)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [fileQuery, activeSession?.location?.directory, draftKey])
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        setFileQuery(null)
+        setPreview(null)
+      }
+    })
+    return () => { cancelled = true }
+  }, [draftKey])
 
   const slashCommands = useMemo(
     () => mergeSlashCommands(nav.commands),
@@ -299,9 +372,9 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     (attaching ? "Attaching files…" : null) ??
     blockedReason ??
     (nav.sending
-      ? executingCommand
-        ? `Running /${executingCommand}…`
-        : pendingDelivery === "queue"
+      ? executingCommand[draftKey]
+        ? `Running /${executingCommand[draftKey]}…`
+        : pendingDelivery[draftKey] === "queue"
           ? "Queueing message…"
           : responding
             ? "Sending steer…"
@@ -311,7 +384,7 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
         : null)
 
   function focusComposer() {
-    requestAnimationFrame(() => textareaRef.current?.focus())
+    requestAnimationFrame(() => editorRef.current?.focus())
   }
 
   function isVisible(element: HTMLElement) {
@@ -432,16 +505,6 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
       const next = existing.filter((skill) => !keys.has(skill.key))
       return { ...current, [sessionKey]: next }
     })
-  }
-
-  function clearExactAttachments(
-    sessionKey: string,
-    submitted: readonly ComposerAttachment[]
-  ) {
-    if (nav.activeSessionID !== sessionKey) return
-    for (const attachment of submitted) {
-      nav.removeAttachment(attachment.id)
-    }
   }
 
   function openSessionDialog(
@@ -705,7 +768,6 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     command: SlashCommand,
     argumentsText: string
   ) {
-    if (commandSubmittingRef.current) return
     const session = nav.activeSession
     const directory = session?.location?.directory
     if (!session || !directory) {
@@ -731,9 +793,8 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     const sessionKey = draftKey
     const revision = draftRevisionsRef.current[sessionKey] ?? 0
     const attachments = nav.attachments
-    commandSubmittingRef.current = true
-    submittingRef.current = true
-    setExecutingCommand(command.name)
+    if (!submittingRef.current.acquire(sessionKey)) return
+    setExecutingCommand((current) => ({ ...current, [sessionKey]: command.name }))
     setError(null)
     try {
       const failure = await nav.executeCommand(
@@ -742,22 +803,22 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
         attachments
       )
       if (failure) {
-        setError(failure)
+        if (activeDraftKeyRef.current === sessionKey) setError(failure)
         return
       }
       clearExactDraft(sessionKey, submitted, revision)
-      clearExactAttachments(sessionKey, attachments)
-      serverCommandOverrideRef.current = null
-      setCommandFeedback({
-        tone: "status",
-        text: `/${command.name} accepted by the backend.`,
-      })
+      if (activeDraftKeyRef.current === sessionKey) {
+        serverCommandOverrideRef.current = null
+        setCommandFeedback({
+          tone: "status",
+          text: `/${command.name} accepted by the backend.`,
+        })
+      }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not run the command.")
+      if (activeDraftKeyRef.current === sessionKey) setError(failure instanceof Error ? failure.message : "Could not run the command.")
     } finally {
-      commandSubmittingRef.current = false
-      submittingRef.current = false
-      setExecutingCommand(null)
+      submittingRef.current.release(sessionKey)
+      setExecutingCommand((current) => { const next = { ...current }; delete next[sessionKey]; return next })
     }
   }
 
@@ -959,7 +1020,7 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     )
   }
 
-  function handlePaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
+  function handlePaste(event: ReactClipboardEvent<HTMLDivElement>) {
     const clipboard = event.clipboardData
     if (!clipboard) return
 
@@ -971,19 +1032,27 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
       .filter((file): file is File => Boolean(file))
     const files = itemFiles.length > 0 ? itemFiles : [...clipboard.files]
     const images = files.filter(isImageClipboardFile)
-    if (images.length === 0) return
-
+    const plainText = clipboard.getData("text/plain")
     const hasText = Boolean(
-      clipboard.getData("text/plain") || clipboard.getData("text/html")
+      plainText || clipboard.getData("text/html")
     )
     // Image-only pastes are handled as attachments. A mixed paste keeps the
     // browser's ordinary text insertion/caret behavior and adds the image too.
-    if (!hasText) event.preventDefault()
-    void addFiles(images, nav.activeSessionID, "paste")
+    if (images.length > 0) {
+      if (!hasText) event.preventDefault()
+      void addFiles(images, nav.activeSessionID, "paste")
+    }
+    // Lexical's normal paste path normalizes CRLF. Insert the clipboard's
+    // literal plain text instead so drafts and prompt bytes remain unchanged.
+    if (plainText.includes("\r")) {
+      event.preventDefault()
+      event.stopPropagation()
+      editorRef.current?.insertPlainText(plainText)
+    }
   }
 
   async function submit(delivery: "steer" | "queue" | null = responding ? "steer" : null) {
-    if (!canSend || submittingRef.current) {
+    if (!canSend) {
       return
     }
     if (delivery === "queue" && (!responding || slashText)) {
@@ -1000,34 +1069,34 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     const sessionKey = draftKey
     const revision = draftRevisionsRef.current[sessionKey] ?? 0
     const submittedSkills = selectedSkills
-    submittingRef.current = true
+    if (!submittingRef.current.acquire(sessionKey)) return
     setError(null)
-    setPendingDelivery(delivery)
+    setPendingDelivery((current) => ({ ...current, [sessionKey]: delivery }))
 
     try {
       const failure = await nav.sendPrompt(submitted, delivery, submittedSkills)
 
       if (failure) {
-        setError(failure)
+        if (activeDraftKeyRef.current === sessionKey) setError(failure)
         return
       }
 
-      setAttachmentError(null)
+      if (activeDraftKeyRef.current === sessionKey) setAttachmentError(null)
       clearExactSkills(sessionKey, submittedSkills)
 
       // Never discard edits made while admission was in flight.
       clearExactDraft(sessionKey, submitted, revision)
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not send the message.")
+      if (activeDraftKeyRef.current === sessionKey) setError(failure instanceof Error ? failure.message : "Could not send the message.")
     } finally {
-      submittingRef.current = false
-      setPendingDelivery(null)
+      submittingRef.current.release(sessionKey)
+      setPendingDelivery((current) => { const next = { ...current }; delete next[sessionKey]; return next })
     }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (composingRef.current) return
+    if (composingRef.current.isComposing(draftKey)) return
     if (slashDraft) {
       void submitSlashDraft()
       return
@@ -1042,10 +1111,26 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     void submit(responding ? "steer" : null)
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const native = event.nativeEvent
-    if (composingRef.current || native.isComposing || native.keyCode === 229) {
+    if (composingRef.current.isComposing(draftKey) || native.isComposing || native.keyCode === 229) {
       return
+    }
+
+    if (fileQuery?.sessionID === draftKey) {
+      if (event.key === "Escape") { event.preventDefault(); setFileQuery(null); return }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        if (fileResults.length) {
+          event.preventDefault()
+          setFileIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + fileResults.length) % fileResults.length)
+        }
+        return
+      }
+      if (event.key === "Enter" && !touchInputRef.current && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && fileResults[fileIndex]) {
+        event.preventDefault()
+        insertReference(fileResults[fileIndex].path, fileQuery)
+        return
+      }
     }
 
     if (pickerOpen) {
@@ -1115,6 +1200,21 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
         modal={false}
       >
       <form className="shrink-0" onSubmit={handleSubmit}>
+      {activeSession && preview?.sessionID === draftKey ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setPreview(null) }}>
+          <DialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl">
+            <DialogTitle>Project file preview</DialogTitle>
+            <FilesPanel key={`${preview.sessionID}:${preview.path}`} nav={nav} session={activeSession} initialPath={preview.path} />
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {fileQuery?.sessionID === draftKey ? (
+        <div className="mb-1 max-h-48 overflow-auto rounded-lg border bg-popover p-2 text-sm" aria-label="Project file suggestions">
+          {!activeSession?.location?.directory ? <p role="status">This session has no project directory.</p> : !fileQuery.query.trim() ? <p role="status">Type a file name to search.</p> : fileStatus === "error" ? <p role="alert">Project file search failed.</p> : fileStatus !== "ready" ? <p role="status">Searching project files…</p> : fileResults.length === 0 ? <p role="status">No matching files.</p> : (
+            <><p className="sr-only" role="status">{fileResults.length} results. Selected {fileResults[fileIndex]?.path}.</p><ul id={`${pickerId}-files-list`} role="listbox" aria-label="Project file suggestions">{fileResults.map((entry, index) => <li key={entry.path} role="presentation"><Button id={`${pickerId}-file-${index}`} role="option" aria-selected={index === fileIndex} type="button" variant={index === fileIndex ? "secondary" : "ghost"} className="min-h-11 w-full justify-start" onMouseDown={(event) => event.preventDefault()} onClick={() => insertReference(entry.path, fileQuery)}><span className="truncate" dir="ltr">{entry.path}</span></Button></li>)}</ul></>
+          )}
+        </div>
+      ) : null}
       <p
         id="composer-status"
         className={
@@ -1253,31 +1353,21 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
             />
           }
         />
-        <InputGroupTextarea
-          ref={textareaRef}
+        <ComposerEditor
+          key={draftKey}
+          ref={editorRef}
+          sessionKey={draftKey}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(value, start, end) => { setDraft(value); if (!composingRef.current.isComposing(draftKey)) updateFileQuery(value, start, end) }}
+          onSelection={(value, start, end) => { if (!composingRef.current.isComposing(draftKey)) updateFileQuery(value, start, end) }}
+          onPreview={(path) => { if (activeSession) { setFileQuery(null); setPreview({ sessionID: draftKey, path }) } }}
           onKeyDown={handleKeyDown}
           onPointerDown={(event) => { touchInputRef.current = event.pointerType === "touch" }}
           onPaste={handlePaste}
-          onCompositionStart={() => {
-            composingRef.current = true
-          }}
-          onCompositionEnd={() => {
-            composingRef.current = false
-          }}
-          rows={1}
-          aria-label="Message"
-          aria-describedby="composer-status"
-          aria-autocomplete="list"
-          aria-controls={pickerOpen && filteredCommands.length > 0 ? `${pickerId}-list` : undefined}
-          aria-activedescendant={
-            pickerOpen && activeCommandIndex >= 0
-              ? `${pickerId}-option-${activeCommandIndex}`
-              : undefined
-          }
-          data-composer-input
-          className="min-h-10 max-h-40 w-full overflow-y-auto px-4 pt-3 pb-1 text-base leading-6 text-foreground md:text-base"
+          onCompositionStart={() => { composingRef.current.start(draftKey) }}
+          onCompositionEnd={() => { composingRef.current.end(draftKey) }}
+          controls={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults.length > 0 ? `${pickerId}-files-list` : pickerOpen && filteredCommands.length > 0 ? `${pickerId}-list` : undefined}
+          activeDescendant={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults[fileIndex] ? `${pickerId}-file-${fileIndex}` : pickerOpen && activeCommandIndex >= 0 ? `${pickerId}-option-${activeCommandIndex}` : undefined}
         />
 
         <div data-composer-footer className="flex w-full min-w-0 items-center gap-1 px-2 pb-2">

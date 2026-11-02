@@ -6,6 +6,7 @@ import {
   FolderIcon,
   LoaderCircleIcon,
   PaperclipIcon,
+  PlusIcon,
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react"
@@ -30,6 +31,7 @@ import {
   type ProjectEntry,
 } from "@/lib/files"
 import type { OpenCodeController } from "@/lib/use-opencode"
+import { insertProjectReference, isSafeReferencePath } from "@/lib/file-references"
 import { cn } from "@/lib/utils"
 
 type LoadStatus = "idle" | "loading" | "ready" | "error"
@@ -58,19 +60,21 @@ async function apiJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 function EntryButton({
   entry,
   onOpen,
+  onInsert,
 }: {
   entry: ProjectEntry
   onOpen: (entry: ProjectEntry) => void
+  onInsert: (path: string) => void
 }) {
   const name = entry.path.split("/").filter(Boolean).at(-1) ?? entry.path
   return (
-    <li>
+    <li className="flex items-center">
       <Button
         type="button"
         variant="ghost"
         aria-label={`${entry.type === "directory" ? "Open folder" : "Open file"} ${entry.path}`}
         onClick={() => onOpen(entry)}
-        className="h-auto min-h-11 w-full justify-start gap-2 rounded-lg px-2 py-1.5 text-start font-normal"
+        className="h-auto min-h-11 min-w-0 flex-1 justify-start gap-2 rounded-lg px-2 py-1.5 text-start font-normal"
       >
         {entry.type === "directory" ? (
           <FolderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
@@ -84,6 +88,11 @@ function EntryButton({
           {entry.type}
         </span>
       </Button>
+      {entry.type === "file" ? (
+        <Button type="button" variant="ghost" className="size-11 shrink-0" aria-label={`Insert reference to ${entry.path}`} onClick={() => onInsert(entry.path)}>
+          <PlusIcon aria-hidden="true" className="size-4" />
+        </Button>
+      ) : null}
     </li>
   )
 }
@@ -93,11 +102,13 @@ function ProjectFileList({
   entries,
   empty,
   onOpen,
+  onInsert,
 }: {
   title: string
   entries: ProjectEntry[]
   empty: string
   onOpen: (entry: ProjectEntry) => void
+  onInsert: (path: string) => void
 }) {
   return (
     <section className="space-y-1" aria-label={title}>
@@ -107,7 +118,7 @@ function ProjectFileList({
       ) : (
         <ul className="space-y-0.5">
           {entries.map((entry) => (
-            <EntryButton key={`${entry.type}:${entry.path}`} entry={entry} onOpen={onOpen} />
+            <EntryButton key={`${entry.type}:${entry.path}`} entry={entry} onOpen={onOpen} onInsert={onInsert} />
           ))}
         </ul>
       )}
@@ -128,10 +139,12 @@ export function FilesPanel({
   nav,
   session,
   refreshRef,
+  initialPath,
 }: {
   nav: OpenCodeController
   session: SessionInfo
   refreshRef?: { current: InspectorPanelHandle | null }
+  initialPath?: string
 }) {
   const directory = session.location?.directory ?? null
   const sessionID = session.id
@@ -216,13 +229,16 @@ export function FilesPanel({
         setSearchStatus("idle")
         setSearchError(null)
         void loadDirectory("")
+        if (initialPath) void openFile(initialPath)
       }
     })
     return () => {
       cancelled = true
       cancelRequests()
     }
-  }, [cancelRequests, loadDirectory, sessionID])
+  // initialPath is fixed for this mounted panel.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cancelRequests, loadDirectory, sessionID, initialPath])
 
   const openEntry = (entry: ProjectEntry) => {
     setAttachError(null)
@@ -252,6 +268,12 @@ export function FilesPanel({
     setViewError(null)
     // Keep a valid preview of the same file visible while it refreshes.
     setView((current) => (current?.path === path ? current : null))
+    if (!isSafeReferencePath(path)) {
+      const failure = "Invalid project file path."
+      setViewStatus("error")
+      setViewError(failure)
+      return failure
+    }
     try {
       const response = await fetch(fsReadUrl(directory, path), {
         headers: { Range: `bytes=0-${MAX_FILE_PREVIEW_BYTES - 1}` },
@@ -418,7 +440,7 @@ export function FilesPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {attachError ? (
         <p role="alert" className="text-xs break-words text-destructive">
           {attachError}
@@ -522,6 +544,7 @@ export function FilesPanel({
               entries={searchEntries}
               empty="No matching files."
               onOpen={openEntry}
+              onInsert={(path) => insertProjectReference(sessionID, path)}
             />
             </>
           ) : (
@@ -577,6 +600,7 @@ export function FilesPanel({
                   entries={entries}
                   empty="This directory is empty."
                   onOpen={openEntry}
+                  onInsert={(path) => insertProjectReference(sessionID, path)}
                 />
               ) : null}
             </>

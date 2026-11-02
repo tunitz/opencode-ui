@@ -92,9 +92,9 @@ export function updateDraft(sessionID: string, value: string, expected: string):
   if (!s) return "unavailable"
   try {
     const drafts = readDrafts()
-    if ((drafts[sessionID] ?? "") === (value.trim() ? value : "")) return "saved"
+    if ((drafts[sessionID] ?? "") === value) return "saved"
     if ((drafts[sessionID] ?? "") !== expected) return "conflict"
-    if (value.trim()) drafts[sessionID] = value
+    if (value) drafts[sessionID] = value
     else delete drafts[sessionID]
     s.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, drafts }))
     return "saved"
@@ -118,7 +118,7 @@ export function writeDrafts(drafts: Record<string, string>): boolean {
   const clean: Record<string, string> = {}
 
   for (const [key, value] of Object.entries(drafts)) {
-    if (value.trim() !== "") {
+    if (value !== "") {
       clean[key] = value
     }
   }

@@ -19,6 +19,11 @@ for (const [name, Component] of [["FilesPanel", FilesPanel], ["ChangesPanel", Ch
     })
     try {
       await act(async () => { root = create(React.createElement(Component, props("first"))) })
+      if (name === "FilesPanel") {
+        // The panel is a grid item in the composer preview dialog; it must be
+        // allowed to shrink when the file path or preview content is long.
+        expect(root.toJSON().props.className.split(/\s+/)).toContain("min-w-0")
+      }
       const first = [...requests]
       expect(first.length).toBeGreaterThan(0)
       await act(async () => { root.update(React.createElement(Component, props("second"))) })
@@ -53,3 +58,31 @@ for (const [name, Component] of [["FilesPanel", FilesPanel], ["ChangesPanel", Ch
     }
   })
 }
+
+test("unsafe preview paths never reach the read endpoint", async () => {
+  const oldActEnvironment = globalThis.IS_REACT_ACT_ENVIRONMENT
+  const oldFetch = globalThis.fetch
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  const requests = []
+  let root
+  globalThis.fetch = async (url) => {
+    requests.push(String(url))
+    return Response.json({ data: [] })
+  }
+  try {
+    await act(async () => {
+      root = create(React.createElement(FilesPanel, {
+        nav: { attachments: [] },
+        session: { id: "test", location: { directory: "/synthetic" } },
+        initialPath: "../secret.txt",
+      }))
+    })
+    expect(requests.some((url) => url.startsWith("/api/fs/read/"))).toBe(false)
+    expect(JSON.stringify(root.toJSON())).toContain("Invalid project file path")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    globalThis.fetch = oldFetch
+    if (oldActEnvironment === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT
+    else globalThis.IS_REACT_ACT_ENVIRONMENT = oldActEnvironment
+  }
+})
