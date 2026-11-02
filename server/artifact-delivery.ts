@@ -11,6 +11,7 @@ import { basename, extname, isAbsolute, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
 import type { IncomingMessage, ServerResponse } from "node:http"
+import { createProjectArtifacts } from "./project-artifacts.ts"
 
 export const DEFAULT_ARTIFACT_ROOTS = ["/tmp/opencode/shots"] as const
 export const DEFAULT_ARTIFACT_MAX_BYTES = 32 * 1024 * 1024
@@ -80,6 +81,7 @@ type ArtifactDeliveryOptions = {
   roots?: readonly string[]
   opencodeBaseUrl?: string
   authorization?: string
+  fetch?: typeof fetch
   fetchSessionMessages?: (sessionID: string) => Promise<NativeMessage[]>
   ttlMs?: number
   maxBytes?: number
@@ -427,6 +429,7 @@ function errorResponse(error: ArtifactError): Response {
 }
 
 export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
+  const projectArtifacts = createProjectArtifacts(options)
   const roots = normalizeRoots(options.roots)
   const ttlMs = options.ttlMs ?? DEFAULT_ARTIFACT_TTL_MS
   const maxBytes = options.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES
@@ -581,6 +584,7 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
   async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url)
     const pathname = url.pathname
+    if (pathname === "/api/ui/project-artifacts" || pathname.startsWith("/api/ui/project-artifacts/")) return projectArtifacts.handleRequest(request)
     if (pathname === "/api/ui/artifacts/resolve") {
       if (request.method !== "POST") return jsonResponse(405, { error: { code: "method", message: "Method not allowed." } })
       let body: unknown

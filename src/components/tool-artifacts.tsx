@@ -19,7 +19,7 @@ import "@openuidev/react-ui/styles/cardHeader.css"
 import "@openuidev/react-ui/styles/image.css"
 
 import { PdfPreview } from "@/components/pdf-preview"
-import { decodePreviewText } from "@/components/preview-text-data"
+import { decodePreviewText, readPreviewText } from "@/components/preview-text-data"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -183,12 +183,12 @@ function RouteTextPreview({ artifact }: { artifact: ToolArtifact }) {
           signal: controller.signal,
         })
         if (!response.ok) throw new Error("text unavailable")
-        const body = await response.text()
+        const body = await readPreviewText(response, MAX_TOOL_ARTIFACT_TEXT_BYTES)
         if (!cancelled) {
           setState({
             status: "ready",
-            text: body.slice(0, MAX_TOOL_ARTIFACT_TEXT_BYTES),
-            truncated: response.status === 206 || body.length > MAX_TOOL_ARTIFACT_TEXT_BYTES,
+            text: body.text,
+            truncated: body.truncated,
           })
         }
       } catch {

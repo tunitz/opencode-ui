@@ -49,3 +49,41 @@ export function decodePreviewText(dataUrl: string, limit: number): { text: strin
     return null
   }
 }
+
+// Do not rely on a server honoring Range: retain at most one byte beyond the
+// preview limit and cancel the stream as soon as truncation is established.
+export async function readPreviewText(response: Response, limit: number): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: "", truncated: false }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let length = 0
+  let truncated = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const remaining = limit - length
+      if (remaining > 0) {
+        const prefix = value.subarray(0, remaining)
+        chunks.push(prefix.slice())
+        length += prefix.byteLength
+      }
+      if (value.byteLength > remaining) {
+        truncated = true
+        void reader.cancel().catch(() => {})
+        break
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  const range = /^bytes\s+\d+-(\d+)\/(\d+)$/i.exec(response.headers.get("content-range") ?? "")
+  if (range && Number(range[1]) + 1 < Number(range[2])) truncated = true
+  return { text: new TextDecoder().decode(bytes), truncated }
+}

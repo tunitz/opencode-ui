@@ -218,9 +218,56 @@ free `https:` Tool.FileContent remains an explicit no-prefetch link. `file:`/loc
 paths remain unavailable unless the same verified-root link route approves them (it currently
 derives from tool text, not a bare Tool.FileContent URI). Active HTML/SVG, raw base64, MIME
 mismatch, malformed/missing URI, >8 MiB inline content, and traversal/unsafe names remain rejected.
-Previews cap image thumbnails at 2 MiB and text at 256 KiB; PDF uses the existing local bounded
+Previews cap image thumbnails at 2 MiB and text at 256 KiB; route text previews read a bounded
+byte prefix and cancel the response even if the upstream ignores Range. PDF uses the existing local bounded
 PDF.js canvas or the same-origin route URL. Download is explicit and uses exact validated bytes
 and a sanitized filename; temporary object URLs are revoked, and previews never use object URLs.
+
+## Automatic project attachments [app layer, synthetic verification only]
+
+- Separate from the existing approved-root/tool-provenance route above:
+  `POST /api/ui/project-artifacts/resolve` accepts JSON `{sessionID, messageID, href}` and
+  returns `{data:{id,url,name,mime,size,kind,toolName,canonicalId}}`. Errors distinguish
+  `403 outside` (lexically outside/unsafe path) from `404 unavailable` (unproven link,
+  incomplete/failed/interrupted turn, missing file, engine denial, or upstream failure).
+- The server reads authoritative native history in durable sequence order, follows pagination
+  through the final empty page, and requires an actual Markdown link (including reference
+  links, excluding image/code/prose-only references) in the final assistant message of a
+  succeeded idle-delimited turn. That assistant must have `finish: stop`, completion time,
+  and no error. Steered prompts do not start a separate turn; shutdown without idle does not
+  qualify. Browser-claimed text/path/location is never authoritative.
+- Links may be project-relative or absolute inside the session directory. External/file URLs,
+  UNC/backslash/control paths, traversal segments (including percent-encoded traversal),
+  query/fragment suffixes, and sibling-prefix paths are rejected. Engine `fs/read` performs
+  realpath confinement and regular-file validation, including symlink escape denial. That
+  denial is reported as unavailable; the UI server does not inspect its own filesystem.
+- Historical filesystem identity cannot be reconstructed reliably across location switches:
+  2.1.4 public history omits workspace placement. Attachments spanning a location switch or
+  preceding any later switch are conservatively unavailable, rather than silently rebound to
+  the current project. Known workspace placements are rejected. The public API can hide
+  placement entirely; the native engine's location resolution/confinement remains authoritative,
+  and workspace-backed file delivery is not claimed (native host-filesystem issue #44568).
+- An opaque process-local capability returns `/api/ui/project-artifacts/<id>`; GET/HEAD and
+  `?download=1` stay behind the existing Host/Origin/fetch-site/JSON gateway. Each read rechecks
+  provenance/location and opens current bytes from the configured authenticated engine's raw
+  `GET /api/fs/read/<segment-encoded-path>?location[directory]=...`. Resolve probes one byte and
+  cancels immediately; no whole-file buffering, artifact byte cap, or artifact-count cap is used.
+  Capabilities are lost on UI-server restart. Metadata can become stale after edits; reads are
+  current bytes, not snapshots. History is refetched, never cached as authorization.
+- Single ranges are forwarded to the native engine (206/416; native malformed-range behavior
+  applies). HEAD opens and immediately cancels a native GET because the pinned raw route is GET.
+  Downstream cancellation/request abort aborts the upstream stream. Header acquisition and
+  metadata/history calls have 10-second timeouts, no retries; successful file streams have no
+  duration/byte cutoff. Redirects are not followed. Only file length/range headers are copied;
+  cookies, authorization, CORS, validators and upstream errors are not exposed. Responses are
+  no-store/nosniff/same-origin CORP with sandbox CSP and sanitized Content-Disposition. Only
+  raster images can be inline; PDF is attachment, text is downgraded to plain text, active or
+  unknown MIME is octet-stream attachment.
+- **Approved engine race caveat:** the pinned engine checks realpath/stats before its eventual
+  stream open, not an atomic confined file-descriptor open. Concurrent path/symlink replacement
+  can race those checks. Multiple session/history/file requests are likewise not a transactional
+  snapshot. This client does not claim to repair that native boundary or provide multi-tenant
+  isolation. All new verification uses synthetic engine fixtures, never models/live sessions.
 
 ## Opt-in notification contract [app layer]
 

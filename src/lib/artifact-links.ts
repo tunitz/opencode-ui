@@ -5,7 +5,7 @@ const RESOLVE_SUCCESS_TTL_MS = 5 * 60 * 1000
 const RESOLVE_FAILURE_TTL_MS = 30 * 1000
 const ARTIFACT_EXTENSION = /\.(?:png|jpe?g|gif|webp|avif|pdf|txt|md|markdown|json|jsonc|csv|tsv|log|ya?ml|toml|js|mjs|cjs|ts|tsx|jsx|css|scss|sass|less|py|rb|rs|go|java|c|cc|cpp|h|hpp|sh|zsh|bash|sql|xml|zip)$/i
 
-type ResolveResponse = {
+export type ResolveResponse = {
   id: string
   url: string
   name: string
@@ -70,7 +70,7 @@ function resolveUrl(value: string, baseUrl: string): string {
   return new URL(value, baseUrl || "http://localhost").href
 }
 
-function mapResolvedArtifact(data: ResolveResponse, href: string, baseUrl: string): ToolArtifact {
+export function mapResolvedArtifact(data: ResolveResponse, href: string, baseUrl: string): ToolArtifact {
   const kind: ToolArtifactKind =
     data.kind === "image" || data.kind === "pdf" || data.kind === "text" || data.kind === "binary"
       ? data.kind

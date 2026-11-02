@@ -25,6 +25,8 @@ import {
 import { Markdown } from "@/components/markdown"
 import { MessageFiles } from "@/components/message-files"
 import { ToolArtifacts } from "@/components/tool-artifacts"
+import { ProjectArtifacts } from "@/components/project-artifacts"
+import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
 import { Message, MessageContent } from "@/components/ui/message"
@@ -322,6 +324,8 @@ function ResponseError({
 const AssistantMessage = memo(function AssistantMessage({
   message,
   sessionKey,
+  projectAttachments,
+  streamStatus,
   expandedToolGroups,
   onToolOpenChange,
   expandedReasoningGroups,
@@ -329,6 +333,8 @@ const AssistantMessage = memo(function AssistantMessage({
 }: {
   message: SessionMessageAssistant
   sessionKey: string | null
+  projectAttachments: boolean
+  streamStatus: StreamStatus
   expandedToolGroups: Record<string, true>
   onToolOpenChange: (key: string, open: boolean) => void
   expandedReasoningGroups: Record<string, true>
@@ -500,6 +506,7 @@ const AssistantMessage = memo(function AssistantMessage({
               </div>
             )
           })}
+          {projectAttachments && sessionKey ? <ProjectArtifacts sessionID={sessionKey} messageID={message.id} text={message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n")} streamStatus={streamStatus} /> : null}
           {errorText ? (
             <ResponseError
               message={errorText}
@@ -515,6 +522,8 @@ const AssistantMessage = memo(function AssistantMessage({
 function MessageItem({
   message,
   sessionKey,
+  projectAttachments,
+  streamStatus,
   expandedToolGroups,
   onToolOpenChange,
   expandedReasoningGroups,
@@ -522,6 +531,8 @@ function MessageItem({
 }: {
   message: SessionMessageInfo
   sessionKey: string | null
+  projectAttachments: boolean
+  streamStatus: StreamStatus
   expandedToolGroups: Record<string, true>
   onToolOpenChange: (key: string, open: boolean) => void
   expandedReasoningGroups: Record<string, true>
@@ -536,6 +547,8 @@ function MessageItem({
       <AssistantMessage
         message={message}
         sessionKey={sessionKey}
+        projectAttachments={projectAttachments}
+        streamStatus={streamStatus}
         expandedToolGroups={expandedToolGroups}
         onToolOpenChange={onToolOpenChange}
         expandedReasoningGroups={expandedReasoningGroups}
@@ -718,6 +731,8 @@ const LiveToolsItem = memo(function LiveToolsItem({
 function RowView({
   row,
   sessionKey,
+  projectAttachments,
+  streamStatus,
   expandedToolGroups,
   onToolOpenChange,
   expandedReasoningGroups,
@@ -726,6 +741,8 @@ function RowView({
 }: {
   row: ConversationRow
   sessionKey: string | null
+  projectAttachments: boolean
+  streamStatus: StreamStatus
   expandedToolGroups: Record<string, true>
   onToolOpenChange: (key: string, open: boolean) => void
   expandedReasoningGroups: Record<string, true>
@@ -738,6 +755,8 @@ function RowView({
         <MessageItem
           message={row.message}
           sessionKey={sessionKey}
+          projectAttachments={projectAttachments}
+          streamStatus={streamStatus}
           expandedToolGroups={expandedToolGroups}
           onToolOpenChange={onToolOpenChange}
           expandedReasoningGroups={expandedReasoningGroups}
@@ -940,6 +959,10 @@ export function Conversation({
   const rows = useMemo(
     () => buildConversationRows(visibleMessages, live.items),
     [visibleMessages, live.items]
+  )
+  const projectAttachmentMessages = useMemo(
+    () => finalProjectArtifactMessages(visibleMessages, hasOlder),
+    [visibleMessages, hasOlder]
   )
   const [expandedToolGroups, setExpandedToolGroups] = useState<
     Record<string, true>
@@ -1574,6 +1597,8 @@ export function Conversation({
                 <RowView
                   row={row}
                   sessionKey={sessionKey}
+                  projectAttachments={row.kind === "message" && projectAttachmentMessages.has(row.message.id)}
+                  streamStatus={streamStatus}
                   expandedToolGroups={expandedToolGroups}
                   onToolOpenChange={handleToolOpenChange}
                   expandedReasoningGroups={expandedReasoningGroups}
