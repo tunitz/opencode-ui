@@ -167,6 +167,14 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
 
   const activeSession = nav.activeSession
   const draftKey = nav.activeSessionID ?? "__none__"
+  const [feedbackSession, setFeedbackSession] = useState(draftKey)
+  if (feedbackSession !== draftKey) {
+    setFeedbackSession(draftKey)
+    setError(null)
+    setInterruptError(null)
+    setAttachmentError(null)
+    setCommandFeedback(null)
+  }
   useLayoutEffect(() => {
     activeDraftKeyRef.current = draftKey
     composingRef.current.switchTo(draftKey)
@@ -941,7 +949,6 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     source: "picker" | "paste"
   ) {
     if (!targetSessionID || targetSessionID !== nav.activeSessionID) {
-      setAttachmentError("The active session changed before the file was added.")
       return
     }
     if (files.length === 0) {
@@ -998,7 +1005,9 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
     }
 
     setAttaching(false)
-    setAttachmentError(failures.length > 0 ? failures.join(" ") : null)
+    if (activeDraftKeyRef.current === targetSessionID) {
+      setAttachmentError(failures.length > 0 ? failures.join(" ") : null)
+    }
     if (source === "picker" && fileInputRef.current) {
       fileInputRef.current.value = ""
     }
@@ -1332,7 +1341,6 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/*,.md,.json,.ts,.tsx,.js,.jsx,.css,.html,.yaml,.yml,.toml,.csv,.log,.py,.rs,.go,.java,.sh"
         className="hidden"
         aria-label="Choose files to attach"
         onChange={(event) =>

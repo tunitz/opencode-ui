@@ -14,10 +14,10 @@ export type ProjectEntry = {
 export type AttachmentKind = "text" | "image" | "pdf" | "binary"
 
 const TEXT_EXTENSIONS = new Set([
-  "c", "cc", "cfg", "conf", "cpp", "css", "csv", "go", "h", "hpp", "html",
-  "ini", "java", "js", "json", "jsx", "log", "md", "mdx", "mjs", "php",
-  "properties", "py", "rb", "rs", "scss", "sh", "sql", "svelte", "svg",
-  "tex", "toml", "ts", "tsx", "txt", "vue", "xml", "yaml", "yml", "zsh",
+  "c", "cc", "cfg", "conf", "cpp", "cs", "css", "csv", "go", "h", "hpp", "html",
+  "cjs", "dart", "graphql", "ini", "java", "js", "json", "jsonc", "jsx", "kt", "log", "lua", "md", "mdx", "mjs", "php",
+  "properties", "proto", "py", "rb", "rs", "scss", "sh", "sql", "svelte", "svg", "swift",
+  "tex", "tf", "toml", "ts", "tsx", "txt", "vue", "xml", "yaml", "yml", "zsh",
 ])
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -34,7 +34,6 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   gif: "image/gif",
   jpeg: "image/jpeg",
   jpg: "image/jpeg",
-  json: "application/json",
   md: "text/markdown",
   pdf: "application/pdf",
   png: "image/png",
@@ -56,6 +55,7 @@ export function extensionOf(path: string): string {
 export function inferMime(path: string): string {
   const extension = extensionOf(path)
   if (MIME_BY_EXTENSION[extension]) return MIME_BY_EXTENSION[extension]
+  if (["dockerfile", "makefile", "gemfile"].includes(basename(path).toLowerCase())) return "text/plain"
   if (TEXT_EXTENSIONS.has(extension)) return "text/plain"
   return "application/octet-stream"
 }

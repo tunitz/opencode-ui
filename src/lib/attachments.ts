@@ -120,18 +120,35 @@ export async function attachmentFromBrowserFile(
     )
   }
 
-  const declared = file.type.toLowerCase()
-  const mime =
+  const declared = file.type.toLowerCase().split(";", 1)[0].trim()
+  let mime =
     declared && declared !== "application/octet-stream"
       ? declared
       : inferMime(file.name)
+  // Browsers commonly label source files with application/* MIME types.
+  // Send recognized text files as text/plain in the data URI as well.
+  if (
+    inferMime(file.name) === "text/plain" &&
+    (mime === "application/json" ||
+      mime === "application/javascript" ||
+      mime === "application/x-javascript" ||
+      mime === "application/typescript" ||
+      mime === "application/xml" ||
+      mime === "application/yaml" ||
+      mime === "application/x-yaml")
+  ) {
+    mime = "text/plain"
+  }
   if (attachmentKind(mime) === "binary" || mime === "image/svg+xml") {
     throw new Error(
       `${file.name} is not a supported text, image, or PDF attachment.`
     )
   }
 
-  const uri = await readAsDataUrl(file)
+  const dataUrl = await readAsDataUrl(file)
+  const uri = mime === "text/plain"
+    ? `data:text/plain;base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}`
+    : dataUrl
   return {
     id,
     name: file.name.trim() || fallbackName || "clipboard-image",
