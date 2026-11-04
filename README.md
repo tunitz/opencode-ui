@@ -122,6 +122,13 @@ Drafts and preferences live in browser-local storage scoped to the origin. Chang
 creates a separate storage scope. Server-side state/configuration stays in user locations, not
 the installed package; align local agent configuration with the engine you operate.
 
+The separately packaged [Notes plugin](plugins/notes/README.md) is optional. When its server
+part is active for the selected location, the sidebar offers notes and planning spaces; without
+it the UI works as before. The plugin also provides agent tools and a direct TUI interface. Notes
+are plaintext in OpenCode plugin storage, not browser-local drafts. Storage scope across projects
+and conflict detection across independent plugin instances depend on the host and are not yet
+guaranteed. Do not treat notes as encrypted or multi-user-isolated storage.
+
 ## Development from a checkout
 
 Use Bun for dependency management and scripts. With the separate engine and registration ready:

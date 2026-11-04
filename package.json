@@ -29,6 +29,10 @@
     "server/web-security.ts",
     "server/web-static.ts",
     "src/lib/agent-config-types.ts",
+    "plugins/notes/*.ts",
+    "plugins/notes/package.json",
+    "plugins/notes/README.md",
+    "plugins/notes/src/",
     "dist-bun-build/",
     "README.md"
   ],

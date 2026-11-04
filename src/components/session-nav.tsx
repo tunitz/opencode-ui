@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { NewSessionButton } from "@/components/new-session-dialog"
+import { NotesSidebar } from "@/components/notes-sidebar"
 import {
   SettingsButton,
   SettingsDialog,
@@ -760,6 +761,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         <NewSessionButton nav={nav} />
       </div>
       <ProjectPanel nav={nav} className="mt-6" />
+      <div className="shrink-0 px-3"><NotesSidebar nav={nav} /></div>
       <SessionsHeader nav={nav} />
       <ScrollArea className="mt-2 min-h-0 flex-1 px-3">
         <SessionList nav={nav} />
@@ -824,6 +826,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           <NewSessionButton nav={nav} onCreated={() => setOpen(false)} />
         </div>
         <ProjectPanel nav={nav} className="mt-5" />
+        <div className="shrink-0 px-4"><NotesSidebar nav={nav} /></div>
         <SessionsHeader nav={nav} />
         <ScrollArea className="mt-2 min-h-0 flex-1 px-3">
           <SessionList

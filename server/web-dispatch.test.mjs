@@ -27,4 +27,11 @@ describe("Web gateway dispatch", () => {
     const response = await dispatch(request("/api/event", { headers: { origin: "https://evil.test" } }))
     expect(response.status).toBe(403)
   })
+  test("routes permitted notes RPC to the engine with no-store", async () => {
+    const response = await dispatch(request("/api/rpc/opencode-notes/list", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }))
+    expect(await response.text()).toBe("engine")
+    expect(response.headers.get("cache-control")).toBe("no-store")
+  })
 })
