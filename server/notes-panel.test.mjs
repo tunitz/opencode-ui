@@ -75,3 +75,36 @@ test("an older list response cannot replace a newer refresh", async () => {
     else globalThis.window = previousWindow
   }
 })
+
+test("editor keeps a draft when returning to notes and saves it explicitly", async () => {
+  const previous = globalThis.IS_REACT_ACT_ENVIRONMENT
+  const previousWindow = globalThis.window
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  globalThis.window = { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) }
+  let root, saved
+  const note = { id: "n1", title: "Original", content: "Body", status: "todo", pinned: false, spaceID: null, revision: 3 }
+  const adapter = {
+    list: async () => ({ notes: [note], spaces: [], projects: [] }),
+    updateNote: async (...args) => { saved = args },
+  }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const open = () => root.root.findByProps({ "aria-label": "Open Original" }).props.onClick()
+    await act(async () => open())
+    await act(async () => root.root.findByType("textarea").props.onChange({ target: { value: "My draft" } }))
+    expect(JSON.stringify(root.toJSON())).toContain("Unsaved changes")
+    const back = root.root.findAllByType("button").find((button) => button.children.includes("Notes"))
+    await act(async () => back.props.onClick())
+    expect(saved).toBeUndefined()
+    await act(async () => open())
+    expect(root.root.findByType("textarea").props.value).toBe("My draft")
+    await act(async () => root.root.findByType("form").props.onSubmit({ preventDefault() {} }))
+    expect(saved).toEqual(["n1", { title: "Original", content: "My draft", status: "todo", pinned: false, spaceID: null }, 3])
+  } finally {
+    if (root) await act(async () => root.unmount())
+    if (previous === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT
+    else globalThis.IS_REACT_ACT_ENVIRONMENT = previous
+    if (previousWindow === undefined) delete globalThis.window
+    else globalThis.window = previousWindow
+  }
+})

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 import {
+  ArrowLeftIcon,
   EllipsisIcon,
   PinIcon,
   PlusIcon,
@@ -762,24 +763,31 @@ export function NotesPanel({
           className={`min-w-0 py-4 md:border-s md:ps-6 ${noteDraft ? "" : "hidden md:block"}`}
         >
           {noteDraft ? (
-            <div className="mb-4 flex items-center gap-3">
+            <div className="mb-5 flex flex-col items-start gap-3">
               <Button
                 type="button"
-                variant="outline"
-                className="h-11 md:hidden"
+                variant="ghost"
+                className="h-11"
                 disabled={busy}
                 onClick={() => selectDraft(null)}
               >
-                Back to notes
+                <ArrowLeftIcon
+                  data-icon="inline-start"
+                  className="rtl:rotate-180"
+                  aria-hidden="true"
+                />
+                Notes
               </Button>
-              <h3 className="text-lg font-semibold">
-                {noteDraft.original ? "Edit note" : "New note"}
-              </h3>
-              {isDirtyNoteDraft(noteDraft) && (
-                <span role="status" className="text-xs text-muted-foreground">
-                  Unsaved changes
-                </span>
-              )}
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h3 className="text-xl font-semibold">
+                  {noteDraft.original ? "Edit note" : "New note"}
+                </h3>
+                {isDirtyNoteDraft(noteDraft) && (
+                  <span role="status" className="text-xs text-muted-foreground">
+                    Unsaved changes
+                  </span>
+                )}
+              </div>
             </div>
           ) : (
             <p className="py-6 text-sm text-muted-foreground">
@@ -836,7 +844,7 @@ export function NotesPanel({
                   </label>
                   <Textarea
                     id={noteContentID}
-                    className="min-h-36"
+                    className="min-h-56 sm:min-h-64"
                     value={noteDraft.value.content}
                     onChange={(e) =>
                       setNoteDraft({
@@ -846,7 +854,7 @@ export function NotesPanel({
                     }
                   />
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 border-t pt-4 min-[400px]:grid-cols-2">
                   <Choice
                     label="Status"
                     value={noteDraft.value.status}
@@ -969,15 +977,6 @@ export function NotesPanel({
                   </div>
                 )}
                 <div className="flex flex-wrap justify-end gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11"
-                    disabled={busy}
-                    onClick={() => selectDraft(null)}
-                  >
-                    Back to notes
-                  </Button>
                   <Button
                     type="submit"
                     className="h-11"
