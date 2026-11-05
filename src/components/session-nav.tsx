@@ -52,7 +52,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { NewSessionButton } from "@/components/new-session-dialog"
-import { NotesSidebar } from "@/components/notes-sidebar"
+import { NotesSidebar, useNotesWorkspace } from "@/components/notes-sidebar"
 import {
   SettingsButton,
   SettingsDialog,
@@ -598,6 +598,7 @@ function SessionList({
   nav: SessionNavProps
   onSelect?: (sessionID: string) => void
 }) {
+  const notes = useNotesWorkspace()
   const dayStart = useSyncExternalStore(
     subscribeToDayStart,
     currentDayStart,
@@ -714,7 +715,7 @@ function SessionList({
                 <div className="pb-1">
                   <SessionTree
                     rows={rows}
-                    activeSessionID={nav.activeSessionID}
+                    activeSessionID={notes.open ? null : nav.activeSessionID}
                     runningSessionIDs={nav.runningSessionIDs}
                     unreadSessionIDs={nav.unreadSessionIDs}
                     projects={nav.projects}
@@ -749,6 +750,7 @@ function SessionsHeader({ nav }: { nav: SessionNavProps }) {
 
 export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionSidebar")
+  const notes = useNotesWorkspace()
   return (
     <aside className="hidden h-svh flex-col border-e border-sidebar-border bg-sidebar md:flex">
       <div className="flex h-14 shrink-0 items-center gap-2 px-5">
@@ -758,13 +760,13 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         <span className="text-sm font-semibold tracking-tight">OpenUI</span>
       </div>
       <div className="shrink-0 px-3">
-        <NewSessionButton nav={nav} />
+        <NewSessionButton nav={nav} onCreated={notes.closeNotes} />
       </div>
       <ProjectPanel nav={nav} className="mt-6" />
-      <div className="shrink-0 px-3"><NotesSidebar nav={nav} /></div>
-      <SessionsHeader nav={nav} />
-      <ScrollArea className="mt-2 min-h-0 flex-1 px-3">
-        <SessionList nav={nav} />
+      <ScrollArea className="mt-2 min-h-0 flex-1">
+        <div className="px-3"><NotesSidebar /></div>
+        <SessionsHeader nav={nav} />
+        <div className="px-3"><SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} /></div>
       </ScrollArea>
       <div className="flex shrink-0 items-center justify-between gap-1 border-t border-sidebar-border p-3">
         <ThemeSelect />
@@ -776,6 +778,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
 
 export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionsSheet")
+  const notes = useNotesWorkspace()
   const [open, setOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const direction = useAppDirection()
@@ -823,19 +826,22 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           </SheetClose>
         </SheetHeader>
         <div className="shrink-0 px-4">
-          <NewSessionButton nav={nav} onCreated={() => setOpen(false)} />
+          <NewSessionButton nav={nav} onCreated={() => { notes.closeNotes(); setOpen(false) }} />
         </div>
         <ProjectPanel nav={nav} className="mt-5" />
-        <div className="shrink-0 px-4"><NotesSidebar nav={nav} /></div>
-        <SessionsHeader nav={nav} />
-        <ScrollArea className="mt-2 min-h-0 flex-1 px-3">
+        <ScrollArea className="mt-2 min-h-0 flex-1">
+          <div className="px-4"><NotesSidebar onNavigate={() => setOpen(false)} /></div>
+          <SessionsHeader nav={nav} />
+          <div className="px-3">
           <SessionList
             nav={nav}
             onSelect={(sessionID) => {
+              notes.closeNotes()
               nav.selectSession(sessionID)
               setOpen(false)
             }}
           />
+          </div>
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-between gap-1 border-t border-border p-4">
           <ThemeSelect />

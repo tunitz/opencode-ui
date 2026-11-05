@@ -1,4 +1,7 @@
+import { ArrowLeftIcon } from "lucide-react"
+import { useNotesWorkspace } from "@/components/notes-sidebar"
 import { SessionInspector } from "@/components/session-inspector"
+import { Button } from "@/components/ui/button"
 import {
   SessionsSheet,
   type SessionNavProps,
@@ -7,7 +10,8 @@ import { recordPerfRender } from "@/lib/perf-probe"
 
 export function AppHeader({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("AppHeader")
-  const title = nav.activeSession
+  const notes = useNotesWorkspace()
+  const title = notes.open ? "Notes & plans" : nav.activeSession
     ? nav.activeSession.title?.trim() || "Untitled session"
     : "New session"
 
@@ -26,7 +30,7 @@ export function AppHeader({ nav }: { nav: SessionNavProps }) {
         {title}
       </h1>
       <div className="flex w-11 shrink-0 items-center justify-end">
-        <SessionInspector nav={nav} />
+        {notes.open ? <Button variant="ghost" size="icon-lg" className="size-11" aria-label="Back to conversation" onClick={notes.closeNotes}><ArrowLeftIcon aria-hidden="true" className="rtl:rotate-180" /></Button> : <SessionInspector nav={nav} />}
       </div>
     </header>
   )

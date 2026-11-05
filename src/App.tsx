@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import { XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
@@ -5,18 +6,32 @@ import { Composer } from "@/components/composer"
 import { ContextStrip } from "@/components/context-strip"
 import { Conversation } from "@/components/conversation"
 import { NotificationsProvider } from "@/components/notifications-provider"
+import { NotesProvider, NotesWorkspace, useNotesWorkspace } from "@/components/notes-sidebar"
 import { PendingInbox } from "@/components/pending-inbox"
 import { SessionSidebar } from "@/components/session-nav"
 import { WebUiPreferencesProvider } from "@/components/web-ui-preferences-provider"
 import { Button } from "@/components/ui/button"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
-import { useOpenCode } from "@/lib/use-opencode"
+import { useOpenCode, type OpenCodeController } from "@/lib/use-opencode"
 import { recordPerfRender } from "@/lib/perf-probe"
 
 export function App() {
   recordPerfRender("App")
   const nav = useOpenCode()
   useAppViewportHeight()
+
+  return <NotesProvider nav={nav}><AppShell nav={nav} /></NotesProvider>
+}
+
+function AppShell({ nav }: { nav: OpenCodeController }) {
+  const notes = useNotesWorkspace()
+  const previousNotesOpen = useRef(notes.open)
+  useEffect(() => {
+    if (previousNotesOpen.current !== notes.open) {
+      previousNotesOpen.current = notes.open
+      document.getElementById("chat-main")?.focus()
+    }
+  }, [notes.open])
 
   return (
     <WebUiPreferencesProvider serverVersion={nav.serverVersion}>
@@ -25,13 +40,14 @@ export function App() {
           href="#chat-main"
           className="sr-only fixed top-2 start-2 z-50 rounded-lg bg-background px-4 py-3 text-foreground shadow-lg focus:not-sr-only focus:outline-2 focus:outline-ring"
         >
-          Skip to chat
+          Skip to main content
         </a>
         <div className="app-height app-viewport bg-background md:grid md:h-svh md:grid-cols-[17rem_1fr] md:overflow-hidden">
         <SessionSidebar nav={nav} />
         <div className="app-height flex min-w-0 flex-col md:h-svh">
           <AppHeader nav={nav} />
-          <main id="chat-main" tabIndex={-1} className="mx-auto flex min-h-0 w-full max-w-[42.5rem] flex-1 flex-col focus:outline-none">
+          <main id="chat-main" tabIndex={-1} className="flex min-h-0 w-full flex-1 flex-col focus:outline-none">
+            <div className={notes.open ? "hidden" : "mx-auto flex min-h-0 w-full max-w-[42.5rem] flex-1 flex-col"}>
             {nav.startupNotice ? (
               <div
                 role="status"
@@ -76,6 +92,8 @@ export function App() {
               revert={nav.activeSession?.revert ?? null}
             />
             <Composer nav={nav} />
+            </div>
+            {notes.hasWorkspace && <div className={notes.open ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8" : "hidden"}><NotesWorkspace /></div>}
           </main>
         </div>
         </div>

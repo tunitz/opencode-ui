@@ -115,9 +115,26 @@ export type NotesPanelProps = {
   adapter: NotesAdapter
   className?: string
   refreshKey?: string
+  selectedNoteID?: string | null
+  selectionRequest?: number
+  onSelectedNoteChange?: (id: string | null) => void
 }
 
 type NoteDraft = { original: NotesNote | null; value: NoteInput }
+function isDirtyNoteDraft(draft: NoteDraft): boolean {
+  const original = draft.original
+  const value = draft.value
+  return (
+    !original ||
+    value.title !== original.title ||
+    value.content !== original.content ||
+    value.status !== original.status ||
+    value.pinned !== original.pinned ||
+    value.spaceID !== original.spaceID
+  )
+}
+// In-memory only: retain drafts if the workspace is temporarily unmounted.
+const workspaceDrafts = new WeakMap<NotesAdapter, Map<string, NoteDraft>>()
 type SpaceDraft = { original: NotesSpace | null; value: SpaceInput }
 type Deletion =
   { kind: "note"; item: NotesNote } | { kind: "space"; item: NotesSpace }
@@ -189,6 +206,9 @@ export function NotesPanel({
   adapter,
   className,
   refreshKey,
+  selectedNoteID,
+  selectionRequest,
+  onSelectedNoteChange,
 }: NotesPanelProps) {
   const { list } = adapter
   const [snapshot, setSnapshot] = useState<NotesSnapshot | null>(null)
@@ -210,6 +230,96 @@ export function NotesPanel({
   const notePinnedID = useId()
   const spaceNameID = useId()
   const request = useRef(0)
+  // Keep unsaved work when moving between notes, including the mobile back action.
+  const [drafts] = useState(() => {
+    const existing = workspaceDrafts.get(adapter)
+    if (existing) return existing
+    const next = new Map<string, NoteDraft>()
+    workspaceDrafts.set(adapter, next)
+    return next
+  })
+  const newDraftKey = "__new_note__"
+  const lastExternalSelection = useRef<string | null | undefined>(undefined)
+  const lastExternalRequest = useRef<number | undefined>(undefined)
+  const currentDraft = useRef<NoteDraft | null>(null)
+  useEffect(() => {
+    currentDraft.current = noteDraft
+  }, [noteDraft])
+  useEffect(
+    () => () => {
+      const draft = currentDraft.current
+      if (draft && isDirtyNoteDraft(draft))
+        drafts.set(draft.original?.id ?? newDraftKey, draft)
+    },
+    [drafts]
+  )
+
+  const selectDraft = useCallback(
+    (next: NoteDraft | null, notify = true) => {
+      if (busy) return
+      if (noteDraft) {
+        const key = noteDraft.original?.id ?? newDraftKey
+        if (isDirtyNoteDraft(noteDraft)) drafts.set(key, noteDraft)
+        else drafts.delete(key)
+      }
+      const key = next?.original?.id ?? newDraftKey
+      setNoteDraft(next ? (drafts.get(key) ?? next) : null)
+      setFormError(null)
+      setReviewNote(null)
+      if (notify && onSelectedNoteChange) {
+        lastExternalSelection.current = next?.original?.id ?? null
+        lastExternalRequest.current = selectionRequest
+        onSelectedNoteChange(next?.original?.id ?? null)
+      }
+    },
+    [busy, drafts, noteDraft, onSelectedNoteChange, selectionRequest]
+  )
+
+  useEffect(() => {
+    if (
+      selectedNoteID === undefined ||
+      (selectedNoteID === lastExternalSelection.current &&
+        selectionRequest === lastExternalRequest.current) ||
+      busy
+    )
+      return
+    if (selectedNoteID === null) {
+      let active = true
+      void Promise.resolve().then(() => {
+        if (!active) return
+        lastExternalSelection.current = null
+        lastExternalRequest.current = selectionRequest
+        selectDraft(null, false)
+      })
+      return () => {
+        active = false
+      }
+    }
+    const note = snapshot?.notes.find((item) => item.id === selectedNoteID)
+    if (!note) return
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      lastExternalSelection.current = selectedNoteID
+      lastExternalRequest.current = selectionRequest
+      selectDraft(
+        {
+          original: note,
+          value: {
+            title: note.title,
+            content: note.content,
+            status: note.status,
+            pinned: note.pinned,
+            spaceID: note.spaceID,
+          },
+        },
+        false
+      )
+    })
+    return () => {
+      active = false
+    }
+  }, [selectedNoteID, selectionRequest, snapshot, busy, selectDraft])
 
   const refresh = useCallback(async () => {
     const token = ++request.current
@@ -306,7 +416,9 @@ export function NotesPanel({
 
   return (
     <section className={className} aria-label="Notes">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
+      <div
+        className={`flex flex-wrap items-start justify-between gap-3 border-b pb-4 ${noteDraft ? "hidden md:flex" : ""}`}
+      >
         <div>
           <h2 className="text-lg font-semibold">Notes</h2>
           <p className="text-sm text-muted-foreground">
@@ -339,9 +451,9 @@ export function NotesPanel({
           </Button>
           <Button
             className="h-11"
+            disabled={busy || !snapshot}
             onClick={() => {
-              setFormError(null)
-              setNoteDraft({
+              selectDraft({
                 original: null,
                 value: {
                   title: "",
@@ -372,204 +484,228 @@ export function NotesPanel({
           Loading notes…
         </p>
       )}
-      {snapshot && (
-        <div className="grid gap-6 py-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="grid gap-1.5">
-              <label htmlFor={searchID} className="text-sm font-medium">
-                Search notes
-              </label>
-              <Input
-                id={searchID}
-                className="h-11"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search title or text"
+      <div className="grid min-w-0 gap-6 md:grid-cols-[minmax(16rem,0.85fr)_minmax(0,1.5fr)]">
+        {snapshot && (
+          <div
+            className={`min-w-0 space-y-6 py-4 ${noteDraft ? "hidden md:block" : ""}`}
+          >
+            <div className="grid gap-3">
+              <div className="grid gap-1.5">
+                <label htmlFor={searchID} className="text-sm font-medium">
+                  Search notes
+                </label>
+                <Input
+                  id={searchID}
+                  className="h-11"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search title or text"
+                />
+              </div>
+              <Choice
+                label="Status"
+                value={status}
+                onChange={setStatus}
+                options={[
+                  { value: "all", label: "All statuses" },
+                  ...Object.entries(statusLabels).map(([value, label]) => ({
+                    value,
+                    label,
+                  })),
+                ]}
+              />
+              <Choice
+                label="Space"
+                value={space}
+                onChange={setSpace}
+                options={[
+                  { value: "all", label: "All spaces" },
+                  { value: noSelection, label: "No space" },
+                  ...spaces.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  })),
+                ]}
               />
             </div>
-            <Choice
-              label="Status"
-              value={status}
-              onChange={setStatus}
-              options={[
-                { value: "all", label: "All statuses" },
-                ...Object.entries(statusLabels).map(([value, label]) => ({
-                  value,
-                  label,
-                })),
-              ]}
-            />
-            <Choice
-              label="Space"
-              value={space}
-              onChange={setSpace}
-              options={[
-                { value: "all", label: "All spaces" },
-                { value: noSelection, label: "No space" },
-                ...spaces.map((item) => ({ value: item.id, label: item.name })),
-              ]}
-            />
-          </div>
-          <div>
-            <h3 className="mb-2 font-medium">
-              Notes{" "}
-              <span className="text-sm font-normal text-muted-foreground">
-                ({notes.length})
-              </span>
-            </h3>
-            {notes.length === 0 ? (
-              <p className="py-4 text-sm text-muted-foreground">
-                {snapshot.notes.length
-                  ? "No notes match these filters."
-                  : "No notes yet. Create a note to get started."}
-              </p>
-            ) : (
-              <ul className="divide-y rounded-lg border">
-                {notes.map((note) => (
-                  <li
-                    key={note.id}
-                    className="flex flex-wrap items-center justify-between gap-2 p-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium break-words">
-                        {note.pinned && (
-                          <span className="me-2 text-muted-foreground">
-                            Pinned
-                          </span>
-                        )}
-                        {note.title || "Untitled note"}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {statusLabels[note.status]} ·{" "}
-                        {note.spaceID === null
-                          ? "No space"
-                          : (spaces.find((item) => item.id === note.spaceID)
-                              ?.name ?? "Unavailable space")}
-                      </p>
-                      {note.content && (
-                        <p className="mt-1 line-clamp-2 text-sm break-words whitespace-pre-wrap text-muted-foreground">
-                          {note.content}
+            <div>
+              <h3 className="mb-2 font-medium">
+                Notes{" "}
+                <span className="text-sm font-normal text-muted-foreground">
+                  ({notes.length})
+                </span>
+              </h3>
+              {notes.length === 0 ? (
+                <p className="py-4 text-sm text-muted-foreground">
+                  {snapshot.notes.length
+                    ? "No notes match these filters."
+                    : "No notes yet. Create a note to get started."}
+                </p>
+              ) : (
+                <ul className="divide-y rounded-lg border">
+                  {notes.map((note) => (
+                    <li
+                      key={note.id}
+                      className="flex flex-wrap items-center justify-between gap-2 p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium break-words">
+                          {note.pinned && (
+                            <span className="me-2 text-muted-foreground">
+                              Pinned
+                            </span>
+                          )}
+                          {note.title || "Untitled note"}
                         </p>
-                      )}
-                    </div>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        className="h-11"
-                        aria-label={`Edit ${note.title || "untitled note"}`}
-                        onClick={() => {
-                          setFormError(null)
-                          setNoteDraft({
-                            original: note,
-                            value: {
-                              title: note.title,
-                              content: note.content,
-                              status: note.status,
-                              pinned: note.pinned,
-                              spaceID: note.spaceID,
-                            },
-                          })
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="h-11 text-destructive"
-                        aria-label={`Delete ${note.title || "untitled note"}`}
-                        onClick={() => {
-                          setFormError(null)
-                          setDeletion({ kind: "note", item: note })
-                        }}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+                        <p className="text-sm text-muted-foreground">
+                          {statusLabels[note.status]} ·{" "}
+                          {note.spaceID === null
+                            ? "No space"
+                            : (spaces.find((item) => item.id === note.spaceID)
+                                ?.name ?? "Unavailable space")}
+                        </p>
+                        {note.content && (
+                          <p className="mt-1 line-clamp-2 text-sm break-words whitespace-pre-wrap text-muted-foreground">
+                            {note.content}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          className="h-11"
+                          aria-label={`Open ${note.title || "untitled note"}`}
+                          aria-current={
+                            noteDraft?.original?.id === note.id
+                              ? "true"
+                              : undefined
+                          }
+                          disabled={busy}
+                          onClick={() => {
+                            selectDraft({
+                              original: note,
+                              value: {
+                                title: note.title,
+                                content: note.content,
+                                status: note.status,
+                                pinned: note.pinned,
+                                spaceID: note.spaceID,
+                              },
+                            })
+                          }}
+                        >
+                          Open
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="h-11 text-destructive"
+                          aria-label={`Delete ${note.title || "untitled note"}`}
+                          onClick={() => {
+                            setFormError(null)
+                            setDeletion({ kind: "note", item: note })
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <h3 className="mb-2 font-medium">
+                Spaces{" "}
+                <span className="text-sm font-normal text-muted-foreground">
+                  ({spaces.length})
+                </span>
+              </h3>
+              {spaces.length === 0 ? (
+                <p className="py-3 text-sm text-muted-foreground">
+                  Create a space to group notes, with or without a project.
+                </p>
+              ) : (
+                <ul className="divide-y rounded-lg border">
+                  {spaces.map((item) => (
+                    <li
+                      key={item.id}
+                      className="flex flex-wrap items-center justify-between gap-2 p-3"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium break-words">{item.name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {item.projectID === null
+                            ? "Not linked to a project"
+                            : (projects.find(
+                                (project) => project.id === item.projectID
+                              )?.name ?? "Unavailable project")}
+                        </p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          className="h-11"
+                          aria-label={`Edit space ${item.name}`}
+                          onClick={() => {
+                            setFormError(null)
+                            setSpaceDraft({
+                              original: item,
+                              value: {
+                                name: item.name,
+                                projectID: item.projectID,
+                              },
+                            })
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="h-11 text-destructive"
+                          aria-label={`Delete space ${item.name}`}
+                          onClick={() => {
+                            setFormError(null)
+                            setDeletion({ kind: "space", item })
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
-          <div>
-            <h3 className="mb-2 font-medium">
-              Spaces{" "}
-              <span className="text-sm font-normal text-muted-foreground">
-                ({spaces.length})
-              </span>
-            </h3>
-            {spaces.length === 0 ? (
-              <p className="py-3 text-sm text-muted-foreground">
-                Create a space to group notes, with or without a project.
-              </p>
-            ) : (
-              <ul className="divide-y rounded-lg border">
-                {spaces.map((item) => (
-                  <li
-                    key={item.id}
-                    className="flex flex-wrap items-center justify-between gap-2 p-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium break-words">{item.name}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {item.projectID === null
-                          ? "Not linked to a project"
-                          : (projects.find(
-                              (project) => project.id === item.projectID
-                            )?.name ?? "Unavailable project")}
-                      </p>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        className="h-11"
-                        aria-label={`Edit space ${item.name}`}
-                        onClick={() => {
-                          setFormError(null)
-                          setSpaceDraft({
-                            original: item,
-                            value: {
-                              name: item.name,
-                              projectID: item.projectID,
-                            },
-                          })
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="h-11 text-destructive"
-                        aria-label={`Delete space ${item.name}`}
-                        onClick={() => {
-                          setFormError(null)
-                          setDeletion({ kind: "space", item })
-                        }}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      )}
-      <Dialog
-        open={noteDraft !== null}
-        onOpenChange={(open) => {
-          if (!open && !busy) setNoteDraft(null)
-        }}
-      >
-        <ResponsiveDialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>
-              {noteDraft?.original ? "Edit note" : "New note"}
-            </DialogTitle>
-            <DialogDescription>
-              Write a note and choose where it belongs.
-            </DialogDescription>
-          </DialogHeader>
+        )}
+        <div
+          className={`min-w-0 py-4 md:border-s md:ps-6 ${noteDraft ? "" : "hidden md:block"}`}
+        >
+          {noteDraft ? (
+            <div className="mb-4 flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 md:hidden"
+                disabled={busy}
+                onClick={() => selectDraft(null)}
+              >
+                Back to notes
+              </Button>
+              <h3 className="text-lg font-semibold">
+                {noteDraft.original ? "Edit note" : "New note"}
+              </h3>
+              {isDirtyNoteDraft(noteDraft) && (
+                <span role="status" className="text-xs text-muted-foreground">
+                  Unsaved changes
+                </span>
+              )}
+            </div>
+          ) : (
+            <p className="py-6 text-sm text-muted-foreground">
+              Select a note to view and edit it.
+            </p>
+          )}
           {noteDraft && (
             <form
               className="grid gap-4"
@@ -585,7 +721,11 @@ export function NotesPanel({
                           original.revision
                         )
                       : adapter.createNote(value),
-                  () => setNoteDraft(null)
+                  () => {
+                    drafts.delete(original?.id ?? newDraftKey)
+                    setNoteDraft(null)
+                    onSelectedNoteChange?.(null)
+                  }
                 )
               }}
             >
@@ -748,15 +888,15 @@ export function NotesPanel({
                     )}
                   </div>
                 )}
-                <DialogFooter>
+                <div className="flex flex-wrap justify-end gap-2">
                   <Button
                     type="button"
                     variant="outline"
                     className="h-11"
                     disabled={busy}
-                    onClick={() => setNoteDraft(null)}
+                    onClick={() => selectDraft(null)}
                   >
-                    Cancel
+                    Back to notes
                   </Button>
                   <Button
                     type="submit"
@@ -765,12 +905,12 @@ export function NotesPanel({
                   >
                     {busy ? "Saving…" : "Save note"}
                   </Button>
-                </DialogFooter>
+                </div>
               </fieldset>
             </form>
           )}
-        </ResponsiveDialogContent>
-      </Dialog>
+        </div>
+      </div>
       <Dialog
         open={spaceDraft !== null}
         onOpenChange={(open) => {
@@ -969,6 +1109,13 @@ export function NotesPanel({
                   () => {
                     if (deletion.kind === "space" && space === deletion.item.id)
                       setSpace("all")
+                    if (deletion.kind === "note") {
+                      drafts.delete(deletion.item.id)
+                      if (noteDraft?.original?.id === deletion.item.id) {
+                        setNoteDraft(null)
+                        onSelectedNoteChange?.(null)
+                      }
+                    }
                     setDeletion(null)
                   }
                 )

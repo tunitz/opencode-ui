@@ -1,5 +1,14 @@
-import { useEffect, useMemo, useState } from "react"
-import { NotebookPenIcon } from "lucide-react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
+import { NotebookPenIcon, PinIcon } from "lucide-react"
 import {
   NotesPanel,
   type NotesAdapter,
@@ -8,13 +17,6 @@ import {
 } from "@/components/notes-panel"
 import { projectName } from "@/components/project-select"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import { openCode } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
@@ -34,14 +36,56 @@ type PluginSpace = {
   revision?: number
 }
 
+type NotesContextValue = {
+  available: boolean
+  open: boolean
+  hasWorkspace: boolean
+  workspaceKey: string
+  selectedNoteID: string | null
+  selectionRequest: number
+  setSelectedNoteID: (id: string | null) => void
+  openNotes: (id?: string | null) => boolean
+  closeNotes: () => void
+  adapter: NotesAdapter
+  pinnedNotes: NotesNote[]
+  pinnedTotal: number
+  pinnedError: boolean
+  pinnedLoading: boolean
+  directoryChanged: boolean
+  connected: boolean
+  refreshKey: string
+}
+const NotesContext = createContext<NotesContextValue | null>(null)
+
+export function useNotesWorkspace() {
+  const context = useContext(NotesContext)
+  if (!context) throw new Error("NotesProvider is required")
+  return context
+}
+
 /** Optional client: the plugin remains the only source of notes data. */
-export function NotesSidebar({ nav }: { nav: OpenCodeController }) {
+export function NotesProvider({
+  nav,
+  children,
+}: {
+  nav: OpenCodeController
+  children: ReactNode
+}) {
   const directory = nav.activeSession?.location.directory ?? nav.directory
   const [availableDirectory, setAvailableDirectory] = useState<string | null>(
     null
   )
   const [open, setOpen] = useState(false)
   const [editingDirectory, setEditingDirectory] = useState<string | null>(null)
+  const [selectedNoteID, setSelectedNoteID] = useState<string | null>(null)
+  const [selectionRequest, setSelectionRequest] = useState(0)
+  const [pinnedSnapshot, setPinnedSnapshot] = useState<{
+    directory: string
+    notes: NotesNote[]
+    total: number
+    error: boolean
+  } | null>(null)
+  const pinnedRequest = useRef(0)
 
   useEffect(() => {
     if (!directory || nav.connection !== "connected") return
@@ -218,49 +262,211 @@ export function NotesSidebar({ nav }: { nav: OpenCodeController }) {
     }
   }, [directory, editingDirectory, nav.projects])
 
-  if (
-    !open &&
-    (!directory ||
-      availableDirectory !== directory ||
-      nav.connection !== "connected")
+  const available = Boolean(
+    directory &&
+    availableDirectory === directory &&
+    nav.connection === "connected"
   )
-    return null
+  const openNotes = useCallback(
+    (id: string | null = null) => {
+      if (!available || !directory) {
+        if (!editingDirectory || id !== null) return false
+        setOpen(true)
+        return true
+      }
+      if (
+        editingDirectory &&
+        editingDirectory !== directory &&
+        !window.confirm(
+          "Switch notes project? Unsaved notes in the current workspace will be discarded."
+        )
+      )
+        return false
+      setEditingDirectory(directory)
+      setSelectedNoteID(id)
+      setSelectionRequest((request) => request + 1)
+      setOpen(true)
+      return true
+    },
+    [available, directory, editingDirectory]
+  )
+  const closeNotes = useCallback(() => setOpen(false), [])
+
+  useEffect(() => {
+    if (!available || !directory) return
+    let active = true
+    const controller = new AbortController()
+    const currentRequest = pinnedRequest
+    const refresh = async () => {
+      const token = ++currentRequest.current
+      try {
+        const result = await openCode.rpc.call({
+          rpcID: "opencode-notes",
+          method: "list",
+          input: { pinned: true, limit: 5 },
+          location: { directory },
+        })
+        if (!active || token !== currentRequest.current) return
+        const output = result.output as { notes?: PluginNote[]; total?: number }
+        if (!Array.isArray(output?.notes) || typeof output.total !== "number")
+          throw new Error("Invalid notes response")
+        setPinnedSnapshot({
+          directory,
+          notes: output.notes.map((note) => ({ ...note, content: note.body })),
+          total: output.total,
+          error: false,
+        })
+      } catch {
+        if (active && token === currentRequest.current)
+          setPinnedSnapshot({ directory, notes: [], total: 0, error: true })
+      }
+    }
+    void refresh()
+    void (async () => {
+      try {
+        for await (const event of openCode.event.subscribe({
+          signal: controller.signal,
+        })) {
+          if (
+            event.type === "rpc.opencode-notes.changed" ||
+            event.type === "server.connected"
+          )
+            void refresh()
+        }
+      } catch {
+        /* Reconnect re-runs this effect. */
+      }
+    })()
+    return () => {
+      active = false
+      currentRequest.current++
+      controller.abort()
+    }
+  }, [available, directory, nav.streamStatus])
+
+  const value: NotesContextValue = {
+    available,
+    open,
+    hasWorkspace: editingDirectory !== null,
+    workspaceKey: editingDirectory ?? "",
+    selectedNoteID,
+    selectionRequest,
+    setSelectedNoteID,
+    openNotes,
+    closeNotes,
+    adapter,
+    pinnedNotes:
+      pinnedSnapshot?.directory === directory ? pinnedSnapshot.notes : [],
+    pinnedTotal:
+      pinnedSnapshot?.directory === directory ? pinnedSnapshot.total : 0,
+    pinnedError:
+      pinnedSnapshot?.directory === directory && pinnedSnapshot.error,
+    pinnedLoading: pinnedSnapshot?.directory !== directory,
+    directoryChanged: Boolean(
+      editingDirectory && editingDirectory !== directory
+    ),
+    connected: nav.connection === "connected",
+    refreshKey: nav.streamStatus,
+  }
+  return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>
+}
+
+export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const notes = useNotesWorkspace()
+  if (!notes.available && !notes.hasWorkspace) return null
   return (
-    <>
+    <section
+      aria-label="Notes and plans"
+      className="mt-4 border-t border-sidebar-border pt-3"
+    >
       <Button
         variant="ghost"
+        aria-label="All notes and plans"
+        aria-current={notes.open && !notes.selectedNoteID ? "page" : undefined}
         className="h-11 w-full justify-start gap-2"
         onClick={() => {
-          setEditingDirectory(directory)
-          setOpen(true)
+          if (notes.openNotes()) onNavigate?.()
         }}
       >
-        <NotebookPenIcon aria-hidden="true" /> Notes &amp; plans
+        <NotebookPenIcon aria-hidden="true" /> All notes &amp; plans
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <ResponsiveDialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Notes &amp; plans</DialogTitle>
-            <DialogDescription>
-              Manage your saved notes and project plans.
-            </DialogDescription>
-          </DialogHeader>
-          {nav.connection !== "connected" && (
-            <p role="status">
-              Connection unavailable. Your open draft is retained; reconnect
-              before saving.
-            </p>
-          )}
-          {directory !== editingDirectory && (
-            <p role="status">
-              This editor remains connected to the project where it was opened.
-            </p>
-          )}
-          {open && (
-            <NotesPanel adapter={adapter} refreshKey={nav.streamStatus} />
-          )}
-        </ResponsiveDialogContent>
-      </Dialog>
+      <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
+        Pinned notes
+      </div>
+      {!notes.available ? (
+        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+          Pinned notes unavailable.
+        </p>
+      ) : notes.pinnedLoading ? (
+        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+          Loading pinned notes…
+        </p>
+      ) : notes.pinnedError ? (
+        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+          Pinned notes unavailable.
+        </p>
+      ) : notes.pinnedNotes.length === 0 ? (
+        <p className="px-2.5 py-2 text-xs text-muted-foreground">
+          No pinned notes yet.
+        </p>
+      ) : (
+        <ul aria-label="Pinned notes" className="mt-1 max-h-52 overflow-y-auto">
+          {notes.pinnedNotes.map((note) => (
+            <li key={note.id}>
+              <Button
+                variant="ghost"
+                aria-current={
+                  notes.open && notes.selectedNoteID === note.id
+                    ? "page"
+                    : undefined
+                }
+                className="h-11 w-full justify-start gap-2"
+                onClick={() => {
+                  if (notes.openNotes(note.id)) onNavigate?.()
+                }}
+              >
+                <PinIcon aria-hidden="true" />
+                <span className="min-w-0 truncate" dir="auto">
+                  {note.title}
+                </span>
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
+        <p className="px-2.5 py-1 text-xs text-muted-foreground">
+          Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open all
+          notes to see the rest.
+        </p>
+      )}
+    </section>
+  )
+}
+
+export function NotesWorkspace() {
+  const notes = useNotesWorkspace()
+  return (
+    <>
+      {!notes.connected && (
+        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
+          Connection unavailable. Your open draft is retained; reconnect before
+          saving.
+        </p>
+      )}
+      {notes.directoryChanged && (
+        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
+          This workspace remains connected to the project where it was opened.
+        </p>
+      )}
+      <NotesPanel
+        key={notes.workspaceKey}
+        adapter={notes.adapter}
+        refreshKey={notes.refreshKey}
+        selectedNoteID={notes.selectedNoteID}
+        selectionRequest={notes.selectionRequest}
+        onSelectedNoteChange={notes.setSelectedNoteID}
+      />
     </>
   )
 }
