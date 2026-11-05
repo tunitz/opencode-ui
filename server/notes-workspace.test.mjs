@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, test } from "bun:test"
 import React, { act } from "react"
 import { create } from "react-test-renderer"
 import { NotesPanel } from "../src/components/notes-panel"
+
+let previousDocument
+beforeEach(() => { previousDocument = globalThis.document; globalThis.document = { addEventListener() {}, removeEventListener() {} } })
+afterEach(() => { if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument })
 
 test("late selection opens the workspace and switching notes retains drafts", async () => {
   const previous = globalThis.IS_REACT_ACT_ENVIRONMENT
@@ -58,6 +62,32 @@ test("new note stays open after selecting an existing note and All notes returns
     await act(async () => newButton.props.onClick())
     title = root.root.findAllByType("input").find((input) => input.props.required)
     expect(title.props.value).toBe("Unfinished thought")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    if (previous === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT; else globalThis.IS_REACT_ACT_ENVIRONMENT = previous
+    if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow
+  }
+})
+
+test("compact status and search filters narrow the notebook", async () => {
+  const previous = globalThis.IS_REACT_ACT_ENVIRONMENT, previousWindow = globalThis.window
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  globalThis.window = { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) }
+  const adapter = { list: async () => ({ notes: [
+    { id: "one", title: "Draft plan", content: "", status: "todo", pinned: false, spaceID: null, revision: 1 },
+    { id: "two", title: "Shipped feature", content: "release notes", status: "finished", pinned: false, spaceID: null, revision: 1 },
+  ], spaces: [], projects: [] }) }
+  let root
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const done = root.root.findAllByType("button").find((button) => button.children.includes("Done"))
+    await act(async () => done.props.onClick())
+    expect(root.root.findAllByProps({ "aria-label": "Open Draft plan" })).toHaveLength(0)
+    expect(root.root.findAllByProps({ "aria-label": "Open Shipped feature" }).length).toBeGreaterThan(0)
+    const search = root.root.findByProps({ placeholder: "Search title or text" })
+    await act(async () => search.props.onChange({ target: { value: "missing" }, currentTarget: { value: "missing" } }))
+    expect(root.root.findAllByProps({ "aria-label": "Open Shipped feature" })).toHaveLength(0)
+    expect(JSON.stringify(root.toJSON())).toContain("No notes match these filters")
   } finally {
     if (root) await act(async () => root.unmount())
     if (previous === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT; else globalThis.IS_REACT_ACT_ENVIRONMENT = previous

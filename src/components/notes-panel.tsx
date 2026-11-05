@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react"
-import { PlusIcon, RefreshCwIcon } from "lucide-react"
+import {
+  EllipsisIcon,
+  PinIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchIcon,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Dialog,
   DialogDescription,
@@ -150,16 +163,21 @@ function Choice({
   value,
   onChange,
   options,
+  hideLabel = false,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   options: { value: string; label: string }[]
+  hideLabel?: boolean
 }) {
   const id = useId()
   return (
     <div className="grid gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
+      <label
+        htmlFor={id}
+        className={hideLabel ? "sr-only" : "text-sm font-medium"}
+      >
         {label}
       </label>
       <Select
@@ -230,6 +248,9 @@ export function NotesPanel({
   const notePinnedID = useId()
   const spaceNameID = useId()
   const request = useRef(0)
+  const notesHeading = useRef<HTMLHeadingElement>(null)
+  const noteActionRefs = useRef(new Map<string, HTMLButtonElement>())
+  const deletionReturnFocus = useRef<HTMLElement | null>(null)
   // Keep unsaved work when moving between notes, including the mobile back action.
   const [drafts] = useState(() => {
     const existing = workspaceDrafts.get(adapter)
@@ -417,37 +438,22 @@ export function NotesPanel({
   return (
     <section className={className} aria-label="Notes">
       <div
-        className={`flex flex-wrap items-start justify-between gap-3 border-b pb-4 ${noteDraft ? "hidden md:flex" : ""}`}
+        className={`flex items-center justify-between gap-3 border-b pb-4 ${noteDraft ? "hidden md:flex" : ""}`}
       >
         <div>
-          <h2 className="text-lg font-semibold">Notes</h2>
-          <p className="text-sm text-muted-foreground">
-            Keep track of work across spaces.
-          </p>
+          <h2 className="text-xl font-semibold tracking-tight">Notes</h2>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1">
           <Button
-            variant="outline"
-            className="h-11"
+            variant="ghost"
+            size="icon-lg"
+            className="size-11"
             onClick={() => void refresh()}
             disabled={loading || busy}
+            aria-label={loading ? "Refreshing notes" : "Refresh notes"}
+            title="Refresh notes"
           >
             <RefreshCwIcon aria-hidden="true" />
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
-          <Button
-            variant="outline"
-            className="h-11"
-            onClick={() => {
-              setFormError(null)
-              setSpaceDraft({
-                original: null,
-                value: { name: "", projectID: null },
-              })
-            }}
-          >
-            <PlusIcon aria-hidden="true" />
-            New space
           </Button>
           <Button
             className="h-11"
@@ -471,6 +477,11 @@ export function NotesPanel({
           </Button>
         </div>
       </div>
+      {loading && snapshot && (
+        <span role="status" className="sr-only">
+          Refreshing notes…
+        </span>
+      )}
       {error && (
         <div
           role="alert"
@@ -487,35 +498,51 @@ export function NotesPanel({
       <div className="grid min-w-0 gap-6 md:grid-cols-[minmax(16rem,0.85fr)_minmax(0,1.5fr)]">
         {snapshot && (
           <div
-            className={`min-w-0 space-y-6 py-4 ${noteDraft ? "hidden md:block" : ""}`}
+            className={`flex min-w-0 flex-col gap-6 py-4 ${noteDraft ? "hidden md:flex" : ""}`}
           >
-            <div className="grid gap-3">
-              <div className="grid gap-1.5">
-                <label htmlFor={searchID} className="text-sm font-medium">
+            <div className="flex min-w-0 flex-col gap-3">
+              <div className="relative">
+                <label htmlFor={searchID} className="sr-only">
                   Search notes
                 </label>
+                <SearchIcon
+                  aria-hidden="true"
+                  className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                />
                 <Input
                   id={searchID}
-                  className="h-11"
+                  className="h-11 ps-10"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search title or text"
                 />
               </div>
+              <div
+                role="group"
+                aria-label="Filter by status"
+                className="-mx-1 flex max-w-full gap-1 overflow-x-auto px-1"
+              >
+                {[
+                  { value: "all", label: "All" },
+                  { value: "todo", label: "To do" },
+                  { value: "in-progress", label: "In progress" },
+                  { value: "finished", label: "Done" },
+                ].map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    variant={status === option.value ? "secondary" : "ghost"}
+                    className="h-11 rounded-full px-3"
+                    aria-pressed={status === option.value}
+                    onClick={() => setStatus(option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
               <Choice
-                label="Status"
-                value={status}
-                onChange={setStatus}
-                options={[
-                  { value: "all", label: "All statuses" },
-                  ...Object.entries(statusLabels).map(([value, label]) => ({
-                    value,
-                    label,
-                  })),
-                ]}
-              />
-              <Choice
-                label="Space"
+                label="Filter by space"
+                hideLabel
                 value={space}
                 onChange={setSpace}
                 options={[
@@ -529,7 +556,7 @@ export function NotesPanel({
               />
             </div>
             <div>
-              <h3 className="mb-2 font-medium">
+              <h3 ref={notesHeading} tabIndex={-1} className="mb-2 font-medium">
                 Notes{" "}
                 <span className="text-sm font-normal text-muted-foreground">
                   ({notes.length})
@@ -542,87 +569,139 @@ export function NotesPanel({
                     : "No notes yet. Create a note to get started."}
                 </p>
               ) : (
-                <ul className="divide-y rounded-lg border">
+                <ul className="divide-y divide-border">
                   {notes.map((note) => (
                     <li
                       key={note.id}
-                      className="flex flex-wrap items-center justify-between gap-2 p-3"
+                      className="flex min-w-0 items-start gap-1 py-1"
                     >
-                      <div className="min-w-0">
-                        <p className="font-medium break-words">
-                          {note.pinned && (
-                            <span className="me-2 text-muted-foreground">
-                              Pinned
+                      <Button
+                        variant="ghost"
+                        className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-3 text-start whitespace-normal"
+                        aria-label={`Open ${note.title || "untitled note"}`}
+                        aria-describedby={
+                          note.content
+                            ? `note-preview-${note.id} note-meta-${note.id}`
+                            : `note-meta-${note.id}`
+                        }
+                        aria-current={
+                          noteDraft?.original?.id === note.id
+                            ? "true"
+                            : undefined
+                        }
+                        disabled={busy}
+                        onClick={() => {
+                          selectDraft({
+                            original: note,
+                            value: {
+                              title: note.title,
+                              content: note.content,
+                              status: note.status,
+                              pinned: note.pinned,
+                              spaceID: note.spaceID,
+                            },
+                          })
+                        }}
+                      >
+                        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                          <span className="flex w-full min-w-0 items-center gap-2 font-medium">
+                            {note.pinned && <PinIcon aria-hidden="true" />}
+                            <span className="min-w-0 break-words" dir="auto">
+                              {note.title || "Untitled note"}
+                            </span>
+                          </span>
+                          {note.content && (
+                            <span
+                              id={`note-preview-${note.id}`}
+                              className="line-clamp-2 w-full text-sm font-normal break-words whitespace-pre-wrap text-muted-foreground"
+                              dir="auto"
+                            >
+                              {note.content}
                             </span>
                           )}
-                          {note.title || "Untitled note"}
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          {statusLabels[note.status]} ·{" "}
-                          {note.spaceID === null
-                            ? "No space"
-                            : (spaces.find((item) => item.id === note.spaceID)
-                                ?.name ?? "Unavailable space")}
-                        </p>
-                        {note.content && (
-                          <p className="mt-1 line-clamp-2 text-sm break-words whitespace-pre-wrap text-muted-foreground">
-                            {note.content}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          className="h-11"
-                          aria-label={`Open ${note.title || "untitled note"}`}
-                          aria-current={
-                            noteDraft?.original?.id === note.id
-                              ? "true"
-                              : undefined
+                          <span
+                            id={`note-meta-${note.id}`}
+                            className="text-xs font-normal text-muted-foreground"
+                          >
+                            {note.pinned && (
+                              <span className="sr-only">Pinned. </span>
+                            )}
+                            {statusLabels[note.status]} ·{" "}
+                            {note.spaceID === null
+                              ? "No space"
+                              : (spaces.find((item) => item.id === note.spaceID)
+                                  ?.name ?? "Unavailable space")}
+                          </span>
+                        </span>
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              ref={(node) => {
+                                if (node)
+                                  noteActionRefs.current.set(note.id, node)
+                                else noteActionRefs.current.delete(note.id)
+                              }}
+                              type="button"
+                              variant="ghost"
+                              size="icon-lg"
+                              className="size-11"
+                              aria-label={`More actions for ${note.title || "untitled note"}`}
+                              disabled={busy}
+                            />
                           }
-                          disabled={busy}
-                          onClick={() => {
-                            selectDraft({
-                              original: note,
-                              value: {
-                                title: note.title,
-                                content: note.content,
-                                status: note.status,
-                                pinned: note.pinned,
-                                spaceID: note.spaceID,
-                              },
-                            })
-                          }}
                         >
-                          Open
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          className="h-11 text-destructive"
-                          aria-label={`Delete ${note.title || "untitled note"}`}
-                          onClick={() => {
-                            setFormError(null)
-                            setDeletion({ kind: "note", item: note })
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </div>
+                          <EllipsisIcon aria-hidden="true" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuGroup>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              aria-label={`Delete ${note.title || "untitled note"}`}
+                              onClick={() => {
+                                deletionReturnFocus.current =
+                                  noteActionRefs.current.get(note.id) ?? null
+                                setFormError(null)
+                                setDeletion({ kind: "note", item: note })
+                              }}
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuGroup>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
             <div>
-              <h3 className="mb-2 font-medium">
-                Spaces{" "}
-                <span className="text-sm font-normal text-muted-foreground">
-                  ({spaces.length})
-                </span>
-              </h3>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="font-medium">
+                  Spaces{" "}
+                  <span className="text-sm font-normal text-muted-foreground">
+                    ({spaces.length})
+                  </span>
+                </h3>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11"
+                  onClick={() => {
+                    setFormError(null)
+                    setSpaceDraft({
+                      original: null,
+                      value: { name: "", projectID: null },
+                    })
+                  }}
+                >
+                  <PlusIcon aria-hidden="true" /> New space
+                </Button>
+              </div>
               {spaces.length === 0 ? (
-                <p className="py-3 text-sm text-muted-foreground">
-                  Create a space to group notes, with or without a project.
+                <p className="text-sm text-muted-foreground">
+                  No spaces yet. Group notes for a project or an idea.
                 </p>
               ) : (
                 <ul className="divide-y rounded-lg border">
@@ -663,7 +742,8 @@ export function NotesPanel({
                           variant="ghost"
                           className="h-11 text-destructive"
                           aria-label={`Delete space ${item.name}`}
-                          onClick={() => {
+                          onClick={(event) => {
+                            deletionReturnFocus.current = event.currentTarget
                             setFormError(null)
                             setDeletion({ kind: "space", item })
                           }}
@@ -1071,7 +1151,13 @@ export function NotesPanel({
           if (!open && !busy) setDeletion(null)
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent
+          finalFocus={() =>
+            deletionReturnFocus.current?.isConnected
+              ? deletionReturnFocus.current
+              : notesHeading.current
+          }
+        >
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deletion?.kind}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1116,6 +1202,7 @@ export function NotesPanel({
                         onSelectedNoteChange?.(null)
                       }
                     }
+                    deletionReturnFocus.current = null
                     setDeletion(null)
                   }
                 )

@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, test } from "bun:test"
 import React, { act } from "react"
 import { create } from "react-test-renderer"
 import { NotesPanel, mergeNoteDraft, mergeSpaceDraft } from "../src/components/notes-panel"
+
+let previousDocument
+beforeEach(() => { previousDocument = globalThis.document; globalThis.document = { addEventListener() {}, removeEventListener() {} } })
+afterEach(() => { if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument })
 
 test("conflict recovery keeps concurrent moves while preserving user edits", () => {
   const original = { id: "n", title: "Old", content: "Body", status: "todo", pinned: false, spaceID: "first" }
@@ -30,6 +34,9 @@ test("notes panel shows saved notes and distinguishes an empty space", async () 
     expect(text).toContain("In progress")
     expect(text).toContain("Pinned")
     expect(text).toContain("No space")
+    const row = root.root.findAllByType("button").find((button) => button.props["aria-label"] === "Open A plan")
+    expect(row.props["aria-describedby"]).toBe("note-preview-n1 note-meta-n1")
+    expect(root.root.findAllByProps({ id: "note-preview-n1" })[0].children).toContain("Next steps")
   } finally {
     if (root) await act(async () => root.unmount())
     if (previous === undefined) delete globalThis.IS_REACT_ACT_ENVIRONMENT
