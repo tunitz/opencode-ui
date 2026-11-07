@@ -15,6 +15,7 @@ import {
   ArrowDownIcon,
   BrainIcon,
   CircleAlertIcon,
+  ChevronRightIcon,
   LoaderCircleIcon,
   WrenchIcon,
 } from "lucide-react"
@@ -74,6 +75,8 @@ import { useLiveRun } from "@/lib/use-live-run"
 import { structuredErrorMessage } from "@/lib/structured-error"
 import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
+import { toolCallSummary, toolInputDetail, toolTextOutput } from "@/lib/tool-details"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 type ToolLike = {
   id: string
@@ -81,6 +84,7 @@ type ToolLike = {
   status: "running" | "completed" | "error"
   error?: string | null
   input?: Record<string, unknown>
+  output?: string
   files: ToolFileContent[]
 }
 
@@ -234,7 +238,7 @@ function ToolErrorDetails({ error, name }: { error: string; name: string }) {
   )
 }
 
-function ToolTrace({
+export function ToolTrace({
   tools,
   open,
   onOpenChange,
@@ -247,9 +251,10 @@ function ToolTrace({
   const failed = tools.some((tool) => tool.status === "error")
   const status = failed ? "error" : running ? "running" : "completed"
   const name = tools[0] ? toolLabel(tools[0]) : "tool unknown"
+  const summary = tools.length === 1 ? toolCallSummary(tools[0].name, tools[0].input) : undefined
   const title =
     tools.length === 1
-      ? `1 tool call: ${name}`
+      ? `1 tool call: ${name}${summary ? ` · ${summary}` : ""}`
       : `${tools.length} tool calls: ${tools.map((tool) => toolLabel(tool)).join(", ")}`
 
   return (
@@ -279,22 +284,19 @@ function ToolTrace({
                 key={tool.id}
                 className="min-w-0 text-[13px]"
               >
-                <div className="flex min-w-0 items-center gap-2">
-                <span dir="ltr" className="min-w-0 truncate font-mono">
-                  {toolLabel(tool)}
-                </span>
-                <span
-                  className={cn(
-                    "ms-auto shrink-0 text-xs text-muted-foreground",
-                    tool.status === "error" && "text-destructive"
-                  )}
-                >
-                  {tool.status}
-                </span>
-                </div>
-                {tool.status === "error" && tool.error ? (
-                  <ToolErrorDetails error={tool.error} name={toolLabel(tool)} />
-                ) : null}
+                <Collapsible>
+                  <CollapsibleTrigger className="group/tool flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md text-start focus-visible:outline-2 focus-visible:outline-ring">
+                    <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 transition-transform group-aria-expanded/tool:rotate-90 motion-reduce:transition-none" />
+                    <span className="min-w-0 flex-1">
+                      <span dir="auto" className="block truncate font-mono">{tool.name ?? `tool ${tool.id}`}</span>
+                      {toolCallSummary(tool.name, tool.input) ? <span dir="auto" className="block truncate font-mono text-xs">{toolCallSummary(tool.name, tool.input)}</span> : null}
+                    </span>
+                    <span className={cn("shrink-0 text-xs text-muted-foreground", tool.status === "error" && "text-destructive")}>{tool.status}</span>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="min-w-0 ps-6">
+                    <ToolCallDetails tool={tool} />
+                  </CollapsibleContent>
+                </Collapsible>
               </li>
             ))}
           </ul>
@@ -302,6 +304,19 @@ function ToolTrace({
       </TraceCollapsible>
     </Trace>
   )
+}
+
+function ToolCallDetails({ tool }: { tool: ToolLike }) {
+  const input = toolInputDetail(tool.input)
+  return <>
+    {input !== undefined ? <ToolDetail label="Input" text={input} /> : null}
+    {tool.output !== undefined ? <ToolDetail label="Output" text={tool.output} /> : null}
+    {tool.status === "error" && tool.error ? <ToolErrorDetails error={tool.error} name={toolLabel(tool)} /> : null}
+  </>
+}
+
+function ToolDetail({ label, text }: { label: string; text: string }) {
+  return <div className="mt-2 min-w-0"><div className="text-xs font-medium">{label}</div><pre dir="auto" tabIndex={0} aria-label={label} className="mt-1 max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-ring">{text}</pre></div>
 }
 
 function ReasoningTrace({
@@ -480,6 +495,7 @@ const AssistantMessage = memo(function AssistantMessage({
             ? structuredErrorMessage(part.state.error)
             : null,
         input: part.state.status === "streaming" ? undefined : part.state.input,
+        output: part.state.status === "completed" || part.state.status === "error" ? toolTextOutput(part.state.content) : undefined,
         files:
           part.state.status === "completed" || part.state.status === "error"
             ? toolFilesFromContent(part.state.content)

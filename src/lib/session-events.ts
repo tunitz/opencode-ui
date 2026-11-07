@@ -2,6 +2,7 @@ import type { ToolFileContent, V2Event } from "@/lib/opencode"
 import type { LiveAttachmentPreview } from "@/lib/attachments"
 import { structuredErrorMessage } from "@/lib/structured-error"
 import { toolFilesFromContent } from "@/lib/tool-artifacts"
+import { toolTextOutput } from "@/lib/tool-details"
 
 export type LiveRunStatus =
   | "submitting"
@@ -20,6 +21,7 @@ export type LiveTool = {
   status: "running" | "completed" | "error"
   error: string | null
   input?: Record<string, unknown>
+  output?: string
   files: ToolFileContent[]
   seq: number
 }
@@ -567,6 +569,7 @@ export function applySessionEvent(
         () => ({
           status: "completed",
           error: null,
+          output: toolTextOutput(event.data.content),
           files: toolFilesFromContent(event.data.content),
         })
       )
@@ -581,6 +584,7 @@ export function applySessionEvent(
           error:
             structuredErrorMessage(event.data.error) ??
             "The tool call failed.",
+          output: toolTextOutput(event.data.content),
           files: toolFilesFromContent(event.data.content),
         })
       )
