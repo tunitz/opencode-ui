@@ -169,7 +169,7 @@ export function CommandCenter({
         }}
       >
         <ResponsiveDialogContent
-          className="flex max-h-[min(36rem,85vh)] flex-col gap-3 sm:max-w-lg"
+          className="flex max-h-[min(36rem,85vh)] flex-col gap-3 sm:max-w-lg [&>[data-command-results]]:shrink"
           initialFocus={inputRef}
         >
           <DialogTitle>Command center</DialogTitle>
@@ -200,6 +200,7 @@ export function CommandCenter({
           />
           <div
             ref={listRef}
+            data-command-results
             className="min-h-0 flex-1 overflow-y-auto"
             aria-label="Command results"
           >

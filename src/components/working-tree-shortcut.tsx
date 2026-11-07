@@ -42,7 +42,7 @@ export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
   const label = status === "loading" ? "Working tree: loading" : status === "unavailable" ? "Working tree unavailable" : files?.length === 0 ? "Working tree: no changes" : `Working tree: ${files?.length} ${files?.length === 1 ? "file" : "files"}, ${totals?.additions} added, ${totals?.deletions} deleted`
 
   return (
-    <Button type="button" variant="ghost" onClick={onOpen} className="h-11 min-w-11 shrink-0 gap-1 px-2 text-xs" aria-label={`${label}. Snapshot may be stale; open working tree inspector to refresh.`} title={`${label}. Snapshot may be stale; open working tree inspector to refresh.`}>
+    <Button type="button" variant="ghost" onClick={onOpen} className="hidden h-11 min-w-11 shrink-0 gap-1 px-2 text-xs sm:inline-flex" aria-label={`${label}. Snapshot may be stale; open working tree inspector to refresh.`} title={`${label}. Snapshot may be stale; open working tree inspector to refresh.`}>
       <GitCompareArrowsIcon aria-hidden="true" className="size-4" />
       <span aria-hidden="true" className="hidden sm:inline">{status === "loading" ? "…" : status === "unavailable" ? "—" : files?.length === 0 ? "Clean · snapshot" : `${files?.length} · +${totals?.additions} −${totals?.deletions} · snapshot`}</span>
     </Button>
