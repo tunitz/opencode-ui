@@ -27,6 +27,72 @@ export type LiveAttachmentPreview = {
   dataUrl?: string
 }
 
+const IMAGE_MIME_ALIASES: Record<string, string> = {
+  "image/jpg": "image/jpeg",
+  "image/pjpeg": "image/jpeg",
+  "image/x-png": "image/png",
+}
+
+function ascii(bytes: Uint8Array, offset: number, length: number): string {
+  let text = ""
+  for (let index = offset; index < offset + length && index < bytes.length; index++) {
+    text += String.fromCharCode(bytes[index])
+  }
+  return text
+}
+
+/**
+ * Detect common image formats by their file signature. Clipboard providers
+ * often supply a generic `image/*` type or no type or file name at all, so the
+ * declared metadata cannot be trusted. Unsupported formats are still reported
+ * so the UI can give a specific, actionable error.
+ */
+export function sniffImageMime(bytes: Uint8Array): string | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    ascii(bytes, 1, 3) === "PNG" &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png"
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg"
+  }
+  if (bytes.length >= 6) {
+    const header = ascii(bytes, 0, 6)
+    if (header === "GIF87a" || header === "GIF89a") return "image/gif"
+  }
+  if (bytes.length >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WEBP") {
+    return "image/webp"
+  }
+  if (bytes.length >= 12 && ascii(bytes, 4, 4) === "ftyp") {
+    const brand = ascii(bytes, 8, 4)
+    if (brand === "avif" || brand === "avis") return "image/avif"
+    if (["heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1"].includes(brand)) {
+      return "image/heic"
+    }
+  }
+  if (
+    bytes.length >= 4 &&
+    ((bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00) ||
+      (bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a))
+  ) {
+    return "image/tiff"
+  }
+  return null
+}
+
+function readFilePrefix(file: File): Promise<Uint8Array> {
+  return file
+    .slice(0, 32)
+    .arrayBuffer()
+    .then((buffer) => new Uint8Array(buffer))
+}
+
 export function promptFileForAttachment(attachment: ComposerAttachment): {
   uri: string
   name?: string
@@ -114,17 +180,29 @@ export async function attachmentFromBrowserFile(
   id: string,
   fallbackName?: string
 ): Promise<ComposerAttachment> {
+  const displayName = file.name.trim() || fallbackName || "clipboard-image"
+
   if (file.size > MAX_ATTACHMENT_BYTES) {
     throw new Error(
-      `${file.name} is ${formatFileSize(file.size)}; the attachment limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`
+      `${displayName} is ${formatFileSize(file.size)}; the attachment limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`
     )
   }
 
-  const declared = file.type.toLowerCase().split(";", 1)[0].trim()
-  let mime =
-    declared && declared !== "application/octet-stream"
-      ? declared
-      : inferMime(file.name)
+  const declaredRaw = file.type.toLowerCase().split(";", 1)[0].trim()
+  const declared = IMAGE_MIME_ALIASES[declaredRaw] ?? declaredRaw
+  const declaredIsGeneric = !declared || declared === "application/octet-stream" || declared.endsWith("/*")
+  let mime = declaredIsGeneric ? inferMime(file.name) : declared
+  // Clipboard and photo sources may label an image generically (`image/*`)
+  // or give it no type or file name at all. Identify the actual image from
+  // its signature before applying the same safe attachment checks.
+  if (
+    declared.endsWith("/*") ||
+    mime === "application/octet-stream" ||
+    (mime.startsWith("image/") && !isSafeImageMime(mime))
+  ) {
+    const sniffed = sniffImageMime(await readFilePrefix(file))
+    if (sniffed) mime = sniffed
+  }
   // Browsers commonly label source files with application/* MIME types.
   // Send recognized text files as text/plain in the data URI as well.
   if (
@@ -141,17 +219,16 @@ export async function attachmentFromBrowserFile(
   }
   if (attachmentKind(mime) === "binary" || mime === "image/svg+xml") {
     throw new Error(
-      `${file.name} is not a supported text, image, or PDF attachment.`
+      `${displayName} is not a supported text, image, or PDF attachment.${mime.startsWith("image/") ? " Convert the image to PNG, JPEG, WebP, GIF, or AVIF and try again." : ""}`
     )
   }
 
   const dataUrl = await readAsDataUrl(file)
-  const uri = mime === "text/plain"
-    ? `data:text/plain;base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}`
-    : dataUrl
+  // when it came from a signature rather than the browser's file metadata.
+  const uri = `data:${mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}`
   return {
     id,
-    name: file.name.trim() || fallbackName || "clipboard-image",
+    name: displayName,
     mime,
     size: file.size,
     uri,

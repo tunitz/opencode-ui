@@ -122,6 +122,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
   const [storageWarning, setStorageWarning] = useState(false)
   const [storageConflictKey, setStorageConflictKey] = useState<string | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [dictationError, setDictationError] = useState<string | null>(null)
   const [attaching, setAttaching] = useState(false)
   const [skillsBySession, setSkillsBySession] = useState<
     Record<string, SelectedSkill[]>
@@ -175,6 +176,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     setError(null)
     setInterruptError(null)
     setAttachmentError(null)
+    setDictationError(null)
     setCommandFeedback(null)
   }
   useLayoutEffect(() => {
@@ -375,6 +377,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
   const visibleError =
     error ??
     interruptError ??
+    dictationError ??
     attachmentError ??
     (commandFeedback?.tone === "error" ? commandFeedback.text : null)
   const statusText =
@@ -979,9 +982,10 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     for (const [index, file] of files.slice(0, remaining).entries()) {
       try {
         attachmentSequenceRef.current += 1
+        const extension = mimeExtension(file)
         const fallbackName =
           source === "paste"
-            ? `clipboard-image-${index + 1}.${mimeExtension(file)}`
+            ? `${isImageClipboardFile(file) ? "clipboard-image" : "clipboard-file"}-${index + 1}${extension ? `.${extension}` : ""}`
             : `attachment-${index + 1}`
         const attachment = await attachmentFromBrowserFile(
           file,
@@ -1017,17 +1021,17 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
 
   function mimeExtension(file: File): string {
     const type = file.type.toLowerCase()
-    if (type === "image/jpeg") return "jpg"
+    if (type === "image/jpeg" || type === "image/jpg") return "jpg"
     const fromMime = type.split("/")[1]?.split("+")[0]
     if (fromMime && /^[a-z0-9]+$/i.test(fromMime)) return fromMime
     const fromName = inferMime(file.name).split("/")[1]
-    return fromName && /^[a-z0-9]+$/i.test(fromName) ? fromName : "png"
+    return fromName && /^[a-z0-9]+$/i.test(fromName) ? fromName : ""
   }
 
   function isImageClipboardFile(file: File): boolean {
     return (
       file.type.toLowerCase().startsWith("image/") ||
-      /\.(png|jpe?g|webp|gif|avif|svg)$/i.test(file.name)
+      /\.(png|jpe?g|webp|gif|avif|svg|heic|heif|tiff?)$/i.test(file.name)
     )
   }
 
@@ -1042,16 +1046,17 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
       .map((item) => item.getAsFile())
       .filter((file): file is File => Boolean(file))
     const files = itemFiles.length > 0 ? itemFiles : [...clipboard.files]
-    const images = files.filter(isImageClipboardFile)
     const plainText = clipboard.getData("text/plain")
     const hasText = Boolean(
       plainText || clipboard.getData("text/html")
     )
-    // Image-only pastes are handled as attachments. A mixed paste keeps the
-    // browser's ordinary text insertion/caret behavior and adds the image too.
-    if (images.length > 0) {
+    // File pastes are handled as attachments, including files whose type and
+    // name do not identify them; the attachment reader sniffs safe image
+    // signatures. A mixed paste keeps the browser's ordinary text insertion
+    // and adds the file too.
+    if (files.length > 0) {
       if (!hasText) event.preventDefault()
-      void addFiles(images, nav.activeSessionID, "paste")
+      void addFiles(files, nav.activeSessionID, "paste")
     }
     // Lexical's normal paste path normalizes CRLF. Insert the clipboard's
     // literal plain text instead so drafts and prompt bytes remain unchanged.
@@ -1380,14 +1385,6 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
           activeDescendant={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults[fileIndex] ? `${pickerId}-file-${fileIndex}` : pickerOpen && activeCommandIndex >= 0 ? `${pickerId}-option-${activeCommandIndex}` : undefined}
         />
 
-        <Dictation key={draftKey} enabled={Boolean(activeSession)} onText={(text) => {
-          if (activeDraftKeyRef.current !== draftKey) return
-          if (composingRef.current.isComposing(draftKey)) {
-            setError("Dictation text was not inserted during text composition. Please try again.")
-            return
-          }
-          editorRef.current?.insertPlainText(text)
-        }} />
         <div data-composer-footer className="flex w-full min-w-0 items-center gap-1 px-2 pb-2">
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
@@ -1440,6 +1437,20 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Dictation
+            key={draftKey}
+            enabled={Boolean(activeSession)}
+            onError={setDictationError}
+            onText={(text) => {
+              if (activeDraftKeyRef.current !== draftKey) return
+              if (composingRef.current.isComposing(draftKey)) {
+                setError("Dictation text was not inserted during text composition. Please try again.")
+                return
+              }
+              editorRef.current?.insertPlainText(text)
+            }}
+          />
 
           <div className="min-w-0 flex-1" aria-hidden="true" />
 
