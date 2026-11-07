@@ -423,18 +423,12 @@ if (browser) {
         JSON.stringify(callsAfterSelect)
       )
 
-      const returnToParent = page.getByRole("button", {
-        name: "Return to parent session",
-      })
-      await returnToParent.waitFor({ state: "visible" })
-      await returnToParent.click()
-      await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
       check(
-        "Return to parent selects the loaded parent session",
-        (await qaCalls(page)).some(
-          (call) => call.kind === "selectSession" && call.value === "s-alpha"
-        )
+        "desktop sidebar no longer duplicates the parent return control",
+        (await page.locator("aside").getByRole("button", { name: "Return to parent session" }).count()) === 0
       )
+      await page.locator('button[title="s-alpha"]').click()
+      await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
 
       await page.getByRole("button", { name: "Group by status" }).click()
       const runningSection = page.locator('section[aria-label="Running sessions"]')
@@ -1412,6 +1406,9 @@ if (browser) {
       const trace = page.locator('[data-qa-anchor="target"]')
       await trace.click()
       assert(before.messageID, "Visible disclosure has no message ID")
+      const traceContent = trace.locator("..").locator('[data-slot="trace-collapsible-content"]')
+      await traceContent.waitFor({ state: "visible" })
+      await traceContent.locator('[data-slot="collapsible-trigger"]').first().click()
       const detailsButton = page.locator(`[data-message-id="${before.messageID}"]`).getByRole("button", { name: /View full error for/, includeHidden: true })
       await detailsButton.waitFor({ state: "visible" })
       const box = await detailsButton.boundingBox()
@@ -1474,6 +1471,8 @@ if (browser) {
       await trace.click()
       const content = trace.locator("..").locator('[data-slot="trace-collapsible-content"]')
       await content.waitFor({ state: "visible" })
+      await content.locator('[data-slot="collapsible-trigger"]').first().click()
+      await content.locator('[data-slot="collapsible-content"]').waitFor({ state: "visible" })
       check("desktop keeps the full error inline", (await content.textContent())?.includes("END-OF-ERROR"))
       check("desktop does not introduce the mobile sheet action", await content.getByRole("button", { name: /View full error/ }).count() === 0)
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))

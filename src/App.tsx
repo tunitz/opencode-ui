@@ -10,7 +10,6 @@ import { NotificationsProvider } from "@/components/notifications-provider"
 import { NotesProvider, NotesWorkspace, useNotesWorkspace } from "@/components/notes-sidebar"
 import { PendingInbox } from "@/components/pending-inbox"
 import { SessionSidebar } from "@/components/session-nav"
-import { SubagentNavigation } from "@/components/subagent-navigation"
 import { WebUiPreferencesProvider } from "@/components/web-ui-preferences-provider"
 import { Button } from "@/components/ui/button"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
@@ -89,7 +88,6 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
               </div>
             ) : null}
             <PendingInbox nav={nav} />
-            {nav.activeSession ? <SubagentNavigation key={nav.activeSession.id} nav={nav} /> : null}
             <Conversation
               sessionKey={nav.activeSessionID}
               hasSession={nav.activeSessionID !== null}

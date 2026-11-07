@@ -154,7 +154,10 @@ export type OpenCodeState = {
   focusMessageID: string | null
 }
 
+export type SessionListChange = { sessionID: string | null; parentID?: string }
+
 export type OpenCodeController = OpenCodeState & {
+  subscribeSessionListChanges: (listener: (change: SessionListChange) => void) => () => void
   selectProject: (projectID: string) => Promise<void>
   selectAllProjects: () => void
   selectSession: (sessionID: string) => void
@@ -235,6 +238,17 @@ export function withSessionSnapshot(
 }
 
 export function useOpenCode(): OpenCodeController {
+  const sessionListListeners = useRef(new Set<(change: SessionListChange) => void>())
+  const pendingSessionLookup = useRef<{ sessionID: string; changed: boolean } | null>(null)
+  const subscribeSessionListChanges = useCallback((listener: (change: SessionListChange) => void) => {
+    sessionListListeners.current.add(listener)
+    return () => { sessionListListeners.current.delete(listener) }
+  }, [])
+  const notifySessionListChange = useCallback((change: SessionListChange) => {
+    const pending = pendingSessionLookup.current
+    if (pending && (change.sessionID === null || change.sessionID === pending.sessionID)) pending.changed = true
+    for (const listener of sessionListListeners.current) listener(change)
+  }, [])
   const [connection, setConnection] = useState<ConnectionStatus>("connecting")
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [scope, setScopeState] = useState<ProjectScope>("all")
@@ -572,6 +586,8 @@ export function useOpenCode(): OpenCodeController {
       if (!target) return "The notification did not include a session."
       const request = ++openSessionRequest.current
 
+      const lookup = { sessionID: target, changed: false }
+      pendingSessionLookup.current = lookup
       let session: SessionInfo
       try {
         session = await openCode.session.get({ sessionID: target })
@@ -579,10 +595,13 @@ export function useOpenCode(): OpenCodeController {
         return request === openSessionRequest.current
           ? errorMessage(error)
           : null
+      } finally {
+        if (pendingSessionLookup.current === lookup) pendingSessionLookup.current = null
       }
 
       // A newer tap/selection won while this lookup was in flight.
       if (request !== openSessionRequest.current) return null
+      if (lookup.changed) return "Session changed while opening. Try again."
 
       setSessions((current) => withSessionSnapshot(current, session))
       selectSession(target)
@@ -1106,6 +1125,7 @@ export function useOpenCode(): OpenCodeController {
           }
 
           if (event.type === "server.connected") {
+            notifySessionListChange({ sessionID: null })
             setStream("ready")
             reconnectAttemptRef.current = 0
             clearReconnectTimer()
@@ -1129,6 +1149,17 @@ export function useOpenCode(): OpenCodeController {
           ) {
             setCommandsReloadKey((current) => current + 1)
             continue
+          }
+
+          if (event.type === "session.created") {
+            notifySessionListChange({ sessionID: event.data.sessionID, parentID: event.data.parentID })
+          } else if (
+            event.type === "session.renamed" || event.type === "session.agent.selected" ||
+            event.type === "session.model.selected" || event.type === "session.moved" ||
+            event.type === "session.archived" || event.type === "session.unarchived" ||
+            event.type === "session.deleted"
+          ) {
+            notifySessionListChange({ sessionID: event.data.sessionID })
           }
 
           const sessionID = eventSessionID(event)
@@ -1302,6 +1333,7 @@ export function useOpenCode(): OpenCodeController {
     clearReconnectTimer,
     connection,
     markSessionRunning,
+    notifySessionListChange,
     refreshActiveSessions,
     setStream,
     streamKey,
@@ -2723,6 +2755,7 @@ export function useOpenCode(): OpenCodeController {
     selectAllProjects,
     selectSession,
     openSessionByID,
+    subscribeSessionListChanges,
     retryConnection,
     retryProjects,
     refreshSessions,

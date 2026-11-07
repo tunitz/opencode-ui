@@ -702,8 +702,6 @@ function SessionList({
     nav.pendingPermissions.some((request) => request.sessionID === nav.activeSessionID) ||
     nav.pendingForms.some((form) => form.sessionID === nav.activeSessionID)
   ) ? nav.activeSessionID : null
-  const parentID = nav.activeSession?.parentID
-  const loadedParent = parentID && nav.sessions.find((session) => session.id === parentID)
   const dayStart = useSyncExternalStore(
     subscribeToDayStart,
     currentDayStart,
@@ -770,11 +768,6 @@ function SessionList({
         try { localStorage.setItem(statusKey, String(!statusMode)); window.dispatchEvent(new Event(shortcutsChanged)) } catch { /* Browsing still works without storage. */ }
       }}>{statusMode ? "Group by date" : "Group by status"}</Button>
       {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
-      {loadedParent ? (
-        <Button variant="outline" onClick={() => onSelect(loadedParent.id)} className="h-11 w-full justify-start text-[13px]">
-          Return to parent session
-        </Button>
-      ) : null}
       {nav.sessionsStatus === "loading" ? (
         <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
           Loading sessions…

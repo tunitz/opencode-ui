@@ -632,12 +632,14 @@ function MessageItem({
   return null
 }
 
-function liveTool(tool: LiveTool): ToolLike {
+export function liveTool(tool: LiveTool): ToolLike {
   return {
     id: tool.id,
     name: tool.name,
     status: tool.status,
     error: tool.error,
+    input: tool.input,
+    output: tool.output,
     files: tool.files,
   }
 }
