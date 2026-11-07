@@ -110,9 +110,13 @@ export function SubagentNavigation({ nav, title }: { nav: OpenCodeController; ti
 
   return <div className="relative flex min-w-0 flex-1 items-center justify-center">
     {session.parentID ? <Button type="button" variant="ghost" size="icon-lg" className="size-11 shrink-0" aria-label="Return to parent session" disabled={parentBusy} onClick={() => void openParent()}><ArrowLeftIcon aria-hidden="true" className="rtl:rotate-180" /></Button> : null}
-    <h1 className="min-w-0 truncate px-1 text-center text-[13px] font-medium text-foreground" dir="auto" title={title}>{title}</h1>
     <DropdownMenu open={open} onOpenChange={(next) => { if (next) { setBusy(true); setRetry((value) => value + 1) } setOpen(next) }} modal={false}>
-      <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-lg" className="size-11 shrink-0" aria-label="Subagents" />}><ChevronDownIcon aria-hidden="true" className={open ? "rotate-180" : undefined} /></DropdownMenuTrigger>
+      <h1 className="min-w-0" title={title} aria-label={title}>
+        <DropdownMenuTrigger render={<Button type="button" variant="ghost" className="h-11 min-w-11 max-w-full gap-1 px-1 text-[13px] font-medium text-foreground" aria-label="Subagents" />}>
+          <span dir="auto" className="min-w-0 truncate">{title}</span>
+          <ChevronDownIcon aria-hidden="true" className={open ? "rotate-180" : undefined} />
+        </DropdownMenuTrigger>
+      </h1>
       <DropdownMenuContent align="end" aria-label="Subagents" className="w-72 max-w-[calc(100vw-2rem)]">
         {busy ? <p role="status" className="px-2 py-3 text-sm text-muted-foreground">{current && !current.error ? "Refreshing subagents…" : "Loading subagents…"}</p> : null}
         {!busy && current?.error ? <><p role="alert" className="px-2 py-2 text-sm text-destructive">{current.error}</p><DropdownMenuItem onClick={(event) => { event.preventDefault(); setBusy(true); setRetry((value) => value + 1) }}>Retry</DropdownMenuItem></> : null}
