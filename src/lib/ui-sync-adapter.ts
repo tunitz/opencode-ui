@@ -1,8 +1,13 @@
 import { uiSyncSnapshotSchema, type UiSyncSnapshot } from "./ui-sync-contract"
 import { parseSessionShortcuts, shortcutStorageKey } from "./session-shortcuts"
-import { preferencesStorageKey, readStoredPreferences } from "./web-ui-preferences"
+import { preferencesStorageKey, readStoredPreferences, type GlobalDefaults } from "./web-ui-preferences"
 
 const PRESETS_KEY = "opencode-ui:model-presets:v1"
+
+/** Shared defaults only; machine-local paths stay in this browser. */
+function sharedGlobal(global: GlobalDefaults | UiSyncSnapshot["preferences"]["global"]) {
+  return { agentID: global.agentID, model: global.model, thinkingLevel: global.thinkingLevel }
+}
 
 /** Explicitly select supported fields; never enumerate browser storage. */
 export function collectUiSyncSnapshot(storage: Pick<Storage, "getItem" | "setItem">, origin: string, backendVersion: string): UiSyncSnapshot {
@@ -14,15 +19,19 @@ export function collectUiSyncSnapshot(storage: Pick<Storage, "getItem" | "setIte
   const theme = storage.getItem("theme") ?? "system"
   return uiSyncSnapshotSchema.parse({
     version: 1, backendVersion,
-    preferences: { theme, global: stored.preferences.global, startup: stored.preferences.startup },
+    preferences: { theme, global: sharedGlobal(stored.preferences.global), startup: stored.preferences.startup },
     presets: rawPresets ? JSON.parse(rawPresets) : [],
     pins: entries.filter(([, value]) => value.pinned).map(([id]) => id),
     labels: entries.filter(([, value]) => value.label).map(([id, value]) => ({ id, label: value.label })),
   })
 }
 
-/** Return explicit storage updates for a confirmed download; does not mutate UI state. */
-export function uiSyncStorageUpdates(input: UiSyncSnapshot, origin: string, backendVersion: string): Record<string, string> {
+/**
+ * Return explicit storage updates for a confirmed download; does not mutate UI
+ * state. The browser-local worktree parent directory is preserved because it
+ * is not part of the shared snapshot.
+ */
+export function uiSyncStorageUpdates(input: UiSyncSnapshot, origin: string, backendVersion: string, localWorktreeParentDirectory: string | null = null): Record<string, string> {
   const snapshot = uiSyncSnapshotSchema.parse(input)
   if (snapshot.backendVersion !== backendVersion) throw new Error("Sync backend version mismatch")
   const shortcuts: Record<string, { pinned: boolean; label: string }> = Object.create(null)
@@ -33,6 +42,6 @@ export function uiSyncStorageUpdates(input: UiSyncSnapshot, origin: string, back
     theme: snapshot.preferences.theme,
     [PRESETS_KEY]: JSON.stringify(snapshot.presets),
     [shortcutStorageKey(origin, backendVersion)]: JSON.stringify(shortcuts),
-    [preferencesStorageKey(origin, backendVersion)]: JSON.stringify({ schemaVersion: 1, origin, backendVersion, global: snapshot.preferences.global, startup: snapshot.preferences.startup, projectOverrides: {} }),
+    [preferencesStorageKey(origin, backendVersion)]: JSON.stringify({ schemaVersion: 1, origin, backendVersion, global: { ...sharedGlobal(snapshot.preferences.global), worktreeParentDirectory: localWorktreeParentDirectory }, startup: snapshot.preferences.startup, projectOverrides: {} }),
   }
 }

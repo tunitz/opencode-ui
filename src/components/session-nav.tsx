@@ -72,7 +72,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { ThemeSelect } from "@/components/theme-select"
+import { AppearanceDialog, AppearanceTrigger, ThemeSelect } from "@/components/theme-select"
 import { useAppDirection } from "@/components/app-direction"
 import type { Project, SessionInfo } from "@/lib/opencode"
 import {
@@ -311,7 +311,7 @@ function SessionRow({
         title={session.id}
         onClick={() => onSelect(session.id)}
         className={cn(
-          "h-auto min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-lg py-1.5 ps-2.5 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          "session-nav-item h-auto min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-lg py-1.5 ps-2.5 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           expandControl ? "pe-24" : "pe-12",
           active &&
             "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
@@ -883,7 +883,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         <NewSessionButton nav={nav} onCreated={notes.closeNotes} />
         <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
       </div>
-      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} />
+      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
       <ProjectPanel nav={nav} className="mt-6" />
       <ScrollArea className="mt-2 min-h-0 flex-1">
         <div className="px-3"><NotesSidebar /></div>
@@ -903,6 +903,8 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   const notes = useNotesWorkspace()
   const [open, setOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [appearanceOpen, setAppearanceOpen] = useState(false)
+  const pendingAppearance = useRef(false)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const pendingWorktreeProject = useRef<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
@@ -911,9 +913,13 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   return (
     <>
     <Sheet open={open} onOpenChange={(next) => {
-      if (next) pendingWorktreeProject.current = null
+      if (next) { pendingWorktreeProject.current = null; pendingAppearance.current = false }
       setOpen(next)
     }} onOpenChangeComplete={(next) => {
+      if (!next && pendingAppearance.current) {
+        pendingAppearance.current = false
+        setAppearanceOpen(true)
+      }
       if (!next && pendingWorktreeProject.current) {
         setWorktreeProjectID(pendingWorktreeProject.current)
         pendingWorktreeProject.current = null
@@ -979,7 +985,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           </div>
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-between gap-1 border-t border-border p-4">
-          <ThemeSelect />
+          <AppearanceTrigger onClick={() => { pendingAppearance.current = true; setOpen(false) }} />
           <SettingsTriggerButton
             onClick={() => {
               setOpen(false)
@@ -989,12 +995,13 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         </SheetFooter>
       </SheetContent>
     </Sheet>
+    <AppearanceDialog open={appearanceOpen} onOpenChange={setAppearanceOpen} finalFocus={() => document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")} />
     <SettingsDialog
       nav={nav}
       open={settingsOpen}
       onOpenChange={setSettingsOpen}
     />
-    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} />
+    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
     </>
   )
 }

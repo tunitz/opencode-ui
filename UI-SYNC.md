@@ -33,14 +33,17 @@ transport. Anyone with access to the UI API can read, replace, or delete it.
 `collectUiSyncSnapshot(storage, origin, backendVersion)` explicitly selects
 the existing theme, version-scoped web preferences, model preset format
 (`opencode-ui:model-presets:v1`), and version/origin-scoped session shortcuts.
+The worktree parent directory, palette, and accent remain browser-local and
+are not included in the shared snapshot.
 The existing shortcut parser normalizes malformed entries; the resulting
 snapshot is validated, and unsupported IDs, labels, or presets cause an error
 instead of being uploaded.
-`uiSyncStorageUpdates(snapshot, origin, backendVersion)` returns the exact
-browser storage updates for a confirmed download; it does not apply them.
+`uiSyncStorageUpdates(snapshot, origin, backendVersion, localWorktreeParentDirectory)`
+returns the exact browser storage updates for a confirmed download, preserving
+the supplied local worktree path; it does not apply them.
 The manual control describes the shared data and access boundary, obtains a
 revision before writing, and requires confirmation. A conflict requires a new
-attempt. Imported values apply after the user reloads the page. Storage updates
+attempt. Reload after importing to apply all imported values. Storage updates
 across several browser keys are not transactional; a best-effort rollback is
 attempted if storage fails.
 

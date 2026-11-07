@@ -1,4 +1,5 @@
 import type { ModelRef } from "@/lib/opencode"
+import { normalizeWorktreeParentDirectory } from "@/lib/worktree-defaults"
 
 export const PREFERENCES_SCHEMA_VERSION = 1
 const PREFERENCES_PREFIX = "opencode-ui:preferences:v1"
@@ -18,6 +19,8 @@ export type GlobalDefaults = {
   agentID: string | null
   model: ModelPreference | null
   thinkingLevel: string | null
+  /** Browser-local parent for new worktrees; null means the backend default. */
+  worktreeParentDirectory: string | null
 }
 
 export type PreferenceOverride<T> =
@@ -65,7 +68,12 @@ export function createDefaultPreferences(
     origin,
     backendVersion,
     startup: { mode: "last" },
-    global: { agentID: null, model: null, thinkingLevel: null },
+    global: {
+      agentID: null,
+      model: null,
+      thinkingLevel: null,
+      worktreeParentDirectory: null,
+    },
     projectOverrides: {},
   }
 }
@@ -108,12 +116,20 @@ function parseStartup(value: unknown): StartupPreference {
 
 function parseGlobal(value: unknown): GlobalDefaults {
   if (!isRecord(value)) {
-    return { agentID: null, model: null, thinkingLevel: null }
+    return {
+      agentID: null,
+      model: null,
+      thinkingLevel: null,
+      worktreeParentDirectory: null,
+    }
   }
   return {
     agentID: safeID(value.agentID),
     model: parseModel(value.model),
     thinkingLevel: safeID(value.thinkingLevel),
+    worktreeParentDirectory: normalizeWorktreeParentDirectory(
+      value.worktreeParentDirectory
+    ),
   }
 }
 
@@ -318,6 +334,7 @@ export function resetGlobalDefaults(
     agentID: null,
     model: null,
     thinkingLevel: null,
+    worktreeParentDirectory: null,
   })
 }
 

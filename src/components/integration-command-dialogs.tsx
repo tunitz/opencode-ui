@@ -8,6 +8,7 @@ import {
   CheckCircle2Icon,
   CircleAlertIcon,
   LoaderCircleIcon,
+  PlusIcon,
   RefreshCwIcon,
   Trash2Icon,
   WrenchIcon,
@@ -15,6 +16,7 @@ import {
 
 import { ConnectDialog } from "@/components/connect-dialog"
 import { StatsTokenChart } from "@/components/stats-token-chart"
+import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
 import {
   CommandDialogShell,
   ErrorNotice,
@@ -48,7 +50,12 @@ import {
 } from "@/lib/integration-status"
 import { mcpVisibleStatusError } from "@/lib/mcp-config"
 import { buildStatsTokenChart } from "@/lib/stats-chart"
+import { createWorktreeSession } from "@/lib/worktree-session"
 import type { OpenCodeController } from "@/lib/use-opencode"
+import {
+  worktreeDisplayName,
+  worktreeParentDirectoryPrefill,
+} from "@/lib/worktree-defaults"
 
 export type IntegrationCommandDialogKind =
   | "mcps"
@@ -65,6 +72,7 @@ type Props = {
   onClose: () => void
   onResult: (message: string, ok?: boolean) => void
   worktreeProjectID?: string
+  onSessionCreated?: () => void
 }
 
 function statusLabel(status: McpServer["status"]) {
@@ -250,7 +258,7 @@ function McpsDialog({ nav, onClose }: Props) {
   )
 }
 
-function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
+function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionCreated }: Props) {
   const projectID = worktreeProjectID ?? nav.activeSession?.projectID ?? nav.location?.project.id ?? null
   const [entries, setEntries] = useState<WorktreeDirectory[]>([])
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
@@ -259,13 +267,18 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
   const [mode, setMode] = useState<"list" | "create">("list")
   const [name, setName] = useState("")
   const [branch, setBranch] = useState("")
-  const [directory, setDirectory] = useState("")
+  const [directoryDraft, setDirectoryDraft] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<WorktreeDirectory | null>(null)
+  const [sessionDirectory, setSessionDirectory] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(null)
+  const [sessionCreateFailed, setSessionCreateFailed] = useState(false)
+  const sessionPending = useRef(false)
   const [force, setForce] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const request = useRef(0)
+  const preferencesStore = useWebUiPreferences()
 
   useEffect(() => {
     if (!projectID) return
@@ -290,10 +303,21 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
   }, [projectID, reloadKey])
 
   if (!projectID) return null
+  const savedWorktreeParentDirectory = preferencesStore.ready
+    ? worktreeParentDirectoryPrefill(
+        preferencesStore.preferences.global.worktreeParentDirectory
+      )
+    : ""
+  const directory = directoryDraft ?? savedWorktreeParentDirectory
   const invalidDirectory = directory.trim().length > 0 && !isAbsoluteDirectory(directory)
 
+  function openCreate() {
+    setDirectoryDraft(null)
+    setMode("create")
+  }
+
   async function create() {
-    if (!projectID || creating || invalidDirectory) return
+    if (!projectID || creating || invalidDirectory || !preferencesStore.ready) return
     setCreating(true)
     setError(null)
     try {
@@ -305,7 +329,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
       })
       setName("")
       setBranch("")
-      setDirectory("")
+      setDirectoryDraft(null)
       setMode("list")
       setReloadKey((current) => current + 1)
       onResult("Worktree created by the native backend.")
@@ -351,106 +375,145 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
     }
   }
 
+  async function startSession(entry: WorktreeDirectory) {
+    if (!projectID || sessionPending.current || nav.creating || nav.connection !== "connected" || !preferencesStore.ready) return
+    sessionPending.current = true
+    setSessionDirectory(entry.directory)
+    setSessionError(null)
+    setSessionCreateFailed(false)
+    try {
+      const result = await createWorktreeSession(entry.directory, projectID, preferencesStore.preferences, nav.createSession, openCode)
+      if (!result.created) {
+        setSessionError(result.error)
+        setSessionCreateFailed(result.error === "Session creation failed.")
+        return
+      }
+      onSessionCreated?.()
+      onResult("Session created in the worktree.")
+      onClose()
+    } catch (failure) {
+      setSessionError(`Could not prepare session: ${errorMessage(failure)}`)
+    } finally {
+      sessionPending.current = false
+      setSessionDirectory(null)
+    }
+  }
+
   return (
     <>
-      <CommandDialogShell
-        title="Worktrees"
-        description="Project-scoped native worktree inventory. Create and remove are explicit backend actions."
-        pending={creating || refreshBusy}
-        onClose={onClose}
-        footer={
-          <>
-            <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={creating || refreshBusy}>
-              Close
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 px-4"
-              onClick={() => void refresh()}
-              disabled={refreshBusy || creating}
-              aria-busy={refreshBusy}
-            >
-              {refreshBusy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
-              Refresh
-            </Button>
-            {mode === "list" ? (
-              <Button type="button" className="h-11 px-4" onClick={() => setMode("create")} disabled={creating}>
-                Create worktree
+        <CommandDialogShell
+          title="Worktrees"
+          description="Manage worktrees for this project."
+          pending={creating || refreshBusy || Boolean(sessionDirectory)}
+          onClose={onClose}
+          footer={
+            <>
+              <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={creating || refreshBusy || Boolean(sessionDirectory)}>
+                Close
               </Button>
-            ) : null}
-          </>
-        }
-      >
-        {mode === "create" ? (
-          <div className="space-y-3 text-[12px]">
-            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-muted-foreground">
-              The native backend creates the worktree and may run the project&apos;s setup script.
-              This client never runs git/shell commands. Review the generated path before using it.
-            </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="worktree-name">Name</Label>
-              <Input id="worktree-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional worktree name" className="h-11" disabled={creating} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="worktree-branch">Branch</Label>
-              <Input id="worktree-branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Optional branch/ref" className="h-11 font-mono text-[12px]" dir="ltr" disabled={creating} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="worktree-directory">Parent directory</Label>
-              <Input id="worktree-directory" value={directory} onChange={(event) => setDirectory(event.target.value)} placeholder="Optional absolute parent directory" className="h-11 font-mono text-[12px]" dir="ltr" disabled={creating} aria-invalid={invalidDirectory} />
-              {invalidDirectory ? <p className="text-xs text-destructive">Use an absolute directory or leave this blank.</p> : null}
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setMode("list")} disabled={creating}>Cancel</Button>
-              <Button type="button" className="h-11 px-4" onClick={() => void create()} disabled={creating || invalidDirectory} aria-busy={creating}>
-                {creating ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <WrenchIcon aria-hidden="true" className="size-4" />}
-                Create
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 px-4"
+                onClick={() => void refresh()}
+                disabled={refreshBusy || creating || Boolean(sessionDirectory)}
+                aria-busy={refreshBusy}
+              >
+                {refreshBusy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
+                Refresh
               </Button>
-            </div>
-            <ErrorNotice error={error} />
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-[11px] text-muted-foreground">
-              Project <span dir="ltr" className="font-mono">{projectID}</span>. Listing does not modify
-              git or the filesystem.
-            </p>
-            {status === "loading" ? (
-              <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-                <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-                Loading worktrees…
+              {mode === "list" ? (
+                <Button type="button" className="h-11 px-4" onClick={openCreate} disabled={creating || Boolean(sessionDirectory)}>
+                  Create worktree
+                </Button>
+              ) : null}
+            </>
+          }
+        >
+          {mode === "create" ? (
+            <div className="space-y-3 text-[12px]">
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-muted-foreground">
+                Creating a worktree may run the project&apos;s setup script. Review the generated path before using it.
               </p>
-            ) : null}
-            {status === "error" ? (
-              <div role="alert" className="space-y-2 text-xs text-destructive">
-                <p>{error}</p>
-                <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>Retry</Button>
+              <div className="space-y-1.5">
+                <Label htmlFor="worktree-name">Name</Label>
+                <Input id="worktree-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional worktree name" className="h-11" disabled={creating} />
               </div>
-            ) : null}
-            {status === "ready" ? (
-              <ul className="space-y-1" aria-label="Project worktrees">
-                {entries.map((entry) => (
-                  <li key={entry.directory} className="flex min-w-0 items-center gap-2 rounded-lg border border-border p-2">
-                    <div className="min-w-0 flex-1">
-                      <p dir="ltr" className="truncate font-mono text-[11px]">{entry.directory}</p>
-                      <p className="text-[10px] text-muted-foreground">{entry.strategy ?? "configured strategy"}</p>
-                    </div>
-                    <Button type="button" variant="destructive" size="sm" className="h-11 shrink-0 px-3 text-xs" onClick={() => { setForce(false); setDeleteTarget(entry) }}>
-                      <Trash2Icon aria-hidden="true" className="size-4" />
-                      Remove
-                    </Button>
-                  </li>
-                ))}
-                {entries.length === 0 ? (
-                  <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">No saved worktrees.</li>
-                ) : null}
-              </ul>
-            ) : null}
-            <ErrorNotice error={mode === "list" ? error : null} />
-          </div>
-        )}
-      </CommandDialogShell>
+              <div className="space-y-1.5">
+                <Label htmlFor="worktree-branch">Branch</Label>
+                <Input id="worktree-branch" value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="Optional branch/ref" className="h-11 font-mono text-[12px]" dir="ltr" disabled={creating} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="worktree-directory">Parent directory</Label>
+                <Input id="worktree-directory" value={directory} onChange={(event) => setDirectoryDraft(event.target.value)} placeholder="Optional absolute parent directory" className="h-11 font-mono text-[12px]" dir="ltr" disabled={creating} aria-invalid={invalidDirectory} />
+                {!preferencesStore.ready ? <p role="status" className="text-xs text-muted-foreground">Loading saved directory defaults…</p> : null}
+                {invalidDirectory ? <p className="text-xs text-destructive">Use an absolute directory or leave this blank.</p> : null}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setMode("list")} disabled={creating}>Cancel</Button>
+                <Button type="button" className="h-11 px-4" onClick={() => void create()} disabled={creating || invalidDirectory || !preferencesStore.ready} aria-busy={creating}>
+                  {creating ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <WrenchIcon aria-hidden="true" className="size-4" />}
+                  Create
+                </Button>
+              </div>
+              <ErrorNotice error={error} />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {status === "loading" ? (
+                <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+                  Loading worktrees…
+                </p>
+              ) : null}
+              {status === "error" ? (
+                <div role="alert" className="space-y-2 text-xs text-destructive">
+                  <p>{error}</p>
+                  <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>Retry</Button>
+                </div>
+              ) : null}
+              {status === "ready" ? (
+                <ul className="space-y-1" aria-label="Project worktrees">
+                  {entries.map((entry) => (
+                    <li key={entry.directory} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-border p-2">
+                      <div className="min-w-0">
+                        <p className="text-[12px] leading-5 font-medium break-words">
+                          {worktreeDisplayName(entry.directory)}
+                        </p>
+                        <p dir="ltr" className="mt-0.5 font-mono text-[11px] leading-4 break-all text-muted-foreground">{entry.directory}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon-lg"
+                          className="size-11"
+                          aria-label={`New session in ${entry.directory}`}
+                          disabled={Boolean(sessionDirectory) || nav.creating || nav.connection !== "connected" || !preferencesStore.ready}
+                          aria-busy={sessionDirectory === entry.directory}
+                          onClick={() => void startSession(entry)}
+                        >
+                          {sessionDirectory === entry.directory ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                        </Button>
+                        <Button type="button" variant="destructive" size="icon-lg" className="size-11 shrink-0" aria-label={`Remove ${entry.directory}`} disabled={Boolean(sessionDirectory)} onClick={() => { setForce(false); setDeleteTarget(entry) }}>
+                          <Trash2Icon aria-hidden="true" className="size-4" />
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                  {entries.length === 0 ? (
+                    <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">No saved worktrees.</li>
+                  ) : null}
+                </ul>
+              ) : null}
+              <ErrorNotice error={mode === "list" ? error : null} />
+              {sessionDirectory ? <p role="status" className="text-xs text-muted-foreground">Creating session…</p> : null}
+              {!sessionDirectory && nav.connection !== "connected" ? <p role="status" className="text-xs text-muted-foreground">Reconnect to create a session.</p> : null}
+              {!sessionDirectory && nav.connection === "connected" && !preferencesStore.ready ? <p role="status" className="text-xs text-muted-foreground">Loading browser preferences…</p> : null}
+              {sessionError ? <p role="alert" className="text-xs break-words text-destructive">{sessionCreateFailed ? nav.createError ?? sessionError : sessionError}</p> : null}
+            </div>
+          )}
+        </CommandDialogShell>
 
       <AlertDialog
         open={deleteTarget !== null}
@@ -460,9 +523,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove worktree?</AlertDialogTitle>
             <AlertDialogDescription>
-              The native backend will remove the saved worktree
-              {deleteTarget ? ` at ${deleteTarget.directory}` : ""}. This can remove files in that
-              worktree. It is not a session delete and does not go through a shell.
+              Remove the worktree{deleteTarget ? ` at ${deleteTarget.directory}` : ""}? This can remove its files. Sessions are not deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="flex items-start gap-2 rounded-lg border border-border p-2.5">
@@ -874,15 +935,17 @@ export function IntegrationCommandDialogs({
   onClose,
   onResult,
   worktreeProjectID,
+  onSessionCreated,
 }: {
   kind: IntegrationCommandDialogKind | null
   nav: OpenCodeController
   onClose: () => void
   onResult: (message: string, ok?: boolean) => void
   worktreeProjectID?: string
+  onSessionCreated?: () => void
 }) {
   if (!kind) return null
-  const props = { kind, nav, onClose, onResult, worktreeProjectID }
+  const props = { kind, nav, onClose, onResult, worktreeProjectID, onSessionCreated }
   switch (kind) {
     case "mcps":
       return <McpsDialog {...props} />

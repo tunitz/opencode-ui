@@ -10,6 +10,7 @@ import {
 } from "react"
 
 import {
+  PREFERENCES_SCHEMA_VERSION,
   clearAllProjectOverrides,
   createDefaultPreferences,
   readStoredPreferences,
@@ -34,6 +35,7 @@ type PreferencesContextValue = {
   setGlobal: (patch: Partial<GlobalDefaults>) => void
   resetGlobal: () => void
   clearAllProjects: () => void
+  applyImportedPreferences: (preferences: WebUiPreferences) => boolean
   setStorageWarning: (warning: string | null) => void
 }
 
@@ -128,9 +130,25 @@ export function WebUiPreferencesProvider({
         commit((current) => updateGlobalDefaults(current, patch)),
       resetGlobal: () => commit(resetGlobalDefaults),
       clearAllProjects: () => commit(clearAllProjectOverrides),
+      applyImportedPreferences: (imported) => {
+        if (
+          !serverVersion ||
+          imported.origin !== origin ||
+          imported.backendVersion !== serverVersion ||
+          imported.schemaVersion !== PREFERENCES_SCHEMA_VERSION
+        ) {
+          return false
+        }
+        const next = clearAllProjectOverrides(imported)
+        preferencesRef.current = next
+        setPreferences(next)
+        setSaveStatus(null)
+        setStorageWarning(null)
+        return true
+      },
       setStorageWarning,
     }
-  }, [commit, preferences, ready, saveStatus, storageWarning])
+  }, [commit, origin, preferences, ready, saveStatus, serverVersion, storageWarning])
 
   return (
     <PreferencesContext.Provider value={value}>

@@ -1457,12 +1457,6 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
           <ModelSettingsDrawer nav={nav} open={modelSettingsOpen} onOpenChange={onModelSettingsOpenChange} />
 
           {responding ? (
-            <Button type="button" variant="ghost" size="icon-lg" aria-label="Queue message" title="Queue message" disabled={!canQueue} onClick={() => void submit("queue")} className="size-11 shrink-0 rounded-full">
-              <ListEndIcon aria-hidden="true" className="size-5" />
-            </Button>
-          ) : null}
-
-          {responding ? (
             <Button
               type="button"
               variant="ghost"

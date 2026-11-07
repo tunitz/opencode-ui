@@ -129,6 +129,40 @@
     --sidebar-ring: oklch(0.79 0.09 270);
 }
 
+/* Palette changes surfaces only; semantic success and error colors remain stable. */
+:root[data-palette="slate"] {
+    --background: #f6f9fc; --card: #ffffff; --popover: #ffffff;
+    --secondary: #e9f0f7; --muted: #e9f0f7; --accent: #e2ebf4;
+    --sidebar: #edf3f9; --sidebar-accent: #dce8f2;
+    --border: #d4e0eb; --sidebar-border: #d4e0eb; --input: #c7d5e2;
+}
+:root.dark[data-palette="slate"] {
+    --background: #141d28; --card: #1b2836; --popover: #293b4d;
+    --secondary: #223242; --muted: #223242; --accent: #40566a;
+    --sidebar: #192532; --sidebar-accent: #283c4e;
+    --border: #304253; --sidebar-border: #304253; --input: #40566a;
+}
+:root[data-palette="sand"] {
+    --background: #fcfaf6; --card: #ffffff; --popover: #ffffff;
+    --secondary: #f2eee6; --muted: #f2eee6; --accent: #ebe5da;
+    --sidebar: #f6f2eb; --sidebar-accent: #eae3d7;
+    --border: #e3dbce; --sidebar-border: #e3dbce; --input: #d4cabb;
+}
+:root.dark[data-palette="sand"] {
+    --background: #211d19; --card: #2c2722; --popover: #403830;
+    --secondary: #342e28; --muted: #342e28; --accent: #594d40;
+    --sidebar: #29231e; --sidebar-accent: #3c332b;
+    --border: #463b31; --sidebar-border: #463b31; --input: #594d40;
+}
+
+/* Accent pairs are deliberately distinct in each scheme for readable text. */
+:root[data-accent="blue"] { --primary: #1754ad; --primary-foreground: #fff; --sidebar-primary: #1754ad; --sidebar-primary-foreground: #fff; --ring: #1754ad; --sidebar-ring: #1754ad; }
+:root[data-accent="violet"] { --primary: #5534a5; --primary-foreground: #fff; --sidebar-primary: #5534a5; --sidebar-primary-foreground: #fff; --ring: #5534a5; --sidebar-ring: #5534a5; }
+:root[data-accent="green"] { --primary: #126039; --primary-foreground: #fff; --sidebar-primary: #126039; --sidebar-primary-foreground: #fff; --ring: #126039; --sidebar-ring: #126039; }
+:root.dark[data-accent="blue"] { --primary: #a9c9ff; --primary-foreground: #101820; --sidebar-primary: #a9c9ff; --sidebar-primary-foreground: #101820; --ring: #a9c9ff; --sidebar-ring: #a9c9ff; }
+:root.dark[data-accent="violet"] { --primary: #d4bfff; --primary-foreground: #101820; --sidebar-primary: #d4bfff; --sidebar-primary-foreground: #101820; --ring: #d4bfff; --sidebar-ring: #d4bfff; }
+:root.dark[data-accent="green"] { --primary: #a5dfb9; --primary-foreground: #101820; --sidebar-primary: #a5dfb9; --sidebar-primary-foreground: #101820; --ring: #a5dfb9; --sidebar-ring: #a5dfb9; }
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -317,3 +351,28 @@ pre {
         scroll-behavior: auto !important;
     }
 }
+
+/* Miniature palette surfaces reflect the resolved scheme, not the host surface. */
+.appearance-preview { background: #fff; border-color: #d6d6da; --preview-side: #f5f5f6; --preview-line: #7c7d83; }
+.appearance-preview[data-preview-palette="slate"] { background: #f6f9fc; border-color: #d4e0eb; --preview-side: #dce8f2; --preview-line: #64778b; }
+.appearance-preview[data-preview-palette="sand"] { background: #fcfaf6; border-color: #e3dbce; --preview-side: #eae3d7; --preview-line: #85796b; }
+.dark .appearance-preview { background: #19191c; border-color: #45454b; --preview-side: #333338; --preview-line: #aaaab1; }
+.dark .appearance-preview[data-preview-palette="slate"] { background: #141d28; border-color: #40566a; --preview-side: #283c4e; --preview-line: #a2b5c9; }
+.dark .appearance-preview[data-preview-palette="sand"] { background: #211d19; border-color: #594d40; --preview-side: #3c332b; --preview-line: #bfb0a0; }
+.appearance-preview-sidebar { background: var(--preview-side); }
+.appearance-preview-line, .appearance-preview-accent { height: 3px; border-radius: 2px; background: var(--preview-line); }
+.appearance-preview-accent { background: var(--primary); }
+.appearance-accent-swatch[data-preview-accent="default"] { background: #73737b; }
+.appearance-accent-swatch[data-preview-accent="blue"] { background: #1754ad; }
+.appearance-accent-swatch[data-preview-accent="violet"] { background: #5534a5; }
+.appearance-accent-swatch[data-preview-accent="green"] { background: #126039; }
+.dark .appearance-accent-swatch[data-preview-accent="blue"] { background: #a9c9ff; }
+.dark .appearance-accent-swatch[data-preview-accent="violet"] { background: #d4bfff; }
+.dark .appearance-accent-swatch[data-preview-accent="green"] { background: #a5dfb9; }
+
+/* Accent the selected session label, while keeping message prose neutral. */
+:root[data-accent]:not([data-accent="default"]) .session-nav-item[aria-current="page"],
+:root[data-accent]:not([data-accent="default"]) .session-nav-item[aria-current="page"]:hover { color: var(--primary); }
+
+/* Only conversation headings take the optional accent; body prose stays neutral. */
+:root[data-accent]:not([data-accent="default"]) .message-markdown > .markdown-content :is(h1, h2, h3, h4, h5, h6) { color: var(--primary); }

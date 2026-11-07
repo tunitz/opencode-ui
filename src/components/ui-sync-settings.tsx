@@ -1,13 +1,16 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
+import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
 import { uiSync } from "@/lib/ui-sync"
 import { collectUiSyncSnapshot, uiSyncStorageUpdates } from "@/lib/ui-sync-adapter"
 import type { UiSyncSnapshot } from "@/lib/ui-sync-contract"
+import { preferencesStorageKey, readStoredPreferences, type WebUiPreferences } from "@/lib/web-ui-preferences"
 
 type Operation = { kind: "upload"; revision: string | null } | { kind: "download"; snapshot: UiSyncSnapshot } | { kind: "delete"; revision: string; otherVersion: boolean }
 
 /** Manual actions are the opt-in: no background reads, writes or automatic reload. */
 export function UiSyncSettings({ backendVersion }: { backendVersion: string | null }) {
+  const { applyImportedPreferences } = useWebUiPreferences()
   const [operation, setOperation] = useState<Operation | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -34,10 +37,16 @@ export function UiSyncSettings({ backendVersion }: { backendVersion: string | nu
         await uiSync.remove(operation.revision)
         setMessage("Shared snapshot deleted. Browser-local settings were not changed.")
       } else {
-        const updates = uiSyncStorageUpdates(operation.snapshot, location.origin, backendVersion)
+        const stored = readStoredPreferences(localStorage, location.origin, backendVersion)
+        const updates = uiSyncStorageUpdates(operation.snapshot, location.origin, backendVersion, stored.preferences.global.worktreeParentDirectory)
+        const imported = JSON.parse(updates[preferencesStorageKey(location.origin, backendVersion)]) as WebUiPreferences
         const previous = Object.fromEntries(Object.keys(updates).map((key) => [key, localStorage.getItem(key)]))
-        try { for (const [key, value] of Object.entries(updates)) localStorage.setItem(key, value) }
-        catch (error) {
+        try {
+          for (const [key, value] of Object.entries(updates)) localStorage.setItem(key, value)
+          // The provider keeps its own copy; without this, a later edit would
+          // write its stale pre-import copy back over the imported defaults.
+          if (!applyImportedPreferences(imported)) throw new Error("Imported settings could not be applied in this tab.")
+        } catch (error) {
           for (const [key, value] of Object.entries(previous)) {
             try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value) } catch { /* Storage may remain unavailable. */ }
           }
@@ -53,7 +62,7 @@ export function UiSyncSettings({ backendVersion }: { backendVersion: string | nu
   }
   return <section aria-label="Cross-device preferences" className="mt-5 flex flex-col gap-3">
     <h3 className="text-sm font-medium">Cross-device preferences</h3>
-    <p className="text-xs text-muted-foreground">Optional manual sharing of theme, defaults, presets, session pins and labels. Anyone with access to this UI can read or replace the shared snapshot. Do not put secrets or session content in labels or preset names. Drafts, messages, attachments and credentials are not shared.</p>
+    <p className="text-xs text-muted-foreground">Optional manual sharing of light/dark/system theme, defaults, presets, session pins and labels. Palette and accent stay in this browser. Anyone with access to this UI can read or replace the shared snapshot. Do not put secrets or session content in labels or preset names. Drafts, messages, attachments and credentials are not shared.</p>
     {!backendVersion ? <p className="text-xs text-muted-foreground">Connect to the engine before sharing preferences.</p> : null}
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" className="min-h-11" disabled={busy || !backendVersion} onClick={() => void prepare("upload")}>Share this device</Button>

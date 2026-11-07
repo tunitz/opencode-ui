@@ -540,7 +540,7 @@ const AssistantMessage = memo(function AssistantMessage({
             if (group.kind === "text") {
               return (
                 <Bubble key={group.key} variant="ghost">
-                  <BubbleContent className="space-y-3.5 p-0 text-base leading-6">
+                  <BubbleContent className="message-markdown space-y-3.5 p-0 text-base leading-6">
                     <Markdown
                       artifactSessionID={sessionKey}
                       artifactExcludeSignatures={artifactExcludeSignatures}
@@ -702,7 +702,7 @@ function LiveTextItem({
       <Message>
         <MessageContent>
           <Bubble variant="ghost">
-            <BubbleContent className="space-y-3.5 p-0 text-base leading-6">
+            <BubbleContent className="message-markdown space-y-3.5 p-0 text-base leading-6">
               <Markdown artifactSessionID={sessionKey} streaming>
                 {text}
               </Markdown>

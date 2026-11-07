@@ -239,7 +239,7 @@ export function CommandCenter({
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
       />
-      <IntegrationCommandDialogs kind={worktreesOpen ? "worktrees" : null} nav={nav} onClose={() => setWorktreesOpen(false)} onResult={(message) => setActionResult(message)} />
+      <IntegrationCommandDialogs kind={worktreesOpen ? "worktrees" : null} nav={nav} onClose={() => setWorktreesOpen(false)} onResult={(message) => setActionResult(message)} onSessionCreated={closeNotes} />
       {actionResult ? <p role="status" className="sr-only">{actionResult}</p> : null}
     </>
   )

@@ -46,7 +46,7 @@
     "build:bun": "bun scripts/build-bun.ts",
     "prepack": "OPENCODE_UI_BUILD_TARGET=production bun run build:bun",
     "start:bun": "bun server/bun-server.ts",
-    "test:bun": "bun run build:bun && bun test server/*.test.mjs && bun test subagent-navigation.test.tsx",
+    "test:bun": "bun run build:bun && bun test server/*.test.mjs && bun test subagent-navigation.test.tsx theme-appearance.test.ts",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b",

@@ -1,4 +1,5 @@
 import * as React from "react"
+import { ACCENT_KEY, PALETTE_KEY, readAccent, readPalette, type Accent, type Palette } from "@/lib/theme-appearance"
 
 type Theme = "dark" | "light" | "system"
 type ResolvedTheme = "dark" | "light"
@@ -13,6 +14,10 @@ type ThemeProviderProps = {
 type ThemeProviderState = {
   theme: Theme
   setTheme: (theme: Theme) => void
+  palette: Palette
+  setPalette: (palette: Palette) => void
+  accent: Accent
+  setAccent: (accent: Accent) => void
 }
 
 const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)"
@@ -91,6 +96,32 @@ export function ThemeProvider({
 
     return defaultTheme
   })
+
+  const [palette, setPaletteState] = React.useState(() => readPalette(localStorage.getItem(PALETTE_KEY)))
+  const [accent, setAccentState] = React.useState(() => readAccent(localStorage.getItem(ACCENT_KEY)))
+  const setPalette = React.useCallback((value: Palette) => {
+    localStorage.setItem(PALETTE_KEY, value)
+    setPaletteState(value)
+  }, [])
+  const setAccent = React.useCallback((value: Accent) => {
+    localStorage.setItem(ACCENT_KEY, value)
+    setAccentState(value)
+  }, [])
+
+  React.useEffect(() => {
+    document.documentElement.dataset.palette = palette
+    document.documentElement.dataset.accent = accent
+  }, [palette, accent])
+
+  React.useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage) return
+      if (event.key === PALETTE_KEY || event.key === null) setPaletteState(readPalette(event.newValue))
+      if (event.key === ACCENT_KEY || event.key === null) setAccentState(readAccent(event.newValue))
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [])
 
   const setTheme = React.useCallback(
     (nextTheme: Theme) => {
@@ -207,8 +238,12 @@ export function ThemeProvider({
     () => ({
       theme,
       setTheme,
+      palette,
+      setPalette,
+      accent,
+      setAccent,
     }),
-    [theme, setTheme]
+    [theme, setTheme, palette, setPalette, accent, setAccent]
   )
 
   return (

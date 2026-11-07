@@ -66,6 +66,7 @@ test("adapter round-trips actual presets and scoped shortcuts without unrelated 
     ["theme", "dark"],
     ["opencode-ui:model-presets:v1", JSON.stringify([{ name: "Fast", agent: "build", model: { providerID: "provider", id: "model", variant: "low" } }])],
     [shortcutStorageKey(origin, version), JSON.stringify({ session_1: { pinned: true, label: "Work" }, session_2: { pinned: false, label: "Read" } })],
+    [preferencesStorageKey(origin, version), JSON.stringify({ schemaVersion: 1, origin, backendVersion: version, startup: { mode: "last" }, global: { agentID: null, model: null, thinkingLevel: null, worktreeParentDirectory: "/home/me/worktrees" }, projectOverrides: {} })],
     ["draft", "must not be copied"],
   ])
   const storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) }
@@ -73,9 +74,12 @@ test("adapter round-trips actual presets and scoped shortcuts without unrelated 
   expect(snapshot.presets[0].model.variant).toBe("low")
   expect(snapshot.pins).toEqual(["session_1"])
   expect(JSON.stringify(snapshot)).not.toContain("must not be copied")
+  expect(snapshot.preferences.global.worktreeParentDirectory).toBeUndefined()
   const updates = uiSyncStorageUpdates(snapshot, origin, version)
   expect(JSON.parse(updates[shortcutStorageKey(origin, version)])).toEqual({ session_1: { pinned: true, label: "Work" }, session_2: { pinned: false, label: "Read" } })
   expect(JSON.parse(updates[preferencesStorageKey(origin, version)]).backendVersion).toBe(version)
+  const local = uiSyncStorageUpdates(snapshot, origin, version, "/home/me/worktrees")
+  expect(JSON.parse(local[preferencesStorageKey(origin, version)]).global.worktreeParentDirectory).toBe("/home/me/worktrees")
   expect(() => uiSyncStorageUpdates(snapshot, origin, "other")).toThrow()
 })
 

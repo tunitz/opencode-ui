@@ -18,6 +18,7 @@ import {
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { HelpDisclosure } from "@/components/ui/help-disclosure"
+import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
@@ -59,6 +60,10 @@ import {
   modelPreferenceFromRef,
   type ModelPreference,
 } from "@/lib/web-ui-preferences"
+import {
+  isWorktreeParentDirectoryValid,
+  normalizeWorktreeParentDirectory,
+} from "@/lib/worktree-defaults"
 
 const BACKEND_DEFAULT = "__backend_default__"
 const FALLBACK_MODEL = "__fallback_model__"
@@ -258,6 +263,30 @@ function PreferencesPanel({
     : FALLBACK_MODEL
   const globalThinkingValue =
     preferences.global.thinkingLevel ?? DEFAULT_THINKING
+  const savedWorktreeDirectory =
+    preferences.global.worktreeParentDirectory ?? ""
+  // Null while not editing, so the field always reflects the saved value after
+  // loading, reset, or blur without synchronizing state from an effect.
+  const [worktreeDirectoryDraft, setWorktreeDirectoryDraft] = useState<
+    string | null
+  >(null)
+  const worktreeDirectory = worktreeDirectoryDraft ?? savedWorktreeDirectory
+  const worktreeDirectoryValid =
+    isWorktreeParentDirectoryValid(worktreeDirectory)
+
+  const updateWorktreeDirectory = (value: string) => {
+    setWorktreeDirectoryDraft(value)
+    if (!isWorktreeParentDirectoryValid(value)) return
+    const next = normalizeWorktreeParentDirectory(value)
+    if (next !== preferences.global.worktreeParentDirectory) {
+      setGlobal({ worktreeParentDirectory: next })
+    }
+  }
+
+  const resetDefaults = () => {
+    setWorktreeDirectoryDraft(null)
+    resetGlobal()
+  }
 
   const setGlobalModel = (value: string) => {
     if (value === FALLBACK_MODEL) {
@@ -421,6 +450,11 @@ function PreferencesPanel({
                   Automatic model uses the safe free fallback; paid models are
                   always an explicit choice.
                 </p>
+                <p>
+                  Worktree parent directory prefills new worktree creation. It
+                  stays in this browser and is never sent to the backend until a
+                  worktree is created.
+                </p>
               </HelpDisclosure>
             </div>
             <FieldGroup>
@@ -486,6 +520,46 @@ function PreferencesPanel({
                   })),
                 ]}
               />
+              <Field>
+                <FieldLabel htmlFor="worktree-parent-directory">
+                  Worktree parent directory
+                </FieldLabel>
+                <Input
+                  id="worktree-parent-directory"
+                  value={worktreeDirectory}
+                  onFocus={() =>
+                    setWorktreeDirectoryDraft(worktreeDirectory)
+                  }
+                  onChange={(event) =>
+                    updateWorktreeDirectory(event.target.value)
+                  }
+                  onBlur={() => {
+                    if (isWorktreeParentDirectoryValid(worktreeDirectory)) {
+                      setWorktreeDirectoryDraft(null)
+                    }
+                  }}
+                  placeholder="Backend default"
+                  className="h-11 font-mono text-[12px]"
+                  dir="ltr"
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={!ready}
+                  aria-invalid={!worktreeDirectoryValid}
+                  aria-describedby="worktree-parent-directory-help"
+                />
+                <p
+                  id="worktree-parent-directory-help"
+                  className="text-[11px] leading-5 text-muted-foreground"
+                >
+                  Blank uses the backend default. New worktrees start here
+                  unless changed for one creation.
+                </p>
+                {!worktreeDirectoryValid ? (
+                  <p role="alert" className="text-xs text-destructive">
+                    Use an absolute directory or leave this blank.
+                  </p>
+                ) : null}
+              </Field>
               {currentCatalog.error ? (
                 <p role="alert" className="text-xs break-words text-destructive">
                   Agent or model catalog unavailable for the new-session target
@@ -497,13 +571,13 @@ function PreferencesPanel({
                   type="button"
                   variant="outline"
                   className="h-11 w-full"
-                  onClick={resetGlobal}
+                  onClick={resetDefaults}
                 >
                   Reset global defaults
                 </Button>
                 <p className="text-[11px] text-muted-foreground">
-                  Resets Agent, Model, and Thinking Level. Global defaults apply
-                  everywhere.
+                  Resets Agent, Model, Thinking Level, and Worktree parent
+                  directory. Global defaults apply everywhere.
                 </p>
               </div>
               <div className="space-y-1">
