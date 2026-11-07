@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react"
 
+import { readModelPresets, writeModelPresets, type ModelPreset } from "@/lib/model-presets"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -149,11 +150,16 @@ function SettingRow({
   )
 }
 
-export function ModelSettingsDrawer({ nav }: { nav: OpenCodeController }) {
+export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }: { nav: OpenCodeController; open?: boolean; onOpenChange?: (open: boolean) => void }) {
   recordPerfRender("ModelSettingsDrawer")
-  const [open, setOpen] = useState(false)
+  const [localOpen, setLocalOpen] = useState(false)
+  const open = controlledOpen ?? localOpen
+  const setOpen = onOpenChange ?? setLocalOpen
   const [selectorError, setSelectorError] = useState<string | null>(null)
   const isDesktop = useIsDesktop()
+  const [presets, setPresets] = useState(readModelPresets)
+  const [presetName, setPresetName] = useState("")
+  const [applyingPreset, setApplyingPreset] = useState(false)
 
   const session = nav.activeSession
   const model = session?.model ?? null
@@ -242,6 +248,35 @@ export function ModelSettingsDrawer({ nav }: { nav: OpenCodeController }) {
     if (failure) setSelectorError(failure)
   }
 
+  function savePreset() {
+    const name = presetName.trim()
+    if (!name || !agentID || !model) return
+    if (presets.some((preset) => preset.name === name)) {
+      setSelectorError("A preset with this name already exists. Delete it first to replace it.")
+      return
+    }
+    const next = [...presets, { name, agent: agentID, model: buildModelRef(model, model.variant) }]
+    if (!writeModelPresets(next)) { setSelectorError("Could not save preset: browser storage is unavailable."); return }
+    setPresets(next); setPresetName(""); setSelectorError(null)
+  }
+
+  async function applyPreset(preset: ModelPreset) {
+    const targetModel = selectableModelList.find((item) => item.providerID === preset.model.providerID && item.id === preset.model.id)
+    if (!selectableAgentList.some((item) => item.id === preset.agent) || !targetModel || (preset.model.variant && !variantsForModel(targetModel).includes(preset.model.variant))) {
+      setSelectorError("This preset is unavailable in the current catalog; no changes were made.")
+      return
+    }
+    setApplyingPreset(true); setSelectorError(null)
+    // Start both calls before yielding, so both target the same active session.
+    const agentChange = nav.switchAgent(preset.agent)
+    const modelChange = nav.switchModel(preset.model)
+    try {
+      const [agentFailure, modelFailure] = await Promise.all([agentChange, modelChange])
+      if (agentFailure || modelFailure) setSelectorError(`Preset partially applied or failed. Agent: ${agentFailure ?? "applied"}; model: ${modelFailure ?? "applied"}.`)
+    } catch { setSelectorError("Preset application failed; check the current agent and model before retrying.") }
+    finally { setApplyingPreset(false) }
+  }
+
   const thinkingLabel = model ? explicitVariant || "Default" : null
   const triggerLabel = model
     ? `${model.providerID}/${model.id} · Thinking Level ${thinkingLabel}`
@@ -307,7 +342,7 @@ export function ModelSettingsDrawer({ nav }: { nav: OpenCodeController }) {
                 name="Agent"
                 value={agentID ?? ""}
                 options={agentOptions}
-                disabled={!session || nav.switchingAgent}
+                disabled={!session || nav.switchingAgent || applyingPreset}
                 busy={nav.switchingAgent}
                 onValueChange={(value) => void handleAgentChange(value)}
               />
@@ -318,7 +353,7 @@ export function ModelSettingsDrawer({ nav }: { nav: OpenCodeController }) {
                 showDetail
                 value={modelRefKey(model)}
                 options={modelOptions}
-                disabled={!session || nav.switchingModel}
+                disabled={!session || nav.switchingModel || applyingPreset}
                 busy={nav.switchingModel}
                 onValueChange={(value) => void handleModelChange(value)}
               />
@@ -328,11 +363,23 @@ export function ModelSettingsDrawer({ nav }: { nav: OpenCodeController }) {
                 name="Thinking Level"
                 value={variantSelectValue}
                 options={variantOptions}
-                disabled={!session || !selectedModelInfo || nav.switchingModel}
+                disabled={!session || !selectedModelInfo || nav.switchingModel || applyingPreset}
                 busy={nav.switchingModel}
                 onValueChange={(value) => void handleVariantChange(value)}
               />
             </SettingRow>
+            <div className="grid gap-2 border-t pt-4">
+              <h3 className="text-sm font-medium">Browser-local presets</h3>
+              <p className="text-xs text-muted-foreground">Save the current agent, model and thinking level on this browser. Applying a preset changes this session.</p>
+              <label htmlFor="model-preset-name" className="text-xs">Preset name</label>
+              <input id="model-preset-name" value={presetName} onChange={(event) => setPresetName(event.target.value)} maxLength={80} className="h-11 rounded-md border bg-background px-3 text-sm" />
+              <Button type="button" variant="outline" disabled={!presetName.trim() || !agentID || !model || applyingPreset} onClick={savePreset}>Save current settings</Button>
+              {presets.map((preset) => <div key={preset.name} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 break-words text-sm">{preset.name}<span className="block text-xs text-muted-foreground">{preset.agent} · {preset.model.providerID}/{preset.model.id} · {preset.model.variant || "Default"}</span></span>
+                <Button type="button" variant="outline" disabled={!session || applyingPreset || nav.switchingAgent || nav.switchingModel} onClick={() => void applyPreset(preset)}>Apply<span className="sr-only"> {preset.name}</span></Button>
+                <Button type="button" variant="ghost" disabled={applyingPreset} onClick={() => { const next = presets.filter((item) => item.name !== preset.name); if (writeModelPresets(next)) { setPresets(next); setSelectorError(null) } else setSelectorError("Could not delete preset: browser storage is unavailable.") }}>Delete<span className="sr-only"> {preset.name}</span></Button>
+              </div>)}
+            </div>
             {model && explicitVariant ? (
               <p className="px-1 text-[11px] leading-5 text-muted-foreground">
                 Changing Model keeps Thinking Level when the new model supports

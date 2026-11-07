@@ -7,6 +7,7 @@ type DispatcherOptions = {
   agents: Handler
   notifications: Handler
   artifacts: Handler
+  sync?: Handler
   engine: Handler
   frontend: Handler
 }
@@ -50,7 +51,10 @@ export function createWebDispatcher(options: DispatcherOptions): Handler {
     const path = new URL(request.url).pathname
     let handler: Handler
     let limit: number | undefined
-    if (path === "/api/ui/agents") {
+    if (path === "/api/ui/sync" && options.sync) {
+      handler = options.sync
+      limit = 64 * 1024
+    } else if (path === "/api/ui/agents") {
       handler = options.agents
       limit = 64 * 1024
     } else if (path === "/api/ui/notifications" || path.startsWith("/api/ui/notifications/")) {

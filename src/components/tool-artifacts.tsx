@@ -1,3 +1,4 @@
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import {
   AlertCircleIcon,
@@ -23,7 +24,6 @@ import { decodePreviewText, readPreviewText } from "@/components/preview-text-da
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -437,7 +437,7 @@ export function ArtifactDialog({
         if (!open) close()
       }}
     >
-      <DialogContent
+      <ResponsiveDialogContent
         finalFocus={() => {
           const target = returnFocus?.current
           return target?.isConnected ? target : null
@@ -546,7 +546,7 @@ export function ArtifactDialog({
             ) : null}
           </Card>
         ) : null}
-      </DialogContent>
+      </ResponsiveDialogContent>
     </Dialog>
   )
 }

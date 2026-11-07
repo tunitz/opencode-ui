@@ -1,6 +1,8 @@
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -29,6 +31,7 @@ import { ProjectArtifacts } from "@/components/project-artifacts"
 import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Message, MessageContent } from "@/components/ui/message"
 import {
   Trace,
@@ -69,6 +72,8 @@ import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRun } from "@/lib/use-live-run"
 import { structuredErrorMessage } from "@/lib/structured-error"
+import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
+import { useIsDesktop } from "@/lib/use-is-desktop"
 
 type ToolLike = {
   id: string
@@ -176,6 +181,59 @@ const UserMessage = memo(function UserMessage({
   )
 })
 
+const MOBILE_TOOL_DETAIL_LIMIT = 240
+const ToolDetailRowContext = createContext<string | null>(null)
+const ToolDetailPinContext = createContext<(key: string | null) => void>(() => {})
+
+function ToolErrorDetails({ error, name }: { error: string; name: string }) {
+  const isDesktop = useIsDesktop()
+  const rowKey = useContext(ToolDetailRowContext)
+  const pinRow = useContext(ToolDetailPinContext)
+  const ownsPin = useRef(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const [sheetActive, setSheetActive] = useState(false)
+  // Rotation or a shorter live error must not unmount a sheet under its reader.
+  const showMobileSheet = sheetActive || (!isDesktop && error.length > MOBILE_TOOL_DETAIL_LIMIT)
+  useEffect(() => () => {
+    if (ownsPin.current) pinRow(null)
+  }, [pinRow])
+  if (!showMobileSheet) {
+    return <p dir="auto" className="mt-1 break-words whitespace-pre-wrap text-destructive">{error}</p>
+  }
+  return (
+    <div className="mt-1 flex min-w-0 flex-col gap-1">
+      <p dir="auto" className="break-words whitespace-pre-wrap text-destructive">{error.slice(0, MOBILE_TOOL_DETAIL_LIMIT)}…</p>
+      <Sheet onOpenChange={(open) => {
+        if (open) {
+          setSheetActive(true)
+          if (rowKey) { ownsPin.current = true; pinRow(rowKey) }
+        }
+      }} onOpenChangeComplete={(open) => {
+        if (!open && ownsPin.current) {
+          const focusTarget = isDesktop || error.length <= MOBILE_TOOL_DETAIL_LIMIT
+            ? triggerRef.current?.closest('[data-slot="trace-collapsible"]')?.querySelector<HTMLElement>('[data-slot="trace-collapsible-trigger"]')
+            : triggerRef.current
+          focusTarget?.focus()
+          ownsPin.current = false
+          pinRow(null)
+        }
+        if (!open) setSheetActive(false)
+      }}>
+        <SheetTrigger render={<Button ref={triggerRef} type="button" variant="outline" className="min-h-11 self-start" aria-label={`View full error for ${name}`} />}>
+          View full error
+        </SheetTrigger>
+        <SheetContent side="bottom" style={fixedMobileDrawerStyle()} className="gap-0 overflow-hidden rounded-t-xl bg-card p-0">
+          <SheetHeader className="shrink-0 pe-14">
+            <SheetTitle>Tool error details</SheetTitle>
+            <SheetDescription dir="auto">{name}</SheetDescription>
+          </SheetHeader>
+          <div role="region" aria-label="Full tool error" tabIndex={0} dir="auto" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 text-sm break-words whitespace-pre-wrap text-destructive focus-visible:outline-2 focus-visible:outline-ring">{error}</div>
+        </SheetContent>
+      </Sheet>
+    </div>
+  )
+}
+
 function ToolTrace({
   tools,
   open,
@@ -235,9 +293,7 @@ function ToolTrace({
                 </span>
                 </div>
                 {tool.status === "error" && tool.error ? (
-                  <p dir="auto" className="mt-1 break-words whitespace-pre-wrap text-destructive">
-                    {tool.error}
-                  </p>
+                  <ToolErrorDetails error={tool.error} name={toolLabel(tool)} />
                 ) : null}
               </li>
             ))}
@@ -1009,6 +1065,7 @@ export function Conversation({
   } | null>(null)
   const prevCountRef = useRef(rows.length)
   const focusedRowKeyRef = useRef<string | null>(null)
+  const [sheetPinnedRowKey, setSheetPinnedRowKey] = useState<string | null>(null)
   const didInitialScrollRef = useRef(false)
   const initialSettlingRef = useRef(true)
   const autoScrollingRef = useRef(false)
@@ -1023,6 +1080,71 @@ export function Conversation({
   hasOlderRef.current = hasOlder
   const rowsRef = useRef(rows)
   rowsRef.current = rows
+  const disclosureRef = useRef<{ frame: number; session: string | null } | null>(null)
+  const prependRestoreRef = useRef<number | null>(null)
+  const syncScrollStateRef = useRef<() => void>(() => {})
+
+  const cancelPrependRestore = useCallback(() => {
+    if (prependRestoreRef.current === null) return
+    cancelAnimationFrame(prependRestoreRef.current)
+    prependRestoreRef.current = null
+    autoScrollingRef.current = false
+    syncScrollStateRef.current()
+  }, [])
+
+  const cancelDisclosureAnchor = useCallback(() => {
+    if (!disclosureRef.current) return
+    cancelAnimationFrame(disclosureRef.current.frame)
+    disclosureRef.current = null
+    syncScrollStateRef.current()
+  }, [])
+
+  // Keep the activated trigger in place while the panel animates and the
+  // virtualizer measures it. This is deliberately short-lived: it must never
+  // turn into another bottom-follow mechanism or fight a reader's scrolling.
+  const handleDisclosureClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as Element
+    const trigger = target.closest<HTMLElement>('[data-slot="trace-collapsible-trigger"]')
+    const viewport = viewportRef.current
+    if (!trigger || !viewport || !viewport.contains(trigger) || anchorRef.current || initialSettlingRef.current) return
+
+    cancelDisclosureAnchor()
+    cancelPrependRestore()
+    if (followFrameRef.current !== null) {
+      cancelAnimationFrame(followFrameRef.current)
+      followFrameRef.current = null
+    }
+    pinnedBottomRef.current = null
+    atBottomRef.current = false
+    setAtBottom(false)
+    const top = trigger.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+    const started = performance.now()
+    const anchor = { frame: 0, session: sessionKey }
+    disclosureRef.current = anchor
+    const settle = () => {
+      if (disclosureRef.current !== anchor) return
+      if (!trigger.isConnected || viewportRef.current !== viewport || sessionKeyRef.current !== anchor.session) {
+        disclosureRef.current = null
+        if (viewportRef.current === viewport && sessionKeyRef.current === anchor.session) {
+          syncScrollStateRef.current()
+        }
+        return
+      }
+      const delta = trigger.getBoundingClientRect().top - viewport.getBoundingClientRect().top - top
+      if (Math.abs(delta) > 0.5) viewport.scrollTop += delta
+      // The panel transition is 200ms; allow time for deferred RO measurement.
+      if (performance.now() - started < 400) {
+        anchor.frame = requestAnimationFrame(settle)
+      } else {
+        disclosureRef.current = null
+        syncScrollStateRef.current()
+      }
+    }
+    anchor.frame = requestAnimationFrame(settle)
+  }, [cancelDisclosureAnchor, cancelPrependRestore, sessionKey])
+  useEffect(() => () => {
+    if (disclosureRef.current) cancelAnimationFrame(disclosureRef.current.frame)
+  }, [])
 
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual returns a live instance that React Compiler cannot memoize; the windowed render is handled by the virtualizer itself, and Conversation is intentionally not memoized.
   const virtualizer = useVirtualizer({
@@ -1060,8 +1182,17 @@ export function Conversation({
         !indices.includes(focused)
       ) {
         indices.push(focused)
-        indices.sort((a, b) => a - b)
       }
+
+      // A sheet is portaled outside its virtual row; keep that row mounted
+      // until the sheet has closed and focus can return to the trigger.
+      const sheetPinned = sheetPinnedRowKey
+        ? rowsRef.current.findIndex((row) => row.key === sheetPinnedRowKey)
+        : -1
+      if (sheetPinned >= 0 && sheetPinned < range.count && !indices.includes(sheetPinned)) {
+        indices.push(sheetPinned)
+      }
+      indices.sort((a, b) => a - b)
 
       return indices
     },
@@ -1117,8 +1248,10 @@ export function Conversation({
     setAtBottom(nextAtBottom)
     setShowJump(hasOffscreenBelow(metrics, SCROLL_EDGE_THRESHOLD))
   }, [])
+  syncScrollStateRef.current = syncScrollState
 
   const scrollToLatest = useCallback(() => {
+    cancelDisclosureAnchor()
     const el = viewportRef.current
     if (!el) {
       return
@@ -1151,7 +1284,7 @@ export function Conversation({
     } else {
       jumpTimerRef.current = window.setTimeout(settle, 250)
     }
-  }, [reducedMotion, syncScrollState, virtualizer])
+  }, [cancelDisclosureAnchor, reducedMotion, syncScrollState, virtualizer])
 
   useEffect(() => {
     return () => {
@@ -1163,6 +1296,9 @@ export function Conversation({
 
   const loadOlder = useCallback(() => {
     if (!hasOlderRef.current || loadingOlderRef.current || olderRequestRef.current) return
+
+    cancelDisclosureAnchor()
+    cancelPrependRestore()
 
     const el = viewportRef.current
     const first = virtualizer.getVirtualItems().find((item) =>
@@ -1186,7 +1322,7 @@ export function Conversation({
     void request.catch(() => {}).finally(() => {
       if (olderRequestRef.current === request) olderRequestRef.current = null
     })
-  }, [onLoadOlder, virtualizer])
+  }, [cancelDisclosureAnchor, cancelPrependRestore, onLoadOlder, virtualizer])
 
   const handleScroll = useCallback(() => {
     const el = viewportRef.current
@@ -1194,6 +1330,7 @@ export function Conversation({
       return
     }
 
+    if (disclosureRef.current) return
     syncScrollState()
 
     // Initial bottom placement fires scroll events while dynamic rows are
@@ -1217,6 +1354,8 @@ export function Conversation({
 
   useEffect(() => {
     if (!focusMessageID) return
+    cancelDisclosureAnchor()
+    cancelPrependRestore()
     pinnedBottomRef.current = null
     const index = rows.findIndex((row) => row.key === focusMessageID)
     if (index < 0) return
@@ -1241,14 +1380,14 @@ export function Conversation({
       cancelAnimationFrame(frame)
       autoScrollingRef.current = false
     }
-  }, [focusMessageID, onFocusMessageHandled, rows, virtualizer])
+  }, [cancelDisclosureAnchor, cancelPrependRestore, focusMessageID, onFocusMessageHandled, rows, virtualizer])
 
   // Bottom-follow: autoscroll only when the reader is already near the bottom.
   useEffect(() => {
     const prev = prevCountRef.current
     prevCountRef.current = rows.length
 
-    if (focusMessageID) return
+    if (focusMessageID || disclosureRef.current) return
 
     if (rows.length > prev && !anchorRef.current) {
       if (atBottom) {
@@ -1277,7 +1416,7 @@ export function Conversation({
   // text commits). Never cancels a pending frame: a commit can outpace the
   // next animation frame while a large answer is rendering.
   const followIfAtBottom = useCallback(() => {
-    if (focusMessageID || initialSettlingRef.current) return
+    if (focusMessageID || initialSettlingRef.current || disclosureRef.current) return
     if (!atBottomRef.current) return
     if (followFrameRef.current !== null) return
     followFrameRef.current = requestAnimationFrame(() => {
@@ -1445,32 +1584,28 @@ export function Conversation({
       return
     }
 
-    let frame = 0
+    const started = performance.now()
     const restore = () => {
+      if (prependRestoreRef.current === null || viewportRef.current !== el) return
       const index = rowsRef.current.findIndex((row) => row.key === anchor.key)
       if (index >= 0) {
-        const entry = virtualizer.getOffsetForIndex(index)
+        const entry = virtualizer.getOffsetForIndex(index, "start")
         if (entry) {
           autoScrollingRef.current = true
           el.scrollTop = entry[0] + (contentRef.current?.offsetTop ?? 0) - anchor.top
-          requestAnimationFrame(() => {
-            autoScrollingRef.current = false
-          })
         }
       }
+      if (performance.now() - started < 600) {
+        prependRestoreRef.current = requestAnimationFrame(restore)
+      } else {
+        prependRestoreRef.current = null
+        autoScrollingRef.current = false
+        syncScrollStateRef.current()
+      }
     }
-
-    const tick = () => {
-      frame = requestAnimationFrame(() => {
-        restore()
-        // A second pass after measurement settles the variable-height offset.
-        frame = requestAnimationFrame(restore)
-      })
-    }
-
-    tick()
-    return () => cancelAnimationFrame(frame)
-  }, [rows, virtualizer])
+    prependRestoreRef.current = requestAnimationFrame(restore)
+    return cancelPrependRestore
+  }, [cancelPrependRestore, rows, virtualizer])
 
   useEffect(() => {
     // A completed request that produced no new rows must release the anchor so
@@ -1491,7 +1626,10 @@ export function Conversation({
     }
 
     sessionKeyRef.current = sessionKey
+    cancelDisclosureAnchor()
+    cancelPrependRestore()
     focusedRowKeyRef.current = null
+    setSheetPinnedRowKey(null)
     anchorRef.current = null
     olderRequestRef.current = null
     pinnedBottomRef.current = null
@@ -1501,7 +1639,7 @@ export function Conversation({
     atBottomRef.current = true
     setAtBottom(true)
     setShowJump(false)
-  }, [sessionKey])
+  }, [cancelDisclosureAnchor, cancelPrependRestore, sessionKey])
 
   if (!hasSession) {
     return (
@@ -1537,12 +1675,18 @@ export function Conversation({
   }
 
   return (
+    <ToolDetailPinContext.Provider value={setSheetPinnedRowKey}>
     <div className="relative min-h-0 flex-1">
       <div
         ref={viewportRef}
         onScroll={handleScroll}
         onFocus={handleFocus}
         onBlur={handleBlur}
+        onClickCapture={handleDisclosureClick}
+        onWheelCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
+        onTouchStartCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
+        onPointerDownCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
+        onKeyDownCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
         aria-label="Conversation"
         role="region"
         tabIndex={0}
@@ -1594,7 +1738,7 @@ export function Conversation({
                 }}
                 className={cn("pb-5", item.index === 0 && "pt-5")}
               >
-                <RowView
+                <ToolDetailRowContext.Provider value={row.key}><RowView
                   row={row}
                   sessionKey={sessionKey}
                   projectAttachments={row.kind === "message" && projectAttachmentMessages.has(row.message.id)}
@@ -1604,7 +1748,7 @@ export function Conversation({
                   expandedReasoningGroups={expandedReasoningGroups}
                   onReasoningOpenChange={handleReasoningOpenChange}
                   onLiveTextGrow={followIfAtBottom}
-                />
+                /></ToolDetailRowContext.Provider>
               </div>
             )
           })}
@@ -1670,5 +1814,6 @@ export function Conversation({
         </Button>
       ) : null}
     </div>
+    </ToolDetailPinContext.Provider>
   )
 }

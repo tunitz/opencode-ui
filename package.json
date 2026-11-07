@@ -21,6 +21,7 @@
     "server/artifact-delivery.ts",
     "server/project-artifacts.ts",
     "server/notifications.ts",
+    "server/ui-sync.ts",
     "server/pty-websocket-bridge.ts",
     "server/request-security.ts",
     "server/web-dispatch.ts",
@@ -29,12 +30,14 @@
     "server/web-security.ts",
     "server/web-static.ts",
     "src/lib/agent-config-types.ts",
+    "src/lib/ui-sync-contract.ts",
     "plugins/notes/*.ts",
     "plugins/notes/package.json",
     "plugins/notes/README.md",
     "plugins/notes/src/",
     "dist-bun-build/",
-    "README.md"
+    "README.md",
+    "UI-SYNC.md"
   ],
   "scripts": {
     "dev": "bun scripts/dev-bun.mjs",

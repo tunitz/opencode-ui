@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { BellIcon, MessageCircleQuestionIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -21,29 +21,13 @@ import {
 } from "@/components/ui/sheet"
 import { FormView } from "@/components/form-view"
 import { PermissionCard } from "@/components/permission-card"
+import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
+import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
-
-function useIsDesktop(): boolean {
-  const [desktop, setDesktop] = useState(
-    () =>
-      typeof window === "undefined" ||
-      window.matchMedia("(min-width: 768px)").matches
-  )
-
-  useEffect(() => {
-    const query = window.matchMedia("(min-width: 768px)")
-
-    const onChange = () => setDesktop(query.matches)
-    query.addEventListener("change", onChange)
-    return () => query.removeEventListener("change", onChange)
-  }, [])
-
-  return desktop
-}
 
 function PendingList({ nav }: { nav: OpenCodeController }) {
   return (
-    <ScrollArea viewportClassName="max-h-[min(60vh,30rem)]" className="pe-1">
+    <ScrollArea viewportClassName="max-h-[min(60vh,30rem)]" className="min-h-0 flex-1 pe-1">
       <div className="space-y-4">
         {nav.pendingPermissions.map((request) => (
           <PermissionCard key={request.id} nav={nav} request={request} />
@@ -119,8 +103,8 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger render={trigger} />
-      <SheetContent side="bottom" className="max-h-[85svh] px-4 pb-4">
-        <SheetHeader className="px-0">
+      <SheetContent side="bottom" className="overflow-hidden rounded-t-xl px-4 pb-4" style={fixedMobileDrawerStyle()}>
+        <SheetHeader className="shrink-0 px-0 pe-12">
           <SheetTitle className="text-base font-semibold tracking-tight">
             Pending requests
           </SheetTitle>

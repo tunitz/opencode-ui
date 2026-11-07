@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { buildBtwPrompt, canAskBtw } from "@/lib/btw"
+import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { errorMessage, openCode } from "@/lib/opencode"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -128,7 +129,7 @@ export function BtwDialog({
 
   const body = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-start justify-between gap-2 border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0 space-y-1">
           <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
             <MessageCircleQuestionIcon aria-hidden="true" className="size-4" />
@@ -223,7 +224,7 @@ export function BtwDialog({
         </div>
       </div>
 
-      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3">
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <Button type="button" variant="outline" className="h-11 px-4" onClick={close}>
           Close
         </Button>
@@ -262,12 +263,8 @@ export function BtwDialog({
         <SheetContent
           side="bottom"
           showCloseButton={false}
-          className="gap-0 bg-card p-0"
-          style={{
-            bottom:
-              "calc(100dvh - var(--app-viewport-top, 0px) - var(--app-viewport-height, 100dvh))",
-            maxHeight: "var(--app-viewport-height, 92svh)",
-          }}
+          className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl bg-card p-0"
+          style={fixedMobileDrawerStyle()}
         >
           <SheetHeader className="sr-only">
             <SheetTitle>Side question</SheetTitle>
@@ -283,7 +280,8 @@ export function BtwDialog({
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogContent
         showCloseButton={false}
-        className="flex max-h-[85svh] w-[calc(100vw-2rem)] max-w-xl flex-col gap-0 overflow-hidden p-0"
+        className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0"
+        style={fixedDesktopSettingsStyle()}
       >
         <DialogHeader className="sr-only">
           <DialogTitle>Side question</DialogTitle>

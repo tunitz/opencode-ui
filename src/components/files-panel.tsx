@@ -699,9 +699,11 @@ function DiffPatch({ file }: { file: FileDiffInfo }) {
 export function ChangesPanel({
   session,
   refreshRef,
+  onOpenFile,
 }: {
   session: SessionInfo
   refreshRef?: { current: InspectorPanelHandle | null }
+  onOpenFile?: (path: string) => void
 }) {
   const directory = session.location?.directory ?? null
   const [files, setFiles] = useState<FileDiffInfo[]>([])
@@ -858,6 +860,11 @@ export function ChangesPanel({
           {selected ? (
             <section className="space-y-2" aria-label={`Diff ${selected.file}`}>
               <h3 dir="ltr" className="text-xs font-medium break-words">{selected.file}</h3>
+              {onOpenFile && selected.status !== "deleted" && isSafeReferencePath(selected.file) ? (
+                <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => onOpenFile(selected.file)}>
+                  Open read-only file
+                </Button>
+              ) : null}
               <DiffPatch file={selected} />
             </section>
           ) : null}

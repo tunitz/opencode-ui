@@ -1,3 +1,4 @@
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import { useEffect, useMemo, useState } from "react"
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, LoaderCircleIcon, PlusIcon } from "lucide-react"
 
@@ -5,12 +6,13 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
-  DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
+import { readModelPresets, type ModelPreset } from "@/lib/model-presets"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { resolveNewSessionDefaults } from "@/lib/new-session-defaults"
 import { useTargetCatalog } from "@/lib/use-target-catalog"
 import { openCode } from "@/lib/opencode"
@@ -43,6 +45,8 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
   const [probe, setProbe] = useState<FolderProbe | null>(null)
   const [directory, setDirectory] = useState(DEFAULT_SESSION_DIRECTORY)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
+  const [presets, setPresets] = useState<ModelPreset[]>([])
+  const [presetIndex, setPresetIndex] = useState("default")
   const preferencesStore = useWebUiPreferences()
 
   const { createSession } = nav
@@ -51,8 +55,13 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
   const resolution = useMemo(() => {
     if (!selectedID || !preferencesStore.ready) return null
     if (targetCatalog.status !== "ready") return null
+    const preset = presetIndex === "default" ? null : presets[Number(presetIndex)]
     return resolveNewSessionDefaults({
-      preferences: preferencesStore.preferences,
+      preferences: preset ? {
+        ...preferencesStore.preferences,
+        projectOverrides: {},
+        global: { agentID: preset.agent, model: { providerID: preset.model.providerID, modelID: preset.model.id }, thinkingLevel: preset.model.variant ?? null },
+      } : preferencesStore.preferences,
       projectID: selectedID,
       agents: targetCatalog.agents,
       models: targetCatalog.models,
@@ -61,6 +70,8 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
     preferencesStore.preferences,
     preferencesStore.ready,
     selectedID,
+    presetIndex,
+    presets,
     targetCatalog.agents,
     targetCatalog.models,
     targetCatalog.status,
@@ -142,6 +153,8 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
     setProbe(null)
     setListing(null)
     setDirectory(DEFAULT_SESSION_DIRECTORY)
+    setPresets(readModelPresets())
+    setPresetIndex("default")
   }
 
   async function handleCreate() {
@@ -175,7 +188,7 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
         New session
       </Button>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5">
+        <ResponsiveDialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5">
           <DialogHeader>
             <DialogTitle className="text-base font-semibold tracking-tight">
               New session
@@ -188,6 +201,7 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
                 <FolderOpenIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <p dir="ltr" className="min-w-0 font-mono text-xs break-all">{directory}</p>
               </div>
+              <p className="mt-2 text-xs text-muted-foreground">An existing folder shares its files with other sessions using it. Choose a separate worktree folder for isolated file changes; worktrees still share machine resources such as network ports.</p>
             </div>
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium">Browse folders</p>
@@ -224,6 +238,18 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
                 </button>
               ))}
             </div>
+            {presets.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium">Agent and model preset</span>
+                <Select value={presetIndex} onValueChange={(value) => { if (value) setPresetIndex(value) }} disabled={nav.creating}>
+                  <SelectTrigger aria-label="Agent and model preset" className="h-11 w-full"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Session defaults</SelectItem>
+                    {presets.map((preset, index) => <SelectItem key={`${preset.name}:${index}`} value={String(index)}>{preset.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             {resolution?.model ? (
               <div
                 role="group"
@@ -234,15 +260,15 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
                   Agent: {resolution.agentID ?? "Backend default"}
                   {resolution.agentSource === "backend"
                     ? ""
-                    : ` · ${sourceLabel(resolution.agentSource)}`}
+                    : ` · ${presetIndex === "default" ? sourceLabel(resolution.agentSource) : "preset"}`}
                 </p>
                 <p dir="ltr">
                   Model: {resolution.model.providerID}/{resolution.model.id}
-                  {` · ${sourceLabel(resolution.modelSource)}`}
+                  {` · ${presetIndex === "default" ? sourceLabel(resolution.modelSource) : "preset"}`}
                 </p>
                 <p>
                   Thinking: {resolution.model.variant ?? "Default"}
-                  {` · ${sourceLabel(resolution.thinkingSource)}`}
+                  {` · ${presetIndex === "default" ? sourceLabel(resolution.thinkingSource) : "preset"}`}
                 </p>
               </div>
             ) : null}
@@ -290,7 +316,7 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
               Create session
             </Button>
           </DialogFooter>
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
     </>
   )

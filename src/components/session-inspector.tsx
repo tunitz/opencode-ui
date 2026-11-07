@@ -43,11 +43,13 @@ export function SessionInspector({ nav }: { nav: OpenCodeController }) {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [preview, setPreview] = useState<{ context: string; path: string; sequence: number } | null>(null)
   const refreshRun = useRef(0)
   const tabRef = useRef(tab)
   const sessionRef = useRef(nav.activeSessionID)
   const filesRefreshRef = useRef<InspectorPanelHandle | null>(null)
   const changesRefreshRef = useRef<InspectorPanelHandle | null>(null)
+  const previewContext = JSON.stringify([nav.activeSessionID, nav.activeSession?.location?.directory])
 
   useEffect(() => {
     tabRef.current = tab
@@ -251,10 +253,11 @@ export function SessionInspector({ nav }: { nav: OpenCodeController }) {
           <TabsContent value="files" className="min-h-0 flex-1 overflow-hidden">
             <ScrollArea viewportClassName="h-full" className="h-full px-4 pb-4">
               <FilesPanel
-                key={`${nav.activeSession.id}:${nav.activeSession.location?.directory ?? ""}`}
+                key={`${nav.activeSession.id}:${nav.activeSession.location?.directory ?? ""}:${preview?.context === previewContext ? preview.sequence : 0}`}
                 nav={nav}
                 session={nav.activeSession}
                 refreshRef={filesRefreshRef}
+                initialPath={preview?.context === previewContext ? preview.path : undefined}
               />
             </ScrollArea>
           </TabsContent>
@@ -264,6 +267,10 @@ export function SessionInspector({ nav }: { nav: OpenCodeController }) {
                 key={`${nav.activeSession.id}:${nav.activeSession.location?.directory ?? ""}`}
                 session={nav.activeSession}
                 refreshRef={changesRefreshRef}
+                onOpenFile={(path) => {
+                  setPreview((previous) => ({ context: previewContext, path, sequence: (previous?.sequence ?? 0) + 1 }))
+                  nav.setInspectorTab("files")
+                }}
               />
             </ScrollArea>
           </TabsContent>

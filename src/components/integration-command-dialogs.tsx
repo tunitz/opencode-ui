@@ -64,6 +64,7 @@ type Props = {
   kind: IntegrationCommandDialogKind
   onClose: () => void
   onResult: (message: string, ok?: boolean) => void
+  worktreeProjectID?: string
 }
 
 function statusLabel(status: McpServer["status"]) {
@@ -249,8 +250,8 @@ function McpsDialog({ nav, onClose }: Props) {
   )
 }
 
-function WorktreesDialog({ nav, onClose, onResult }: Props) {
-  const projectID = nav.activeSession?.projectID ?? nav.location?.project.id ?? null
+function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID }: Props) {
+  const projectID = worktreeProjectID ?? nav.activeSession?.projectID ?? nav.location?.project.id ?? null
   const [entries, setEntries] = useState<WorktreeDirectory[]>([])
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [error, setError] = useState<string | null>(null)
@@ -872,14 +873,16 @@ export function IntegrationCommandDialogs({
   nav,
   onClose,
   onResult,
+  worktreeProjectID,
 }: {
   kind: IntegrationCommandDialogKind | null
   nav: OpenCodeController
   onClose: () => void
   onResult: (message: string, ok?: boolean) => void
+  worktreeProjectID?: string
 }) {
   if (!kind) return null
-  const props = { kind, nav, onClose, onResult }
+  const props = { kind, nav, onClose, onResult, worktreeProjectID }
   switch (kind) {
     case "mcps":
       return <McpsDialog {...props} />

@@ -22,6 +22,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
+import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
+import { useIsDesktop } from "@/lib/use-is-desktop"
 import { errorMessage, openCode } from "@/lib/opencode"
 import type {
   PromptSkillAttachment,
@@ -63,9 +66,6 @@ type DialogProps = {
   onApplySkills?: (skills: readonly { id: string; name: string }[]) => void
 }
 
-const dialogClass =
-  "flex max-h-[calc(var(--app-viewport-height,100dvh)-1.5rem)] w-[calc(100vw-1.5rem)] max-w-lg flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
-
 export function CommandDialogShell({
   title,
   description,
@@ -81,33 +81,41 @@ export function CommandDialogShell({
   footer: ReactNode
   children: ReactNode
 }) {
-  return (
+  const isDesktop = useIsDesktop()
+  const content = (
+    <>
+      <DialogHeader className="shrink-0 border-b border-border px-4 py-3 pe-12">
+        {isDesktop ? <DialogTitle className="text-[17px] font-semibold tracking-tight">{title}</DialogTitle> : <SheetTitle className="text-[17px] font-semibold tracking-tight">{title}</SheetTitle>}
+        {isDesktop ? <DialogDescription className="text-[12px]">{description}</DialogDescription> : <SheetDescription className="text-[12px]">{description}</SheetDescription>}
+      </DialogHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
+      <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {footer}
+      </DialogFooter>
+    </>
+  )
+  const onOpenChange = (open: boolean) => {
+    if (!open && !pending) onClose()
+  }
+  return isDesktop ? (
     <Dialog
       open
-      onOpenChange={(open) => {
-        if (!open && !pending) onClose()
-      }}
+      onOpenChange={onOpenChange}
     >
       <DialogContent
         showCloseButton={!pending}
-        className={dialogClass}
+        className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0"
+        style={fixedDesktopSettingsStyle()}
       >
-        <DialogHeader className="border-b border-border px-4 py-3 pe-12">
-          <DialogTitle className="text-[17px] font-semibold tracking-tight">
-            {title}
-          </DialogTitle>
-          <DialogDescription className="text-[12px]">
-            {description}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          {children}
-        </div>
-        <DialogFooter className="flex-row justify-end gap-2 border-t border-border px-4 py-3">
-          {footer}
-        </DialogFooter>
+        {content}
       </DialogContent>
     </Dialog>
+  ) : (
+    <Sheet open onOpenChange={onOpenChange}>
+      <SheetContent side="bottom" showCloseButton={!pending} className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl p-0" style={fixedMobileDrawerStyle()}>
+        {content}
+      </SheetContent>
+    </Sheet>
   )
 }
 

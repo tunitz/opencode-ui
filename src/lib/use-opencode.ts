@@ -158,6 +158,7 @@ export type OpenCodeController = OpenCodeState & {
   selectProject: (projectID: string) => Promise<void>
   selectAllProjects: () => void
   selectSession: (sessionID: string) => void
+  openSessionByID: (sessionID: string) => Promise<string | null>
   retryConnection: () => void
   retryProjects: () => void
   refreshSessions: () => void
@@ -213,6 +214,24 @@ export type OpenCodeController = OpenCodeState & {
   clearFocusMessage: () => void
   clearSessionView: () => void
   reloadConfiguration: () => Promise<string | null>
+}
+
+/**
+ * Keep an authoritative session snapshot in the current list. A notification
+ * click may target a session outside the loaded page/project or one that was
+ * moved since the list was fetched; replace the stale row in place and never
+ * duplicate it. The surrounding project scope is deliberately untouched.
+ */
+export function withSessionSnapshot(
+  current: SessionInfo[],
+  session: SessionInfo
+): SessionInfo[] {
+  const index = current.findIndex((entry) => entry.id === session.id)
+  if (index === -1) return [session, ...current]
+  if (current[index] === session) return current
+  const next = current.slice()
+  next[index] = session
+  return next
 }
 
 export function useOpenCode(): OpenCodeController {
@@ -407,6 +426,8 @@ export function useOpenCode(): OpenCodeController {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const firstReadyRef = useRef(false)
   const activeSessionsRequest = useRef(0)
+  const openSessionRequest = useRef(0)
+  const selectingFromListRef = useRef(false)
 
   const setScope = useCallback((next: ProjectScope) => {
     scopeRef.current = next
@@ -520,6 +541,12 @@ export function useOpenCode(): OpenCodeController {
   )
 
   const selectSession = useCallback((sessionID: string) => {
+    // Any newer explicit selection supersedes an in-flight notification
+    // lookup, so a slow response cannot steal focus back. Automatic list
+    // reconciliation must not invalidate it while a list refresh is settling.
+    if (!selectingFromListRef.current) {
+      openSessionRequest.current += 1
+    }
     if (activeSessionRef.current === sessionID) {
       return
     }
@@ -532,6 +559,37 @@ export function useOpenCode(): OpenCodeController {
     setHistoryStatus("loading")
     setHistoryError(null)
   }, [])
+
+  /**
+   * Resolve a session through the native API before selecting it. Notification
+   * clicks can arrive after a cold start, for a session outside the loaded
+   * page or project, or for one that has moved; the list is only a cache and
+   * `session.get` is authoritative. The project/scope selection is not changed.
+   */
+  const openSessionByID = useCallback(
+    async (sessionID: string): Promise<string | null> => {
+      const target = sessionID.trim()
+      if (!target) return "The notification did not include a session."
+      const request = ++openSessionRequest.current
+
+      let session: SessionInfo
+      try {
+        session = await openCode.session.get({ sessionID: target })
+      } catch (error) {
+        return request === openSessionRequest.current
+          ? errorMessage(error)
+          : null
+      }
+
+      // A newer tap/selection won while this lookup was in flight.
+      if (request !== openSessionRequest.current) return null
+
+      setSessions((current) => withSessionSnapshot(current, session))
+      selectSession(target)
+      return null
+    },
+    [selectSession]
+  )
 
   const setSessionAttachments = useCallback(
     (
@@ -713,7 +771,38 @@ export function useOpenCode(): OpenCodeController {
         }
 
         if (request !== sessionsRequest.current) return
-        setSessions(rows)
+
+        // An explicit notification/deep-link selection can land while this
+        // list request is in flight. Keep that selection authoritative instead
+        // of replacing it with the first row of this page.
+        const selected = selectSessionID ?? activeSessionRef.current
+        if (selected && selected !== current) {
+          let nextRows = rows
+          if (!nextRows.some((session) => session.id === selected)) {
+            try {
+              const direct = await openCode.session.get({ sessionID: selected })
+              nextRows = [direct, ...nextRows]
+            } catch {
+              // The newer selection may have been deleted; keep the fresh list.
+            }
+          }
+          if (request !== sessionsRequest.current) return
+          setSessions((previous) => {
+            const latest = previous.find((session) => session.id === activeSessionRef.current)
+            return latest && !nextRows.some((session) => session.id === latest.id)
+              ? [latest, ...nextRows]
+              : nextRows
+          })
+          setSessionsStatus("ready")
+          return
+        }
+
+        setSessions((previous) => {
+          const latest = previous.find((session) => session.id === activeSessionRef.current)
+          return latest && !rows.some((session) => session.id === latest.id)
+            ? [latest, ...rows]
+            : rows
+        })
         setSessionsStatus("ready")
 
         const next =
@@ -722,7 +811,12 @@ export function useOpenCode(): OpenCodeController {
             : (rows[0]?.id ?? null)
 
         if (next) {
-          selectSession(next)
+          selectingFromListRef.current = true
+          try {
+            selectSession(next)
+          } finally {
+            selectingFromListRef.current = false
+          }
         } else {
           const hadSession = activeSessionRef.current !== null
           activeSessionRef.current = null
@@ -910,6 +1004,7 @@ export function useOpenCode(): OpenCodeController {
   }, [])
 
   const openSession = useCallback((session: SessionInfo) => {
+    openSessionRequest.current += 1
     if (activeSessionRef.current === session.id) {
       return
     }
@@ -1505,6 +1600,9 @@ export function useOpenCode(): OpenCodeController {
       return
     }
 
+    // A pending notification lookup must not re-select a session after the
+    // user intentionally changes project scope.
+    openSessionRequest.current += 1
     setStartupNotice(null)
     setScope("all")
     setProjectError(null)
@@ -1540,6 +1638,9 @@ export function useOpenCode(): OpenCodeController {
         return
       }
 
+      // A pending notification lookup must not re-select a session after the
+      // user intentionally changes project scope.
+      openSessionRequest.current += 1
       setScope("project")
       setProjectBusy(true)
       setProjectError(null)
@@ -1687,6 +1788,7 @@ export function useOpenCode(): OpenCodeController {
         // catalog; resolve them for its location before the composer is used.
         void loadCatalogs(targetDirectory)
 
+        openSessionRequest.current += 1
         activeSessionRef.current = created.id
         setActiveSessionID(created.id)
         setMessages([])
@@ -2521,6 +2623,7 @@ export function useOpenCode(): OpenCodeController {
   }, [])
 
   const clearSessionView = useCallback(() => {
+    openSessionRequest.current += 1
     olderAbortRef.current?.abort()
     activeSessionRef.current = null
     setActiveSessionID(null)
@@ -2619,6 +2722,7 @@ export function useOpenCode(): OpenCodeController {
     selectProject,
     selectAllProjects,
     selectSession,
+    openSessionByID,
     retryConnection,
     retryProjects,
     refreshSessions,

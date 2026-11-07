@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import {
   Sheet,
   SheetContent,
@@ -708,7 +709,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
 
   const content = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-start justify-between gap-2 border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0">
           {isDesktop ? (
             <DialogTitle className="text-[17px] font-semibold tracking-tight">Connect an integration</DialogTitle>
@@ -746,7 +747,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
         ) : null}
         {body}
       </div>
-      <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3">
+      <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {footer}
       </div>
     </div>
@@ -758,12 +759,8 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
         <SheetContent
           side="bottom"
           showCloseButton={false}
-          className="gap-0 bg-card p-0"
-          style={{
-            bottom:
-              "calc(100dvh - var(--app-viewport-top, 0px) - var(--app-viewport-height, 100dvh))",
-            maxHeight: "var(--app-viewport-height, 92svh)",
-          }}
+          className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl bg-card p-0"
+          style={fixedMobileDrawerStyle()}
         >
           {content}
         </SheetContent>
@@ -778,7 +775,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
         if (!open) void close()
       }}
     >
-      <DialogContent showCloseButton={false} className="flex max-h-[85svh] w-[calc(100vw-2rem)] max-w-xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent showCloseButton={false} className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0" style={fixedDesktopSettingsStyle()}>
         {content}
       </DialogContent>
     </Dialog>

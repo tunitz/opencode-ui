@@ -33,6 +33,44 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 
 type Notice = { kind: NotificationKind; sessionID: string; text: string; test?: boolean }
 
+/**
+ * Resolve the session target from a service-worker click message or the cold
+ * start URL. The push payload and the SW both carry the session id; the URL is
+ * a fallback for older/mocked messages and is only trusted same-origin.
+ */
+export function notificationClickSessionID(
+  data: { sessionID?: unknown; url?: unknown } | null | undefined,
+  origin: string
+): string | null {
+  if (typeof data?.sessionID === "string" && data.sessionID.trim()) {
+    return data.sessionID.trim()
+  }
+  if (typeof data?.url !== "string") return null
+  try {
+    const url = new URL(data.url, origin)
+    if (url.origin !== origin) return null
+    const sessionID = url.searchParams.get("session")
+    return sessionID?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Cold start and project switches clear selection and replace the session
+ * list. Defer notification navigation until those operations settle so they
+ * cannot clobber an externally requested selection.
+ */
+export function shouldDeferNotificationNavigation(
+  nav: Pick<OpenCodeController, "connection" | "sessionsStatus">
+): boolean {
+  if (nav.connection === "connecting") return true
+  return (
+    nav.connection === "connected" &&
+    (nav.sessionsStatus === "idle" || nav.sessionsStatus === "loading")
+  )
+}
+
 type NotificationsContextValue = {
   support: ReturnType<typeof notificationFeatureState>
   permission: NotificationPermission | "unsupported"
@@ -111,8 +149,18 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
   const preferenceWriting = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [navigationError, setNavigationError] = useState<string | null>(null)
   const sessionsRef = useRef(sessions)
   const activeSessionIDRef = useRef(nav.activeSessionID)
+  const navRef = useRef(nav)
+  const mountedRef = useRef(true)
+  const navigationRef = useRef<{
+    sessionID: string
+    promise: Promise<string | null>
+  } | null>(null)
+  useEffect(() => {
+    navRef.current = nav
+  }, [nav])
   useEffect(() => {
     sessionsRef.current = sessions
   }, [sessions])
@@ -161,38 +209,89 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
 
   const showNotice = useCallback((next: Notice) => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    setNavigationError(null)
     setNotice(next)
     noticeTimer.current = setTimeout(() => setNotice(null), 8000)
   }, [])
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (noticeTimer.current) clearTimeout(noticeTimer.current)
     }
   }, [])
 
+  const openNotificationSession = useCallback(
+    async (sessionID: string) => {
+      const target = sessionID.trim()
+      if (!target) return
+      // A repeated tap while the same native lookup is in flight must not
+      // create a second navigation or a second failure alert.
+      if (navigationRef.current?.sessionID === target) return
+
+      const promise = Promise.resolve().then(() =>
+        navRef.current.openSessionByID(target)
+      )
+      navigationRef.current = { sessionID: target, promise }
+      setNotice(null)
+
+      let failure: string | null
+      try {
+        failure = await promise
+      } catch (error) {
+        failure =
+          error instanceof Error && error.message.trim()
+            ? error.message
+            : "The session could not be opened."
+      }
+
+      // A newer tap supersedes this lookup; its result owns the visible state.
+      if (navigationRef.current?.promise !== promise) return
+      navigationRef.current = null
+      if (!mountedRef.current) return
+
+      if (failure) {
+        setNavigationError(`Could not open that session. ${failure}`)
+      } else {
+        setNavigationError(null)
+      }
+    },
+    []
+  )
+
   const openNotice = useCallback(() => {
-    if (!notice) return
-    nav.selectSession(notice.sessionID)
-    setNotice(null)
-  }, [nav, notice])
+    if (!notice?.sessionID) return
+    void openNotificationSession(notice.sessionID)
+  }, [notice, openNotificationSession])
 
   useEffect(() => {
     if (!navigator.serviceWorker) return
     const onMessage = (event: MessageEvent) => {
-      const data = event.data as { type?: unknown; sessionID?: unknown } | null
-      if (data?.type === "opencode-ui:notification-click" && typeof data.sessionID === "string") {
-        nav.selectSession(data.sessionID)
-        setNotice(null)
+      const data = event.data as {
+        type?: unknown
+        sessionID?: unknown
+        url?: unknown
+      } | null
+      if (data?.type !== "opencode-ui:notification-click") return
+      const sessionID = notificationClickSessionID(data, window.location.origin)
+      if (!sessionID) return
+      if (shouldDeferNotificationNavigation(navRef.current)) {
+        pendingSessionRef.current = sessionID
+        return
       }
+      void openNotificationSession(sessionID)
     }
     navigator.serviceWorker.addEventListener("message", onMessage)
     return () => navigator.serviceWorker.removeEventListener("message", onMessage)
-  }, [nav])
+  }, [openNotificationSession])
 
   useEffect(() => {
+    const sessionID = notificationClickSessionID(
+      { url: window.location.href },
+      window.location.origin
+    )
     const query = new URLSearchParams(window.location.search)
-    const sessionID = query.get("session")
     if (sessionID) pendingSessionRef.current = sessionID
     if (sessionID || query.has("notification")) {
       const url = new URL(window.location.href)
@@ -202,14 +301,19 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
     }
   }, [])
 
+  const deferNotificationNavigation = shouldDeferNotificationNavigation(nav)
+
   useEffect(() => {
     const sessionID = pendingSessionRef.current
     if (!sessionID) return
-    if (nav.sessions.some((session) => session.id === sessionID)) {
-      nav.selectSession(sessionID)
-      pendingSessionRef.current = null
-    }
-  }, [nav, nav.sessions])
+    // On cold start `connect()` clears selection and loads the list. Resolve
+    // only after that settles so the list refresh cannot replace the target.
+    if (deferNotificationNavigation) return
+    // Clear before resolving: a deleted session is retried only by a new tap,
+    // never by this effect re-running on every render.
+    pendingSessionRef.current = null
+    void openNotificationSession(sessionID)
+  }, [deferNotificationNavigation, openNotificationSession])
 
   const pushSessions = useCallback(async (getNext: (current: NotificationSession[]) => NotificationSession[], activeSessionID: string | null) => {
     const request = ++watchRequest.current
@@ -460,6 +564,19 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
                 </Button>
               ) : null}
               <Button type="button" variant="ghost" className="h-11 px-3 text-xs" onClick={() => setNotice(null)}>
+                Dismiss
+              </Button>
+            </span>
+          </AlertDescription>
+        </Alert>
+      ) : navigationError ? (
+        <Alert className="fixed inset-x-3 top-16 z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
+          <BellIcon aria-hidden="true" />
+          <AlertTitle>Session unavailable</AlertTitle>
+          <AlertDescription>
+            <span className="break-words">{navigationError}</span>
+            <span className="mt-2 flex gap-2">
+              <Button type="button" variant="ghost" className="h-11 px-3 text-xs" onClick={() => setNavigationError(null)}>
                 Dismiss
               </Button>
             </span>

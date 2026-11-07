@@ -36,6 +36,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { AgentConfigSettings } from "@/components/agent-config-settings"
 import { NotificationsSettings } from "@/components/notifications-settings"
+import { UiSyncSettings } from "@/components/ui-sync-settings"
 import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
 import {
   fixedDesktopSettingsStyle,
@@ -524,6 +525,7 @@ function PreferencesPanel({
                 </p>
               </div>
             </FieldGroup>
+            <UiSyncSettings backendVersion={nav.serverVersion} />
           </TabsContent>
         </ScrollArea>
       </Tabs>

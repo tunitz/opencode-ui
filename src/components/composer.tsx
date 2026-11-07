@@ -1,3 +1,4 @@
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import {
   useEffect,
   useId,
@@ -21,9 +22,10 @@ import {
   XIcon,
 } from "lucide-react"
 
+import { Dictation } from "@/components/dictation"
 import { BtwDialog } from "@/components/btw-dialog"
 import { FilesPanel } from "@/components/files-panel"
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogTitle } from "@/components/ui/dialog"
 import { ModelSettingsDrawer } from "@/components/model-settings"
 import {
   SessionCommandDialogs,
@@ -110,7 +112,7 @@ function AttachmentPreview({
   )
 }
 
-export function Composer({ nav }: { nav: OpenCodeController }) {
+export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: { nav: OpenCodeController; modelSettingsOpen?: boolean; onModelSettingsOpenChange?: (open: boolean) => void }) {
   recordPerfRender("Composer")
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
     readDrafts()
@@ -1211,10 +1213,10 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
       <form className="shrink-0" onSubmit={handleSubmit}>
       {activeSession && preview?.sessionID === draftKey ? (
         <Dialog open onOpenChange={(open) => { if (!open) setPreview(null) }}>
-          <DialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl">
+          <ResponsiveDialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl">
             <DialogTitle>Project file preview</DialogTitle>
             <FilesPanel key={`${preview.sessionID}:${preview.path}`} nav={nav} session={activeSession} initialPath={preview.path} />
-          </DialogContent>
+          </ResponsiveDialogContent>
         </Dialog>
       ) : null}
       {fileQuery?.sessionID === draftKey ? (
@@ -1378,6 +1380,14 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
           activeDescendant={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults[fileIndex] ? `${pickerId}-file-${fileIndex}` : pickerOpen && activeCommandIndex >= 0 ? `${pickerId}-option-${activeCommandIndex}` : undefined}
         />
 
+        <Dictation key={draftKey} enabled={Boolean(activeSession)} onText={(text) => {
+          if (activeDraftKeyRef.current !== draftKey) return
+          if (composingRef.current.isComposing(draftKey)) {
+            setError("Dictation text was not inserted during text composition. Please try again.")
+            return
+          }
+          editorRef.current?.insertPlainText(text)
+        }} />
         <div data-composer-footer className="flex w-full min-w-0 items-center gap-1 px-2 pb-2">
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
@@ -1433,7 +1443,7 @@ export function Composer({ nav }: { nav: OpenCodeController }) {
 
           <div className="min-w-0 flex-1" aria-hidden="true" />
 
-          <ModelSettingsDrawer nav={nav} />
+          <ModelSettingsDrawer nav={nav} open={modelSettingsOpen} onOpenChange={onModelSettingsOpenChange} />
 
           {responding ? (
             <Button type="button" variant="ghost" size="icon-lg" aria-label="Queue message" title="Queue message" disabled={!canQueue} onClick={() => void submit("queue")} className="size-11 shrink-0 rounded-full">

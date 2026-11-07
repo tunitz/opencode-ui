@@ -119,8 +119,12 @@ checks; they do not enable general filesystem browsing.
   `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`. This does not select the CLI service file.
 
 Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL
-creates a separate storage scope. Server-side state/configuration stays in user locations, not
-the installed package; align local agent configuration with the engine you operate.
+creates a separate storage scope. Settings offers optional, manually initiated sharing of selected
+non-secret preferences, presets, session pins and labels through a single server-side snapshot;
+drafts and transcripts are never included. Anyone with UI access can read or replace that snapshot,
+so it does not provide authentication or multi-user isolation. See [UI-SYNC.md](UI-SYNC.md).
+Other server-side state/configuration stays in user locations, not the installed package; align
+local agent configuration with the engine you operate.
 
 The separately packaged [Notes plugin](plugins/notes/README.md) is optional. When its server
 part is active for the selected location, the sidebar offers notes and planning spaces; without

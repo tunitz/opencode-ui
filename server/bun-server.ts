@@ -5,6 +5,7 @@ import { createAgentConfigService } from "./agent-config.ts"
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
+import { createUiSyncService } from "./ui-sync.ts"
 import type { PtyBridgeServer } from "./pty-websocket-bridge.ts"
 import { DEFAULT_ALLOWED_HOSTS, DEFAULT_ALLOWED_ORIGINS } from "./request-security.ts"
 import { BunConfigurationError, isLoopbackHost, validateHostname, validateOrigin, validatePath, validatePort } from "./bun-config.ts"
@@ -72,7 +73,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const application = createBunApplication({
-    target, authorization, directory, agents, artifacts, notifications,
+    target, authorization, directory, agents, artifacts, notifications, sync: createUiSyncService(),
     security,
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {

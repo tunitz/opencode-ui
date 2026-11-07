@@ -1,3 +1,4 @@
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import {
   useEffect,
   useMemo,
@@ -13,6 +14,7 @@ import {
   LoaderCircleIcon,
   MenuIcon,
   PencilIcon,
+  PinIcon,
   RotateCwIcon,
   Trash2Icon,
   XIcon,
@@ -39,7 +41,6 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
-  DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -53,6 +54,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { NewSessionButton } from "@/components/new-session-dialog"
 import { NotesSidebar, useNotesWorkspace } from "@/components/notes-sidebar"
+import { IntegrationCommandDialogs } from "@/components/integration-command-dialogs"
 import {
   SettingsButton,
   SettingsDialog,
@@ -88,8 +90,43 @@ import {
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
+import { groupSessionTreesByStatus, parseSessionShortcuts, SHORTCUT_GROUPS, shortcutStorageKey, updateSessionShortcut, type SessionShortcuts, type SessionShortcut } from "@/lib/session-shortcuts"
+import { worktreeNavigationProject } from "@/lib/worktree-navigation"
 
 export type SessionNavProps = OpenCodeController
+
+const shortcutsChanged = "opencode-ui:session-shortcuts-changed"
+function subscribeShortcuts(callback: () => void) {
+  window.addEventListener("storage", callback)
+  window.addEventListener(shortcutsChanged, callback)
+  return () => {
+    window.removeEventListener("storage", callback)
+    window.removeEventListener(shortcutsChanged, callback)
+  }
+}
+
+function useSessionShortcuts(version: string | null) {
+  const key = version ? shortcutStorageKey(window.location.origin, version) : null
+  const raw = useSyncExternalStore(subscribeShortcuts, () => {
+    try { return key ? localStorage.getItem(key) ?? "" : "" } catch { return "" }
+  }, () => "")
+  const shortcuts = useMemo(() => parseSessionShortcuts(raw), [raw])
+  const [error, setError] = useState<string | null>(null)
+  function update(id: string, change: Partial<SessionShortcut>) {
+    if (!key) { setError("Session labels and pins are unavailable until the server version is known."); return false }
+    try {
+      const current = parseSessionShortcuts(localStorage.getItem(key))
+      localStorage.setItem(key, JSON.stringify(updateSessionShortcut(current, id, change)))
+      window.dispatchEvent(new Event(shortcutsChanged))
+      setError(null)
+      return true
+    } catch {
+      setError("Could not save session labels and pins in this browser.")
+      return false
+    }
+  }
+  return { shortcuts, update, error }
+}
 
 function ConnectionRetry({ onRetry }: { onRetry: () => void }) {
   return (
@@ -182,6 +219,8 @@ function SessionRow({
   onSelect,
   onRename,
   onDelete,
+  shortcut,
+  onShortcut,
 }: {
   session: SessionInfo
   active: boolean
@@ -193,6 +232,8 @@ function SessionRow({
   onSelect: (sessionID: string) => void
   onRename: (sessionID: string, title: string) => Promise<string | null>
   onDelete: (sessionID: string) => Promise<string | null>
+  shortcut?: SessionShortcut
+  onShortcut: (sessionID: string, change: Partial<SessionShortcut>) => boolean
 }) {
   const title = session.title?.trim() || session.id
   const [renameOpen, setRenameOpen] = useState(false)
@@ -202,6 +243,10 @@ function SessionRow({
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deletePending, setDeletePending] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const actionsRef = useRef<HTMLButtonElement>(null)
+  const [labelOpen, setLabelOpen] = useState(false)
+  const [labelDraft, setLabelDraft] = useState("")
+  const [labelError, setLabelError] = useState(false)
 
   const trimmedDraft = draft.trim()
   const canSave =
@@ -303,17 +348,19 @@ function SessionRow({
             </span>
             {descendantCount > 0 ? (
               <span className="shrink-0">
-                {descendantCount} {descendantCount === 1 ? "subagent" : "subagents"}
+                {descendantCount} loaded {descendantCount === 1 ? "subagent" : "subagents"}
               </span>
             ) : null}
           </span>
         ) : null}
+        {shortcut?.label ? <span dir="auto" className="max-w-full truncate text-[10px] text-muted-foreground">{shortcut.label}</span> : null}
       </Button>
       {expandControl}
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger
           render={
             <Button
+              ref={actionsRef}
               variant="ghost"
               size="icon-lg"
               aria-label={`Session actions: ${title}`}
@@ -329,6 +376,13 @@ function SessionRow({
           aria-label={`Actions for ${title}`}
           className="w-auto min-w-44"
         >
+          <DropdownMenuItem onClick={() => onShortcut(session.id, { pinned: !shortcut?.pinned })}>
+            <PinIcon aria-hidden="true" />
+            {shortcut?.pinned ? "Unpin session" : "Pin session"}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => { setLabelDraft(shortcut?.label ?? ""); setLabelError(false); setLabelOpen(true) }}>
+            <PencilIcon aria-hidden="true" /> Edit local label
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={openRename}>
             <PencilIcon aria-hidden="true" />
             Rename session
@@ -341,6 +395,29 @@ function SessionRow({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <Dialog open={labelOpen} onOpenChange={setLabelOpen}>
+        <ResponsiveDialogContent showCloseButton={false} className="gap-4 p-5" finalFocus={() => {
+          const actions = actionsRef.current
+          if (actions?.isConnected && actions.getClientRects().length) return actions
+          const trigger = document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")
+          return trigger?.getClientRects().length ? trigger : null
+        }}>
+          <DialogHeader><DialogTitle>Edit local label</DialogTitle></DialogHeader>
+          <form className="space-y-3" onSubmit={(event) => {
+            event.preventDefault()
+            if (onShortcut(session.id, { label: labelDraft })) setLabelOpen(false)
+            else setLabelError(true)
+          }}>
+            <p className="text-xs text-muted-foreground">Only saved in this browser. Clear the field to remove the label.</p>
+            <Input aria-label="Local session label" maxLength={60} value={labelDraft} onChange={(event) => setLabelDraft(event.target.value)} className="h-11" />
+            {labelError ? <p role="alert" className="text-xs text-destructive">Could not save the label in this browser.</p> : null}
+            <DialogFooter className="mt-0 flex-row justify-end gap-2">
+              <DialogClose render={<Button type="button" variant="outline" className="h-11 px-4" />}>Cancel</DialogClose>
+              <Button type="submit" className="h-11 px-4">Save label</Button>
+            </DialogFooter>
+          </form>
+        </ResponsiveDialogContent>
+      </Dialog>
       <Dialog
         open={renameOpen}
         onOpenChange={(next) => {
@@ -355,7 +432,16 @@ function SessionRow({
           }
         }}
       >
-        <DialogContent showCloseButton={false} className="gap-4 p-5">
+        <ResponsiveDialogContent
+          showCloseButton={false}
+          className="gap-4 p-5"
+          finalFocus={() => {
+            const actions = actionsRef.current
+            if (actions?.isConnected && actions.getClientRects().length) return actions
+            const mobileTrigger = document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")
+            return mobileTrigger?.getClientRects().length ? mobileTrigger : null
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Rename session</DialogTitle>
           </DialogHeader>
@@ -407,7 +493,7 @@ function SessionRow({
               </Button>
             </DialogFooter>
           </form>
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
       <AlertDialog
         open={deleteOpen}
@@ -472,6 +558,8 @@ type SessionTreeProps = {
   onSelect: (sessionID: string) => void
   onRename: (sessionID: string, title: string) => Promise<string | null>
   onDelete: (sessionID: string) => Promise<string | null>
+  shortcuts: SessionShortcuts
+  onShortcut: (sessionID: string, change: Partial<SessionShortcut>) => boolean
 }
 
 type SessionTreeContext = Omit<SessionTreeProps, "rows">
@@ -497,6 +585,8 @@ function SessionTreeNode({
   onSelect,
   onRename,
   onDelete,
+  shortcuts,
+  onShortcut,
 }: { row: SessionTreeRow<SessionInfo> } & SessionTreeContext) {
   const { session, children } = row
   const title = session.title?.trim() || session.id
@@ -520,7 +610,7 @@ function SessionTreeNode({
               variant="ghost"
               aria-expanded={expanded}
               aria-controls={expanded ? childrenID : undefined}
-              aria-label={`${expanded ? "Hide" : "Show"} ${descendants} subagent ${
+              aria-label={`${expanded ? "Hide" : "Show"} ${descendants} loaded subagent ${
                 descendants === 1 ? "session" : "sessions"
               } for ${title}`}
               onClick={() => onToggle(session.id)}
@@ -539,6 +629,8 @@ function SessionTreeNode({
         onSelect={onSelect}
         onRename={onRename}
         onDelete={onDelete}
+        shortcut={shortcuts[session.id]}
+        onShortcut={onShortcut}
       />
       {expanded ? (
         <div
@@ -558,6 +650,8 @@ function SessionTreeNode({
               onSelect={onSelect}
               onRename={onRename}
               onDelete={onDelete}
+              shortcuts={shortcuts}
+              onShortcut={onShortcut}
             />
           ))}
         </div>
@@ -599,6 +693,17 @@ function SessionList({
   onSelect?: (sessionID: string) => void
 }) {
   const notes = useNotesWorkspace()
+  const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
+  const statusKey = `opencode-ui:session-status-shortcuts:v1:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(nav.serverVersion ?? "unknown")}`
+  const statusMode = useSyncExternalStore(subscribeShortcuts, () => {
+    try { return localStorage.getItem(statusKey) === "true" } catch { return false }
+  }, () => false)
+  const attentionSessionID = nav.activeSessionID && (
+    nav.pendingPermissions.some((request) => request.sessionID === nav.activeSessionID) ||
+    nav.pendingForms.some((form) => form.sessionID === nav.activeSessionID)
+  ) ? nav.activeSessionID : null
+  const parentID = nav.activeSession?.parentID
+  const loadedParent = parentID && nav.sessions.find((session) => session.id === parentID)
   const dayStart = useSyncExternalStore(
     subscribeToDayStart,
     currentDayStart,
@@ -607,6 +712,10 @@ function SessionList({
   const groups = groupSessionTreeRows(
     sessionTreeRows([...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)),
     dayStart
+  )
+  const statusGroups = groupSessionTreesByStatus(
+    sessionTreeRows([...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)),
+    shortcuts, nav.runningSessionIDs, nav.unreadSessionIDs, attentionSessionID
   )
   const activeAncestors = useMemo(
     () => sessionAncestorIDs(nav.sessions, nav.activeSessionID),
@@ -657,6 +766,15 @@ function SessionList({
 
   return (
     <nav aria-label="Sessions" aria-busy={nav.sessionsStatus === "loading"}>
+      <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-xs" onClick={() => {
+        try { localStorage.setItem(statusKey, String(!statusMode)); window.dispatchEvent(new Event(shortcutsChanged)) } catch { /* Browsing still works without storage. */ }
+      }}>{statusMode ? "Group by date" : "Group by status"}</Button>
+      {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
+      {loadedParent ? (
+        <Button variant="outline" onClick={() => onSelect(loadedParent.id)} className="h-11 w-full justify-start text-[13px]">
+          Return to parent session
+        </Button>
+      ) : null}
       {nav.sessionsStatus === "loading" ? (
         <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
           Loading sessions…
@@ -681,7 +799,12 @@ function SessionList({
           No sessions yet.
         </p>
       ) : null}
-      <Accordion
+      {statusMode ? [...SHORTCUT_GROUPS, "Other" as const].map((group) => statusGroups[group].length ? (
+        <section key={group} aria-label={`${group} sessions`} className="py-1">
+          <h3 className="px-2.5 py-1 text-xs font-medium text-muted-foreground">{group}</h3>
+          <SessionTree rows={statusGroups[group]} activeSessionID={notes.open ? null : nav.activeSessionID} runningSessionIDs={nav.runningSessionIDs} unreadSessionIDs={nav.unreadSessionIDs} projects={nav.projects} expandedIDs={expandedIDs} onToggle={toggleSessionTree} onSelect={onSelect} onRename={nav.renameSession} onDelete={nav.deleteSession} shortcuts={shortcuts} onShortcut={updateShortcut} />
+        </section>
+      ) : null) : <Accordion
         value={openGroup ? [openGroup] : []}
         onValueChange={(value) => {
           const next = value[0]
@@ -724,13 +847,15 @@ function SessionList({
                     onSelect={onSelect}
                     onRename={nav.renameSession}
                     onDelete={nav.deleteSession}
+                    shortcuts={shortcuts}
+                    onShortcut={updateShortcut}
                   />
                 </div>
               </AccordionPanel>
             </AccordionItem>
           )
         })}
-      </Accordion>
+      </Accordion>}
     </nav>
   )
 }
@@ -751,6 +876,8 @@ function SessionsHeader({ nav }: { nav: SessionNavProps }) {
 export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionSidebar")
   const notes = useNotesWorkspace()
+  const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
+  const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
   return (
     <aside className="hidden h-svh flex-col border-e border-sidebar-border bg-sidebar md:flex">
       <div className="flex h-14 shrink-0 items-center gap-2 px-5">
@@ -761,7 +888,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
       </div>
       <div className="shrink-0 px-3">
         <NewSessionButton nav={nav} onCreated={notes.closeNotes} />
+        <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
       </div>
+      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} />
       <ProjectPanel nav={nav} className="mt-6" />
       <ScrollArea className="mt-2 min-h-0 flex-1">
         <div className="px-3"><NotesSidebar /></div>
@@ -781,17 +910,29 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   const notes = useNotesWorkspace()
   const [open, setOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
+  const pendingWorktreeProject = useRef<string | null>(null)
+  const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
   const direction = useAppDirection()
 
   return (
     <>
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet open={open} onOpenChange={(next) => {
+      if (next) pendingWorktreeProject.current = null
+      setOpen(next)
+    }} onOpenChangeComplete={(next) => {
+      if (!next && pendingWorktreeProject.current) {
+        setWorktreeProjectID(pendingWorktreeProject.current)
+        pendingWorktreeProject.current = null
+      }
+    }}>
       <SheetTrigger
         render={
           <Button
             variant="ghost"
             size="icon-lg"
             aria-label="Open sessions"
+            data-sessions-sheet-trigger=""
             className="size-11 rounded-full"
           />
         }
@@ -827,6 +968,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         </SheetHeader>
         <div className="shrink-0 px-4">
           <NewSessionButton nav={nav} onCreated={() => { notes.closeNotes(); setOpen(false) }} />
+          <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) { pendingWorktreeProject.current = projectID; setOpen(false) } }}>Project worktrees</Button>
         </div>
         <ProjectPanel nav={nav} className="mt-5" />
         <ScrollArea className="mt-2 min-h-0 flex-1">
@@ -859,6 +1001,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
       open={settingsOpen}
       onOpenChange={setSettingsOpen}
     />
+    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} />
     </>
   )
 }

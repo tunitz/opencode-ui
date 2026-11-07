@@ -1,3 +1,4 @@
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ChevronLeftIcon,
@@ -17,7 +18,6 @@ import { decodePreviewText } from "@/components/preview-text-data"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -94,11 +94,13 @@ function TextPreview({ file }: { file: DisplayFile }) {
   const language = extension(file)
   return (
     <div className="min-w-0 space-y-2">
-      <p className="text-xs text-muted-foreground" dir="ltr">
-        {fileName(file)}
-        {language ? ` · ${language}` : ""}
-        {decoded.truncated ? " · preview truncated" : ""}
-      </p>
+      <div className="min-w-0 pe-12">
+        <p className="break-all text-xs text-muted-foreground" dir="ltr">
+          {fileName(file)}
+          {language ? ` · ${language}` : ""}
+          {decoded.truncated ? " · preview truncated" : ""}
+        </p>
+      </div>
       <ScrollArea viewportClassName="max-h-[68svh]" className="rounded-xl border border-border/70 bg-muted/30">
         <pre className="min-w-full p-3 font-mono text-[12px] leading-5 whitespace-pre" dir="ltr" tabIndex={0}>
           <code>{decoded.text}</code>
@@ -312,7 +314,7 @@ export function MessageFiles({ files }: { files: DisplayFile[] }) {
           if (!open) setPreviewIndex(null)
         }}
       >
-        <DialogContent
+        <ResponsiveDialogContent
           finalFocus={() => triggerRef.current?.isConnected ? triggerRef.current : rowRef.current}
           className="max-h-[92svh] w-[min(92vw,72rem)] max-w-[min(92vw,72rem)] gap-2 overflow-y-auto p-2 sm:max-w-[min(92vw,72rem)]"
           showCloseButton
@@ -410,7 +412,7 @@ export function MessageFiles({ files }: { files: DisplayFile[] }) {
               Preview unavailable for this attachment type.
             </div>
           )}
-        </DialogContent>
+        </ResponsiveDialogContent>
       </Dialog>
     </>
   )
