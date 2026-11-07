@@ -72,6 +72,7 @@ describe("subagent header navigation", () => {
     } as unknown as OpenCodeController
     let view!: ReactTestRenderer
     await act(async () => { view = create(createElement(SubagentNavigation, { nav, title: "Parent" })) })
+    expect(view.root.findByType("menu-content").props.align).toBe("center")
     await act(async () => { view.root.findByType("menu-root").props.onOpenChange(true) })
     expect(requests).toHaveLength(1)
     expect(text(view)).toContain("rotate-180")

@@ -117,7 +117,7 @@ export function SubagentNavigation({ nav, title }: { nav: OpenCodeController; ti
           <ChevronDownIcon aria-hidden="true" className={open ? "rotate-180" : undefined} />
         </DropdownMenuTrigger>
       </h1>
-      <DropdownMenuContent align="end" aria-label="Subagents" className="w-72 max-w-[calc(100vw-2rem)]">
+      <DropdownMenuContent align="center" aria-label="Subagents" className="w-72 max-w-[calc(100vw-2rem)]">
         {busy ? <p role="status" className="px-2 py-3 text-sm text-muted-foreground">{current && !current.error ? "Refreshing subagents…" : "Loading subagents…"}</p> : null}
         {!busy && current?.error ? <><p role="alert" className="px-2 py-2 text-sm text-destructive">{current.error}</p><DropdownMenuItem onClick={(event) => { event.preventDefault(); setBusy(true); setRetry((value) => value + 1) }}>Retry</DropdownMenuItem></> : null}
         {!busy && !current?.error && current?.children.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">No direct subagents found.</p> : null}
