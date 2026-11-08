@@ -42,9 +42,20 @@ describe("appearance preferences", () => {
 
   test("accent text stays readable on palette and selected-session surfaces", async () => {
     const css = await Bun.file(new URL("./src/index.css", import.meta.url)).text()
-    const surfaces = {
-      light: ["#ffffff", "#f6f9fc", "#fcfaf6", "#dce8f2", "#eae3d7"],
-      dark: ["#161619", "#141d28", "#211d19", "#293b4d", "#403830", "#283c4e", "#3c332b"],
+    const surfaces = { light: ["#ffffff", "#f5f5f6"], dark: ["#161619", "#333338"] }
+    for (const palette of PALETTES.filter((value) => value !== "default")) {
+      for (const scheme of ["light", "dark"] as const) {
+        const selector = `:root${scheme === "dark" ? ".dark" : ""}[data-palette="${palette}"]`
+        expect(css).toContain(selector)
+        const rule = css.slice(css.indexOf(selector) + selector.length).split("}")[0]
+        for (const token of ["background", "card", "popover", "sidebar", "sidebar-accent"]) {
+          const color = rule.match(new RegExp(`--${token}: (#[0-9a-f]+)`))?.[1]
+          expect(color).toBeDefined()
+          surfaces[scheme].push(color!)
+        }
+        const preview = `${scheme === "dark" ? ".dark " : ""}.appearance-preview[data-preview-palette="${palette}"]`
+        expect(css).toContain(preview)
+      }
     }
     for (const accent of ACCENTS.filter((value) => value !== "default")) {
       for (const scheme of ["light", "dark"] as const) {
@@ -52,6 +63,9 @@ describe("appearance preferences", () => {
         const rule = css.slice(css.indexOf(selector) + selector.length).split("}")[0]
         const primary = rule.match(/--primary: (#[0-9a-f]+)/)?.[1]
         expect(primary).toBeDefined()
+        expect(rule).toContain(`--sidebar-primary: ${primary}`)
+        expect(rule).toContain(`--ring: ${primary}`)
+        expect(css).toContain(`${scheme === "dark" ? ".dark " : ""}.appearance-accent-swatch[data-preview-accent="${accent}"]`)
         for (const surface of surfaces[scheme]) expect(contrast(primary!, surface)).toBeGreaterThanOrEqual(4.5)
       }
     }
@@ -73,5 +87,14 @@ describe("appearance preferences", () => {
     expect(source).toContain('bg-background p-3 font-mono text-sm leading-6 text-foreground')
     expect(source).toContain('className="font-semibold text-primary">Summary')
     expect(source).toContain('<div>Ready to build.</div>')
+  })
+
+  test("desktop and mobile navigation and settings use theme surfaces", async () => {
+    const navigation = await Bun.file(new URL("./src/components/session-nav.tsx", import.meta.url)).text()
+    const dialog = await Bun.file(new URL("./src/components/ui/dialog.tsx", import.meta.url)).text()
+    const sheet = await Bun.file(new URL("./src/components/ui/sheet.tsx", import.meta.url)).text()
+    expect(navigation.match(/bg-sidebar(?:\s|")/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(dialog).toContain("bg-popover")
+    expect(sheet).toContain("bg-popover")
   })
 })

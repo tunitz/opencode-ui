@@ -941,7 +941,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
       <SheetContent
         side={direction === "rtl" ? "right" : "left"}
         showCloseButton={false}
-        className="w-[350px]! max-w-[92vw] gap-0 border-e-border bg-card p-0"
+        className="w-[350px]! max-w-[92vw] gap-0 border-e-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
       >
         <SheetHeader className="flex-row items-start justify-between px-5 pt-5 pb-3">
           <div className="space-y-1">

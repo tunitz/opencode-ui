@@ -1,5 +1,5 @@
-export const PALETTES = ["default", "slate", "sand"] as const
-export const ACCENTS = ["default", "blue", "violet", "green"] as const
+export const PALETTES = ["default", "slate", "sand", "forest", "plum", "ocean"] as const
+export const ACCENTS = ["default", "blue", "violet", "green", "teal", "rose", "amber"] as const
 export type Palette = (typeof PALETTES)[number]
 export type Accent = (typeof ACCENTS)[number]
 

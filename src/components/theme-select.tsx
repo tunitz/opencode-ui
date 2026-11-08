@@ -49,7 +49,7 @@ function AppearancePanel() {
                       <span className="appearance-preview-sidebar w-1/4 rounded-sm" />
                       <span className="flex flex-1 flex-col gap-1.5 p-1.5"><span className="appearance-preview-line w-3/4" /><span className="appearance-preview-line w-1/2" /><span className="appearance-preview-accent w-1/3" /></span>
                     </span>
-                    <span className="flex min-h-6 items-center justify-between gap-1 text-sm font-medium"><span className="truncate">{value === "default" ? "Default" : value === "slate" ? "Slate" : "Sand"}</span>{palette === value && <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />}</span>
+                    <span className="flex min-h-6 items-center justify-between gap-1 text-sm font-medium"><span className="truncate">{value[0].toUpperCase() + value.slice(1)}</span>{palette === value && <CheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />}</span>
                   </span>
                 </label>
               ))}
