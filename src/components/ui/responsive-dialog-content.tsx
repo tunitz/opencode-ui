@@ -10,8 +10,9 @@ import { useIsDesktop } from "@/lib/use-is-desktop"
 export function ResponsiveDialogContent({
   className,
   style,
+  forceRenderBackdrop,
   ...props
-}: React.ComponentProps<typeof DialogContent>) {
+}: React.ComponentProps<typeof DialogContent> & { forceRenderBackdrop?: boolean }) {
   const isDesktop = useIsDesktop()
 
   if (isDesktop) {
@@ -21,6 +22,7 @@ export function ResponsiveDialogContent({
   return (
     <SheetContent
       side="bottom"
+      forceRenderBackdrop={forceRenderBackdrop}
       className={cn(
         "p-4",
         className,

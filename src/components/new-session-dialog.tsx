@@ -189,7 +189,7 @@ export function NewSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ResponsiveDialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5">
+      <ResponsiveDialogContent forceRenderBackdrop showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight">
             New session
