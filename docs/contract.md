@@ -9,11 +9,15 @@ are intentional; do not weaken them when simplifying UI code.
 
 ## Target [runtime]
 
-- OpenCode **2.1.4** at `http://127.0.0.1:8090`; the Vite proxy is the only browser-facing origin.
-- Registration is `~/.config/opencode/service.json` (mode `0600`), containing hostname, password,
-  and port. The password is read server-side and never printed, persisted in browser storage, or
-  exposed to client code.
-- The direct API is not a frontend review URL. Network isolation of the API listener is outside
+- OpenCode **2.1.4**; the engine is a separate HTTP service. The UI server is the only
+  browser-facing origin and injects the server-held credential. Engine URL and port are
+  configuration-dependent: the CLI defaults to `http://127.0.0.1:4096`, while the direct/dev
+  server defaults to `http://127.0.0.1:8090`.
+- Registration JSON contains hostname, password, and port. The CLI reads
+  `$XDG_CONFIG_HOME/opencode/service.json` or `~/.config/opencode/service.json`; the direct server
+  uses `~/.config/opencode/service.json`. The password is read server-side and never printed,
+  persisted in browser storage, or exposed to client code.
+- The engine API is not a frontend review URL. Network isolation of the engine listener is outside
   this client and requires separate approval.
 
 ## Auth, CORS, and spec [runtime] [source] [spec]
@@ -24,14 +28,9 @@ are intentional; do not weaken them when simplifying UI code.
 - **CORS is origin-allowlisted, not absent** [source `packages/server/src/cors.ts:11-25`]:
   no-Origin requests, `http://localhost:*`, `http://127.0.0.1:*`, `oc://renderer`, Tauri
   origins, `https://*.opencode.ai`, and configured `cors` are allowed.
-- [runtime] One live check used a tested **LAN Vite origin**: an authenticated `GET /api/info`
-  returned 200; `OPTIONS` returned 204 and advertised `Authorization`, but **no
-  `Access-Control-Allow-Origin`** — `fetch` saw the header as absent, not a literal
-  `null`. That origin is outside the allowlist and is denied. The localhost/Tauri/
-  opencode.ai origins were **not** runtime-tested.
-- Our secure same-origin gateway is required by **our security/hosting contract** (hold
-  the Basic credential server-side), not because CORS is absent. Do not weaken Origin/
-  CSRF checks.
+- The same-origin gateway is required by the app's security contract (hold the Basic credential
+  server-side), not because CORS is absent. Do not weaken Origin/CSRF checks. Engine-side
+  allowlists are not a substitute for the app-layer boundary.
 - `/doc` is an SPA, not the spec. The OpenAPI document has **no `securitySchemes`**; auth
   is middleware-enforced.
 - `/openapi.json`: 290180 bytes, SHA256
@@ -40,26 +39,21 @@ are intentional; do not weaken them when simplifying UI code.
   **124 paths / 149 operations / 293 schemas**. The key-sorted schema equals
   `https://opencode.ai/v2/openapi.json`.
 
-## Private Tailscale Serve HTTPS shape
+## Access boundary assumptions
 
-- Canonical URL: `https://<canonical-host>/`, private Serve on 443, no Funnel.
-  TLS certificate is trusted (Let's Encrypt, SAN `<canonical-host>`).
-- Vite holds the Basic credential server-side and injects it for HTTP and WebSocket upstream
-  requests; browser-supplied `Authorization` is stripped. No secret enters client code, URLs,
-  bundles, or logs.
-- Request guard: canonical HTTPS and staged legacy HTTP origins; WebSocket Origin checked before
-  upgrade; unknown/missing unsafe origins rejected for mutations/WS; API path/method allowlist;
-  JSON content-type for bodied mutations; host allowlist; security headers; no wildcard CORS;
-  API `cache-control: no-store`; SSE remains `no-cache, no-transform`.
-- **No browser cookie/session auth and no extra login service** by explicit user approval. The
-  tailnet ACL is the access boundary. This is **not** public/multi-tenant production security;
-  any tailnet client that can reach Serve has full app/OpenCode access.
-- Legacy HTTP tailnet preview (`http://<tailnet-ip>:5174`) remains temporarily for migration.
-  Origin-scoped localStorage/preferences/drafts are not auto-copied; users must reselect
-  preferences on the new HTTPS origin. Do not add HSTS during migration.
-- **The gateway is not network isolation:** the existing `0.0.0.0:8090` API remains directly
-  reachable on LAN/Tailscale. Restricting the listener/firewall is separate explicit approval and
-  is out of scope.
+- The UI server is the browser-facing origin and holds the Basic credential server-side. It injects
+  the credential for HTTP and WebSocket upstream requests and strips browser-supplied
+  `Authorization`. No secret enters client code, URLs, bundles, or logs.
+- Request guard: Host allowlist; exact Origin allowlist; WebSocket Origin checked before upgrade;
+  unknown/missing unsafe origins rejected for mutations/WS; API path/method allowlist; JSON
+  content-type for bodied mutations; security headers; no wildcard CORS; API
+  `cache-control: no-store`; SSE remains `no-cache, no-transform`.
+- **No browser cookie/session auth or extra login service is built in.** Loopback is the default
+  boundary. Any non-loopback exposure needs its own authenticated access boundary and secure
+  transport. Allowlists are not authentication or multi-tenant isolation; any client that can
+  reach the UI has full app/engine access.
+- The gateway is not network isolation. The engine endpoint is separate and must be protected
+  independently.
 - `/connect` supports native key/OAuth methods with ephemeral key state, bounded polling, and
   explicit cancellation. External/command methods remain blocked; no real credential/OAuth/login/
   pairing code/provider config was exercised.
@@ -199,10 +193,11 @@ only the server can approve it:
   tool output, then validates that path against exact configured artifact roots. Tool-text path
   candidates may use any absolute prefix; only realpath-confirmed files inside those exact roots
   are served. The browser never submits a path.
-- Default root: `/tmp/opencode/shots`; `OPENCODE_UI_ARTIFACT_ROOTS` is a comma-separated exact-root
-  override. Realpath must remain inside a root. Symlink escape, secret-like names, non-regular
-  files, `/dev`/`/proc`, active HTML/SVG, unknown MIME, null/backslash/UNC-style paths, and files
-  <=0 or >32 MiB are rejected. MIME is sniffed from bytes (PNG/JPEG/GIF/WebP/AVIF/PDF/text/binary).
+- Direct-server default root: `/tmp/opencode/shots`; the CLI starts with no roots unless
+  `--artifact-root` or `OPENCODE_UI_ARTIFACT_ROOTS` is supplied. Realpath must remain inside a
+  root. Symlink escape, secret-like names, non-regular files, `/dev`/`/proc`, active HTML/SVG,
+  unknown MIME, null/backslash/UNC-style paths, and files <=0 or >32 MiB are rejected. MIME is
+  sniffed from bytes (PNG/JPEG/GIF/WebP/AVIF/PDF/text/binary).
 - Approved artifacts get an opaque in-memory ID and `/api/ui/artifacts/<id>` (no path query).
   TTL is 15 minutes/capped entries; deleted or file-changed entries return 404. Reads support
   `HEAD` and single-byte `Range` (206/`Content-Range`, invalid 416), stream from disk, set
@@ -313,7 +308,7 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
 | `zod` | 4.6.7 | Installed peer resolution; unused by the CodeBlock path. |
 | `@openuidev/lang-core` | 1.0.1 | Transitive peer support package. Its postinstall telemetry is **blocked** by Bun (`bun pm untrusted`) and not run; not imported by the CodeBlock path. |
 | `react` / `react-dom` | 19.3.1 | Satisfy OpenUI CodeBlock peers (`^18.3.1 || ^19.0.0`). |
-| Bun | 1.4.4 | Installed at `~/.bun/bin/bun`; not on the default non-interactive PATH in the inspection shell. Runtime setup must ensure PATH/`packageManager`. |
+| Bun | 1.4.4 | Runtime and package manager. Runtime setup must ensure it is on `PATH` or referenced explicitly. |
 
 Registry tarball integrity, exports, and peer graphs were checked; **hash values were not
 retained in this repo**. The published/cached `@openuidev/react-ui@0.18.1`
@@ -325,7 +320,8 @@ Pins are not evidence of integration.
 
 ## Known limits
 
-- Private Tailscale Serve is a tailnet trust model, not public/multi-tenant authentication.
+- There is no browser login. Non-loopback use needs its own authenticated boundary; allowlists are
+  not authentication or multi-tenant isolation.
 - `/connect` key/OAuth support is implemented; external/command methods and some provider loopback
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests

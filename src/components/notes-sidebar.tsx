@@ -379,7 +379,7 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <Accordion
       multiple
-      defaultValue={["notes"]}
+      defaultValue={[]}
       aria-label="Notes and plans"
       className="mt-4"
     >

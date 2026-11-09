@@ -11,6 +11,13 @@ const mockFetch = async (request) => {
   return new Response("", { headers: { "content-type": "text/event-stream" } })
 }
 
+const findNotesTrigger = (root) =>
+  root.root
+    .findAll((node) => node.type === "button")
+    .find((node) =>
+      node.findAllByType("span").some((span) => span.children.includes("Notes & plans"))
+    )
+
 test("notes sidebar appears only for an active plugin at the selected location", async () => {
   const oldWindow = globalThis.window
   const oldFetch = globalThis.fetch
@@ -26,6 +33,10 @@ test("notes sidebar appears only for an active plugin at the selected location",
     const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
     const tree = (value) => React.createElement(NotesProvider, { nav: value }, React.createElement(NotesSidebar))
     await act(async () => { root = create(tree(nav)) })
+    const collapsed = JSON.stringify(root.toJSON())
+    expect(collapsed).toContain("Notes & plans")
+    expect(collapsed).not.toContain("All notes & plans")
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     expect(JSON.stringify(root.toJSON())).toContain("All notes & plans")
     installed = false
     await act(async () => root.update(tree({ ...nav, streamStatus: "connecting" })))
@@ -53,6 +64,10 @@ test("pinned notes have a separate section and open the workspace with the selec
     function Observer() { current = useNotesWorkspace(); return null }
     const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
     await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(NotesSidebar), React.createElement(Observer))) })
+    const collapsed = JSON.stringify(root.toJSON())
+    expect(collapsed).toContain("Notes & plans")
+    expect(collapsed).not.toContain("Pinned notes")
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     const sidebar = JSON.stringify(root.toJSON())
     expect(sidebar).toContain("Pinned notes")
     expect(sidebar).toContain("Pinned idea")

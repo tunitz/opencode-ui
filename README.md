@@ -1,213 +1,134 @@
 # OpenCode UI
 
-A mobile-first web client for a separately running OpenCode V2 engine. Browse conversations,
-send prompts, inspect files and terminal sessions, manage supported settings, and use optional
-notifications. The engine owns sessions, tools, providers, and history.
+A mobile-first web client for a separately running OpenCode V2 engine. It gives the engine a
+browser interface for conversations and prompts while the engine keeps ownership of sessions,
+tools, providers, and history.
+
+## Highlights
+
+- Mobile-first conversation, prompt, and session navigation.
+- Files, working-tree diffs, permissions, forms, and session settings.
+- Structured tool output, artifacts, Markdown, tables, and images.
+- Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
+- Optional Notes plugin with notes and planning spaces.
+- Optional Web Push notifications.
+- The engine credential stays on the UI server; the browser never receives it.
+
+## Architecture
+
+```text
+Browser  <->  OpenCode UI server  <->  OpenCode V2 engine
+```
+
+The UI server serves the built frontend, proxies HTTP and event-stream traffic, and injects the
+engine credential server-side. The engine is a separate dependency; this project does not install,
+start, or modify it.
 
 ## Requirements
 
-- [Bun](https://bun.sh/) **1.4.4**: `package.json` declares exact `engines.bun: "1.4.4"`
-  and `packageManager: "bun@1.4.4"`. Broader version compatibility is not established.
-- A separately installed, running OpenCode V2 engine compatible with the pinned
-  `@opencode/client` **2.1.4** and its native contracts.
-- An existing engine service-registration JSON file with a nonempty string `password`, readable
-  by the account running the UI. The server uses Basic username `opencode` with that password.
+- [Bun](https://bun.sh/) **1.4.4**. `package.json` declares the exact version; broader
+  compatibility is not established.
+- A separately installed and running OpenCode V2 engine compatible with the pinned
+  `@opencode/client` **2.1.4**.
+- An existing engine service-registration JSON file with a nonempty string `password`, readable by
+  the account running the UI. The server authenticates with Basic username `opencode`.
 
-The UI does not install, start, or reconfigure the engine. Follow your engine's own setup
-instructions first. Keep its registration private; never print or log its password, put it in
-command-line flags or URLs, or commit it. The browser must never receive the engine credential.
+Keep the registration private. Never print or log its password, pass it on the command line, put it
+in a URL, or commit it.
 
-## Intended installation after publication
-
-**Publication and package-name availability are not verified.** Once this package is published
-under the intended name, you can run:
+## Quick start from a checkout
 
 ```sh
-bunx opencode-ui
+bun install --frozen-lockfile
+bun run build:bun
+bun bin/opencode-ui.ts --host 127.0.0.1 --port 5174
 ```
 
-With no environment overrides, open <http://localhost:5174> on the same machine. The CLI binds
-to `127.0.0.1`, connects to `http://127.0.0.1:4096`, and reads
-`$XDG_CONFIG_HOME/opencode/service.json` when `XDG_CONFIG_HOME` is nonempty, otherwise
-`~/.config/opencode/service.json`.
+Open <http://127.0.0.1:5174> on the same machine. With no overrides, the CLI connects to
+`http://127.0.0.1:4096` and reads `$XDG_CONFIG_HOME/opencode/service.json` when
+`XDG_CONFIG_HOME` is nonempty, otherwise `~/.config/opencode/service.json`.
 
-To select an existing registration and a different local engine port:
+The CLI serves production assets from `dist-bun-build/`; it never builds assets at startup. If the
+engine listens elsewhere, pass `--engine-url` explicitly.
+
+## Published package
+
+The scoped package is not currently published. Once `@tunitz/opencode-ui` is available:
 
 ```sh
-bunx opencode-ui --host 127.0.0.1 --port 5174 \
-  --engine-url http://127.0.0.1:4097 \
-  --service-file "$HOME/.config/opencode/service.json"
+bunx -p @tunitz/opencode-ui opencode-ui --host 127.0.0.1 --port 5174
 ```
 
-The selected registration's password must authenticate to that engine. Prefer loopback engine
-transport; for a remote engine, use HTTPS or a trusted secure tunnel. Unprotected remote HTTP
-exposes credentials and private traffic. Restart the UI after changing its service credential.
+Do not install the unscoped `opencode-ui` package; it belongs to an unrelated project.
 
-The CLI serves production assets from the installed package's `dist-bun-build/`, independently
-of your working directory. It never builds assets at startup. A missing-assets error requires a
-correctly built release/reinstallation, not a consumer-side build.
-
-## CLI reference
+## Common options
 
 | Option | Default and behavior |
 | --- | --- |
 | `--host <host>` | `OPENCODE_UI_HOST`, otherwise `127.0.0.1`. Bind hostname/IP only. |
 | `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174`. Integer from 1 through 65535. |
-| `--engine-url <origin>` | `http://127.0.0.1:4096`. OpenCode service host and port as an absolute HTTP(S) origin. |
-| `--service-file <path>` | `$XDG_CONFIG_HOME/opencode/service.json`, otherwise `~/.config/opencode/service.json`. Select an existing registration. |
-| `--allowed-host <host>` | Repeatable additions to trusted `127.0.0.1`, `localhost`, and `[::1]`. Hostnames/IPs only: no scheme, port, path, or wildcard. |
-| `--allowed-origin <origin>` | Repeatable additions to `http://127.0.0.1:<port>`, `http://localhost:<port>`, and `http://[::1]:<port>` at the resolved UI port. |
-| `--artifact-root <path>` | Repeatable roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. Otherwise uses that comma-separated environment list, or no roots. |
-| `--help`, `-h` | Show usage without reading credentials or starting services. |
-| `--version`, `-v` | Show the package version without starting services. |
-
-`--host` and `--port` configure the UI listener, not the OpenCode service. Use
-`--engine-url http://<engine-host>:<engine-port>` to configure the service host and port together;
-there are no separate engine-host or engine-port flags. The CLI uses OpenCode's standard port
-`4096`, as shown in the [OpenCode V2 client guide](https://opencode.ai/v2/docs/build/client).
-If your engine listens elsewhere, supply its actual URL explicitly.
+| `--engine-url <origin>` | `http://127.0.0.1:4096`. OpenCode engine HTTP(S) origin. |
+| `--service-file <path>` | `$XDG_CONFIG_HOME/opencode/service.json`, otherwise `~/.config/opencode/service.json`. |
+| `--allowed-host <host>` | Repeatable additions to loopback hosts. Hostname/IP only. |
+| `--allowed-origin <origin>` | Repeatable additions to loopback origins at the UI port. |
+| `--artifact-root <path>` | Repeatable artifact roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. |
+| `--help`, `--version` | Show usage or the package version without reading credentials or starting services. |
 
 Long options accept `--name value` or `--name=value`. Flags override applicable environment
-settings. Relative service-file and artifact paths resolve against your current working directory.
-Use shell expansion such as `"$HOME/..."` for home-relative paths. Do not repeat scalar flags.
-Unknown options, positional arguments, empty values, and malformed configuration are rejected.
+settings. Run `bun bin/opencode-ui.ts --help` for the complete reference.
 
-Origins accept HTTP(S) only, with no credentials, non-root path, query, fragment, `null`, or
-wildcard. Origin matching uses the exact normalized scheme, hostname, and port. There are no
-engine-URL, service-file, or trust-allowlist environment variables for the CLI.
-`OPENCODE_UI_BUILD_TARGET` and `OPENCODE_UI_DEV_ORIGIN` do not change CLI assets or trust.
+## Configuration
 
-## Security and remote access
+[.env.example](.env.example) lists the supported environment variables. The main ones are:
 
-**There is no browser login.** Anyone who can access the UI can exercise the permissions of its
-engine credential. Before remote access, provide an authenticated access boundary and secure
-transport, such as an authenticated HTTPS reverse proxy. Allowlists are not authentication or
-multi-tenant isolation. Protect the engine endpoint separately.
-
-`--host` changes binding only, never trust. Non-loopback binding requires both an explicit
-non-loopback `--allowed-host` and an explicit non-loopback `--allowed-origin`. For example,
-only after you provision that access boundary and HTTPS proxy for `ui.example.com`:
-
-```sh
-bunx opencode-ui --host 0.0.0.0 --port 5174 \
-  --allowed-host ui.example.com \
-  --allowed-origin https://ui.example.com
-```
-
-Access the protected proxy at `https://ui.example.com`, not the unprotected listener. Restrict
-direct access to port 5174 to the proxy/trusted boundary. For a same-machine proxy, prefer
-`--host 127.0.0.1`; you still need the explicit public host and origin flags. Your proxy must
-support WebSockets and forward the configured public Host/Origin consistently.
-
-Keep Host, Origin, WebSocket, route/method, JSON mutation, and `no-store` protections enabled.
-Do not add wildcard CORS or bypass artifact provenance/file-safety checks. Keep credentials,
-notification state, transcripts, and private artifacts outside version control and release assets.
-
-## Optional files and state
-
-Local artifact delivery is **opt-in for the CLI**. Add `--artifact-root /path/to/artifacts`
-(repeatable), or set comma-separated `OPENCODE_UI_ARTIFACT_ROOTS`. An empty environment value
-leaves roots empty. Roots only permit eligible files with native provenance and file-safety
-checks; they do not enable general filesystem browsing.
-
-- `OPENCODE_UI_NOTIFICATION_STATE` selects private notification state; the default is
+- `OPENCODE_UI_HOST`, `OPENCODE_UI_PORT`: UI listener.
+- `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
+- `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
   `~/.local/state/opencode-ui/notifications/state.json`.
-- `OPENCODE_UI_VAPID_SUBJECT` selects the Web Push contact URI. Set your own appropriate
-  contact when enabling notifications. Set a contact that identifies your own deployment.
-- `OPENCODE_CONFIG_DIR` selects the local agent configuration directory; otherwise it uses
-  `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`. This does not select the CLI service file.
+- `OPENCODE_UI_VAPID_SUBJECT`: Web Push contact URI; set an appropriate contact for your use.
+- `OPENCODE_CONFIG_DIR`: local agent configuration directory. This does not select the CLI service
+  file.
 
-Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL
-creates a separate storage scope; preferences are not shared across devices.
-Other server-side state/configuration stays in user locations, not the installed package; align
-local agent configuration with the engine you operate.
+Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL creates
+a separate storage scope, and preferences are not shared across devices.
 
-The separately packaged [Notes plugin](plugins/notes/README.md) is optional. When its server
-part is active for the selected location, the sidebar offers notes and planning spaces; without
-it the UI works as before. The plugin also provides agent tools and a direct TUI interface. Notes
-are plaintext in OpenCode plugin storage, not browser-local drafts. Storage scope across projects
-and conflict detection across independent plugin instances depend on the host and are not yet
-guaranteed. Do not treat notes as encrypted or multi-user-isolated storage.
+## Security boundary
 
-## Development from a checkout
+There is no browser login. Anyone who can reach the UI can exercise the permissions of its engine
+credential.
 
-Use Bun for dependency management and scripts. With the separate engine and registration ready:
+The CLI binds to loopback by default. Non-loopback binding requires both an explicit non-loopback
+`--allowed-host` and an explicit non-loopback `--allowed-origin`, plus an authenticated access
+boundary and secure transport such as HTTPS. Allowlists are not authentication or multi-tenant
+isolation. Protect the engine endpoint separately, and do not disable the UI's Host, Origin,
+WebSocket, route, method, JSON-mutation, artifact-provenance, or `no-store` protections.
 
-```sh
-bun install --frozen-lockfile
-bun run dev
-```
+## Optional Notes plugin
 
-`bun run dev:bun` is an alias. The script builds `dist-bun-dev/`, watches `src/`, `public/`,
-and `index.html` for rebuilds, and runs the server with Bun's watch mode. It defaults to port
-`5175`, or `OPENCODE_UI_PORT` when set. Open <http://127.0.0.1:5175> on the same machine
-with default settings. Set `OPENCODE_UI_HOST=127.0.0.1` explicitly if your environment overrides
-the bind host. The script adds the exact `http://127.0.0.1:<port>` development origin; it does
-not parse CLI flags passed to `bun run dev`.
+The separately packaged [Notes plugin](plugins/notes/README.md) adds notes, planning spaces, agent
+tools, and a TUI interface. When its server part is active for the selected location, the sidebar
+offers notes and planning spaces; without it the UI works as before.
 
-To build and serve production assets through the CLI from a checkout:
+Notes are plaintext in OpenCode plugin storage, not browser-local drafts. They are not encrypted and
+do not provide multi-user isolation. Do not store secrets in notes.
 
-```sh
-bun run build:bun
-bun run bin/opencode-ui.ts --host 127.0.0.1 --port 5174
-```
+## Documentation
 
-Unset `OPENCODE_UI_BUILD_TARGET` (or use `production`) for that build. `bun run build:bun`
-emits the complete `dist-bun-build/`; `bun run build` first runs `tsc -b`, then the same build.
-Both commands stage into a temporary directory and replace `dist-bun-build/` atomically.
+- [AGENTS.md](AGENTS.md): development setup, repository map, verification, and conventions.
+- [docs/components.md](docs/components.md): component architecture and current surface coverage.
+- [docs/contract.md](docs/contract.md): native OpenCode contract and app-layer security rules.
+- [docs/commands.md](docs/commands.md): slash-command coverage and native command behavior.
+- [tests/browser/README.md](tests/browser/README.md): synthetic browser checks.
+- [CHANGELOG.md](CHANGELOG.md): notable changes.
 
-For a local checkout deployment before publication, register the checkout's executable
-after building, then use `bunx` without permitting a registry fallback:
+## Status and limitations
 
-```sh
-chmod +x bin/opencode-ui.ts
-mkdir -p node_modules/.bin
-ln -s ../../bin/opencode-ui.ts node_modules/.bin/opencode-ui
-bunx --no-install opencode-ui --host 127.0.0.1 --port 5174
-```
+- The project is pre-1.0; interfaces and behavior may change.
+- The terminal surface is not shipped. `/terminal` is reported as unsupported rather than faked.
+- Notifications are best-effort and depend on browser and OS push delivery.
+- There is no browser login, cookie session, or built-in multi-tenant isolation.
+- Package publication and registry installation are not verified.
 
-Create the symlink only if it is absent; do not replace an unrelated executable. Run from
-the checkout directory (set the same working directory in a service). Dependency reinstalls
-may remove the link; recreate it if needed. This uses the local checkout, not a published
-registry release. A Bun-shebang executable also needs Bun on the service's `PATH`.
-Use `--engine-url` explicitly when preserving an installation-specific engine port such as
-`8090`; the CLI default remains `4096`.
+## License
 
-**Direct-server compatibility:** `bun run start:bun` and `bun run preview` both invoke
-`server/bun-server.ts`, not the CLI. They serve `dist-bun-build/` by default, or `dist-bun-dev/`
-with `OPENCODE_UI_BUILD_TARGET=dev`. Direct/dev entrypoints retain legacy trust defaults, the home-relative
-`~/.config/opencode/service.json`, fixed engine target `http://127.0.0.1:8090`, and legacy
-artifact root `/tmp/opencode/shots` when the roots environment variable is absent. An explicitly
-empty `OPENCODE_UI_ARTIFACT_ROOTS` disables those roots. Use the CLI for its isolated trust
-defaults and configurable engine/service-file options; do not assume these entrypoints share
-the CLI's security configuration.
-
-Edit the application in `src/`, runtime in `server/` and `bin/`, and Bun build/dev tooling in
-`scripts/`. See [AGENTS.md](AGENTS.md), [docs/components.md](docs/components.md),
-[docs/contract.md](docs/contract.md), and [docs/commands.md](docs/commands.md). Historical
-installation-specific examples are not universal requirements.
-
-## Publisher workflow
-
-After release authorization, confirm package-name availability and configure authorized registry
-credentials privately. Neither name availability nor registry credentials have been verified.
-From a checkout with Bun 1.4.4 and development dependencies available:
-
-```sh
-bun install --frozen-lockfile
-bun publish --access public
-```
-
-The `prepack` lifecycle automatically runs
-`OPENCODE_UI_BUILD_TARGET=production bun run build:bun`. The package allowlist includes the CLI,
-required runtime modules, and complete production frontend (HTML, public files, CSS, fonts,
-chunks, and PDF worker). Consumers do not need a source build or an install-time build hook.
-Everything in `public/` is copied into release assets: keep it free of private data and secrets.
-
-**Status:** all three implementation tasks passed source QA, followed by a source-only integration
-review. A production frontend build was subsequently completed for the local `bunx --no-install`
-service deployment. Tests and registry-package build/install verification have not been run;
-release readiness remains **NEEDS WORK** pending package verification, registry name/ownership
-confirmation, and publication. The publish command is an intended workflow, not a claim that
-this package is published or release-ready. See the earlier
-[readiness review](docs/archive/npm-cli-readiness.md).
+[MIT](LICENSE)

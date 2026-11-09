@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- The Notes & plans sidebar starts collapsed by default.
+- Documentation refreshed for the Bun server, current installation options, and the unsupported
+  terminal surface. Environment-specific instructions were removed.
+
 ## 0.1.0 — 2026-11-09
 
 ### Added

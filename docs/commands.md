@@ -1,8 +1,8 @@
 # Native commands and web parity
 
-Current web command coverage is **30 supported / 2 partial / 5 explicitly deferred** native
-commands. This is not 37-command parity: unsupported/PIP-only behavior stays visible instead of
-being faked in the browser.
+Current web command coverage is **29 supported / 2 partial / 6 unsupported** of 37 canonical
+native commands. Unsupported or TUI-only behavior stays visible instead of being faked in the
+browser.
 
 **Target:** OpenCode **2.1.4**. The inventory below is based on the installed native command
 catalog and the archived TUI/source contract, not newer public docs.
@@ -37,9 +37,8 @@ catalog and the archived TUI/source contract, not newer public docs.
 - Project command catalog is scoped to the selected session directory, reloads on
   `command.updated` / `config.updated`, and is cleared on project change. A stale directory
   catalog blocks execution.
-- `/terminal` opens the existing Session inspector at its Terminal tab; it never runs a shell
-  command, creates a PTY, attaches a socket, or sends input merely from command/tab activation.
-  See the terminal contract below.
+- `/terminal` is shown as unsupported. No terminal surface is mounted, and the picker does not
+  create a PTY, attach a socket, or run a shell command.
 - No arbitrary JS/plugin/OS command is evaluated in the browser.
 
 ## Native TUI slash inventory (37 canonical names + aliases)
@@ -73,7 +72,7 @@ catalog and the archived TUI/source contract, not newer public docs.
 | `/editor` | Prompt | Opens a larger web draft editor, not a local OS editor | none | supported |
 | `/skills` | Prompt | Native directory-scoped skill catalog; selected skills are sent only on explicit Send | none | supported |
 | `/worktrees` | Project | Project-scoped native worktree list/create/refresh/remove | none | supported |
-| `/terminal` | Terminal | Opens the existing Session inspector at its Terminal tab for the selected directory; explicit Create/Open only | none | supported |
+| `/terminal` | Terminal | Not available in this interface; no terminal surface is mounted | none | unsupported |
 | `/plugins` | System | Native installed plugin metadata; read-only | none | supported |
 | `/stats` | System | Native experimental usage/session/tool/model statistics | none | supported |
 | `/highlights` | System | Runtime content is embedded only in the TUI release, not exposed by HTTP | none | unsupported |
@@ -84,13 +83,13 @@ catalog and the archived TUI/source contract, not newer public docs.
 | `/debug` | System | Sanitized client diagnostics; no server heap/config/env parity | none | partial |
 | `/exit`, `/quit`, `/q` | System | Page cannot reliably close its tab | none | unsupported |
 
-**Coverage:** **30 supported, 2 partial, 5 explicitly deferred** native names. This unit
-intentionally returns gaps instead of faking TUI-only or operational behavior. Deferred by user
-decision are `highlights`, `update`, `pair`/`web`, `restart`, and `exit`/aliases. `connect` and
-`debug` remain partial on purpose: `/connect` supports native key/OAuth flows but external/command
-methods are blocked and provider-specific loopback callbacks are not guaranteed; `debug` is client
-diagnostics rather than full server-debug parity. No CLI-only command is claimed as a slash
-command, and this is not 37-command parity.
+**Coverage:** **29 supported, 2 partial, 6 unsupported** of 37 canonical native names. This
+inventory intentionally returns gaps instead of faking TUI-only or operational behavior.
+Unsupported are `terminal`, `highlights`, `update`, `pair`/`web`, `restart`, and `exit`/aliases.
+`connect` and `debug` remain partial on purpose: `/connect` supports native key/OAuth flows but
+external/command methods are blocked and provider-specific loopback callbacks are not guaranteed;
+`debug` is client diagnostics rather than full server-debug parity. No CLI-only command is claimed
+as a slash command.
 
 ## Verified session/prompt command adapters
 
@@ -125,37 +124,12 @@ native adapter first, while the project command remains a separately labelled pi
 Selecting that entry records an explicit server-command choice, so the exact
 `POST /api/session/{sid}/command` request still runs with the project command name.
 
-## `/terminal` native PTY contract
+## Terminal
 
-The web adapter uses the installed 2.1.4 PTY contract, not a shell bridge invented by this client:
-
-- `GET /api/pty?location[directory]=…` lists project terminals; `POST /api/pty` creates one only
-  from an explicit user action, with `cwd` fixed to the selected session's real directory;
-  `GET/PUT /api/pty/{id}` reads/updates title or `{cols,rows}`; `DELETE /api/pty/{id}` terminates.
-- `POST /api/pty/{id}/connect-token` is called through the same-origin authenticated proxy with
-  the native `x-opencode-ticket: 1` marker. It returns a short-lived ticket. The service Basic
-  credential is held by the Vite dev proxy and is never put in browser code, a URL, the bundle,
-  or logs.
-- The browser opens a same-origin WebSocket to `/api/pty/{id}/connect?ticket=…&location[directory]=…`
-  (plus a cursor only when the native protocol supplies one). It is not a raw backend port or a
-  Basic-auth URL. The proxy upgrades `/api` WebSockets server-side, checks the canonical Origin
-  before upgrade, and injects the held credential there. Private Tailscale Serve HTTPS is now
-  deployed; there is no additional browser cookie/session auth by explicit approval.
-- Server binary control frames (`0x00` + JSON `{cursor}`) update replay position and are not
-  rendered. Terminal output strips OSC 52 clipboard writes and OSC 8 hyperlinks; no WebLinks
-  addon, URL auto-open, or clipboard write from output exists. Copy/Paste are explicit user
-  actions, with multiline paste confirmation.
-- The Terminal tab lists PTYs on activation but connects only after explicit Open/Create. Switching
-  tabs, closing the inspector, or changing session/project detaches the WebSocket without deleting
-  the PTY; Terminate is a separate confirmed DELETE. Returning to the tab requires Open again and
-  does not replay keystrokes. Reconnect obtains a fresh ticket and replays native output only.
-  Header Refresh on the Terminal tab refreshes PTY list/metadata read-only and never creates,
-  mints a ticket, auto-attaches, or reconnects.
-
-The Terminal surface runs behind private Tailscale Serve HTTPS with canonical-origin/WS checks,
-API path/method allowlisting, JSON mutation validation, and security headers. There is no
-additional browser cookie/session authentication by design; the tailnet ACL is the access
-boundary. This is **not** public/multi-tenant production auth.
+The terminal UI is not shipped. `/terminal` is listed as unsupported, and no client surface mounts
+the PTY bridge. Server-side PTY handling exists in `server/pty-websocket-bridge.ts`, but it is not
+reachable from the current interface. Do not infer terminal activity from output or claim PTY
+behavior in the web UI.
 
 ## Dynamic `/api/command` catalog
 
@@ -187,9 +161,9 @@ behavior remain unsupported or future scope.
 | Gap | Source evidence | Requirement / severity | Safe web alternative | Current decision |
 |---|---|---|---|---|
 | `/highlights` | 2.1.4 mounts `app.highlights` only in the TUI runtime; no HTTP endpoint. | Release-specific content. **Low**. | Static release notes would need an approved source/version; none is exposed for 2.1.4 HTTP. | Unsupported; no content invented. |
-| `/update` | No installation/update HTTP endpoint in protocol/server; update is installer/CLI operational behavior. | Engine install mutation. **High**. | None in this client. A web client cannot own engine updates without deployment approval. | Unsupported. |
-| `/restart` | No server lifecycle API; service restart is OS/systemd ownership. | Service/OS lifecycle. **High**. | None; do not shell out or call systemd. | Unsupported. |
-| `/pair`, `/web` | Native pairing endpoint exists. Private HTTPS transport and Origin/route guard are now deployed, but pairing-code semantics were not implemented and no code was minted. | Credential/session minting. **Medium security**. | Pairing is redundant for the approved tailnet trust model; if retained, implement only with verified native pairing contract and explicit user approval. | Unsupported; no codes minted. |
+| `/update` | No installation/update HTTP endpoint in protocol/server; update is installer/CLI operational behavior. | Engine install mutation. **High**. | None in this client. A web client cannot own engine updates without explicit operator approval. | Unsupported. |
+| `/restart` | No server lifecycle API; service restart is service-manager ownership. | Service/lifecycle. **High**. | None; do not shell out or control the service manager. | Unsupported. |
+| `/pair`, `/web` | Native pairing endpoint exists, but pairing-code semantics were not implemented and no code was minted. | Credential/session minting. **Medium security**. | Pairing is redundant when the surrounding access boundary is already authenticated; if retained, implement only with a verified native pairing contract and explicit user approval. | Unsupported; no codes minted. |
 | `/exit`, `/quit`, `/q` | Browser cannot reliably close a tab/window; native action is TUI process exit. | UX/lifecycle. **Low**. | Could offer an explicitly labelled “return to home/detach” action, but that is not full `/exit` semantics. | Unsupported unless the user accepts the non-equivalent label. |
 | `/connect` | Key/OAuth integration endpoints are implemented; external and command methods remain browser-unsafe/unimplemented, and provider-specific loopback callbacks may not work remotely. | Credential handling. **High security**. | Canonical HTTPS origin gate, ephemeral key state, safe OAuth URL allowlist, bounded polling/cancel, catalog refresh. No universal login claim. | Partial: key/OAuth support; external/command blocked. |
 | `/debug` | TUI/server debug exposes broader process/heap/config data; client can offer only safe diagnostics. | Observability. **Medium/low**. | Whitelisted client diagnostics only; no heap or server internals. | Partial. |
