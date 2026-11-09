@@ -29,10 +29,13 @@ async function rebuild() {
 
 if (!await runBuild()) process.exit(1)
 const port = process.env.OPENCODE_UI_PORT ?? "5175"
+const host = process.env.OPENCODE_UI_HOST ?? "127.0.0.1"
+const devOrigin = process.env.OPENCODE_UI_DEV_ORIGIN ?? `http://127.0.0.1:${port}`
 server = spawn(process.execPath, ["--watch", "server/bun-server.ts"], {
   cwd: root, stdio: "inherit",
-  env: { ...process.env, OPENCODE_UI_PORT: port, OPENCODE_UI_DEV_ORIGIN: `http://127.0.0.1:${port}`, OPENCODE_UI_BUILD_TARGET: "dev" },
+  env: { ...process.env, OPENCODE_UI_PORT: port, OPENCODE_UI_HOST: host, OPENCODE_UI_DEV_ORIGIN: devOrigin, OPENCODE_UI_BUILD_TARGET: "dev" },
 })
+console.log(`OpenCode UI dev server: http://${host === "0.0.0.0" ? "<lan-ip-or-hostname>" : host}:${port}`)
 server.once("error", () => { console.error("Could not start the Bun development server."); stop() })
 server.once("exit", () => stop())
 const watchers = ["src", "public"].map((path) => watch(resolve(root, path), { recursive: true }, schedule))

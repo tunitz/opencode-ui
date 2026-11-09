@@ -430,3 +430,14 @@ pre {
 
 /* Only conversation headings take the optional accent; body prose stays neutral. */
 :root[data-accent]:not([data-accent="default"]) .message-markdown > .markdown-content :is(h1, h2, h3, h4, h5, h6) { color: var(--primary); }
+
+/* iOS Safari zooms the page when a focused form control renders below 16px.
+   Keep native text controls at 16px on touch devices so focusing an input
+   never changes the zoom level. Desktop keeps its denser sizes, and page
+   zoom stays available for accessibility (no user-scalable=no). */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+}

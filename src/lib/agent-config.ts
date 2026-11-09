@@ -1,5 +1,7 @@
 import type {
   AgentConfigCatalog,
+  AgentConfigDefaultResult,
+  AgentConfigDeleteResult,
   AgentConfigErrorBody,
   AgentConfigModel,
   AgentConfigScope,
@@ -84,6 +86,33 @@ export function saveAgentConfig(
 ): Promise<AgentConfigUpdateResult> {
   return requestJson<AgentConfigUpdateResult>("/api/ui/agents", {
     method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  })
+}
+
+/** Set the engine default agent to a primary agent. */
+export function saveDefaultAgent(input: {
+  scope: AgentConfigScope
+  projectID?: string | null
+  agentID: string
+}): Promise<AgentConfigDefaultResult> {
+  return requestJson<AgentConfigDefaultResult>("/api/ui/agents/default", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  })
+}
+
+/** Remove an agent's definition from its source file. */
+export function deleteAgentDefinition(input: {
+  scope: AgentConfigScope
+  projectID?: string | null
+  agentID: string
+  expectedHash: string | null
+}): Promise<AgentConfigDeleteResult> {
+  return requestJson<AgentConfigDeleteResult>("/api/ui/agents", {
+    method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   })

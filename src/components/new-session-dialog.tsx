@@ -10,9 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
-import { readModelPresets, type ModelPreset } from "@/lib/model-presets"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { resolveNewSessionDefaults } from "@/lib/new-session-defaults"
 import { newSessionProjectError } from "@/lib/new-session-target"
 import { useTargetCatalog } from "@/lib/use-target-catalog"
@@ -28,10 +25,8 @@ type FolderProbe = { directory: string; available: boolean }
 type DirectoryListing = { directory: string; entries: string[]; error: boolean }
 
 function sourceLabel(source: string): string {
-  if (source === "project") return "project override"
-  if (source === "global") return "global default"
+  if (source === "agent") return "agent config"
   if (source === "fallback") return "safe fallback"
-  if (source === "backend") return "backend default"
   return "default"
 }
 
@@ -61,42 +56,19 @@ export function NewSessionDialog({
   const [probe, setProbe] = useState<FolderProbe | null>(null)
   const [directory, setDirectory] = useState(initialDirectory)
   const [listing, setListing] = useState<DirectoryListing | null>(null)
-  const [presets] = useState<ModelPreset[]>(readModelPresets)
-  const [presetIndex, setPresetIndex] = useState("default")
-  const preferencesStore = useWebUiPreferences()
 
   const { createSession } = nav
   const targetCatalog = useTargetCatalog(open ? directory : null)
 
   const resolution = useMemo(() => {
-    if (!selectedID || !preferencesStore.ready) return null
+    if (!selectedID) return null
     if (targetCatalog.status !== "ready") return null
-    const preset = presetIndex === "default" ? null : presets[Number(presetIndex)]
     return resolveNewSessionDefaults({
-      preferences: preset ? {
-        ...preferencesStore.preferences,
-        projectOverrides: {},
-        global: {
-          ...preferencesStore.preferences.global,
-          agentID: preset.agent,
-          model: { providerID: preset.model.providerID, modelID: preset.model.id },
-          thinkingLevel: preset.model.variant ?? null,
-        },
-      } : preferencesStore.preferences,
-      projectID: selectedID,
       agents: targetCatalog.agents,
       models: targetCatalog.models,
+      configEntries: nav.configEntries,
     })
-  }, [
-    preferencesStore.preferences,
-    preferencesStore.ready,
-    selectedID,
-    presetIndex,
-    presets,
-    targetCatalog.agents,
-    targetCatalog.models,
-    targetCatalog.status,
-  ])
+  }, [selectedID, targetCatalog.agents, targetCatalog.models, targetCatalog.status, nav.configEntries])
 
   useEffect(() => {
     if (!open) {
@@ -115,13 +87,14 @@ export function NewSessionDialog({
     })
 
     void openCode.file.list({ location: { directory } }).then((result) => {
-      if (cancelled) return
-      const entries = result.data
-        .filter((entry) => entry.type === "directory")
-        .map((entry) => directoryEntryName(entry.path))
-        .filter((path): path is string => path !== null && !path.startsWith("."))
-        .sort((a, b) => a.localeCompare(b))
-      setListing({ directory, entries, error: false })
+      if (!cancelled) {
+        const entries = result.data
+          .filter((entry) => entry.type === "directory")
+          .map((entry) => directoryEntryName(entry.path))
+          .filter((path): path is string => path !== null && !path.startsWith("."))
+          .sort((a, b) => a.localeCompare(b))
+        setListing({ directory, entries, error: false })
+      }
     }).catch(() => {
       if (!cancelled) setListing({ directory, entries: [], error: true })
     })
@@ -141,25 +114,22 @@ export function NewSessionDialog({
   const reason =
     nav.connection !== "connected"
       ? "Not connected. Reconnect to create a session."
-      : !preferencesStore.ready
-        ? "Loading browser preferences…"
-        : folder === "checking"
-          ? "Checking session folder…"
-          : folder === "unavailable"
-            ? "Selected session folder unavailable."
-            : projectError
-              ? projectError
-              : targetCatalog.status === "loading"
-                ? "Loading the project’s Agent and Model catalog…"
-                : targetCatalog.status === "error"
-                  ? "The project catalog could not be loaded."
-                  : resolution?.error
-                    ? resolution.error
-                    : null
+      : folder === "checking"
+        ? "Checking session folder…"
+        : folder === "unavailable"
+          ? "Selected session folder unavailable."
+          : projectError
+            ? projectError
+            : targetCatalog.status === "loading"
+              ? "Loading the project’s Agent and Model catalog…"
+              : targetCatalog.status === "error"
+                ? "The project catalog could not be loaded."
+                : resolution?.error
+                  ? resolution.error
+                  : null
 
   const canCreate =
     nav.connection === "connected" &&
-    preferencesStore.ready &&
     Boolean(selectedID) &&
     !projectError &&
     folder === "available" &&
@@ -239,18 +209,6 @@ export function NewSessionDialog({
               </button>
             ))}
           </div>
-          {presets.length > 0 ? (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-medium">Agent and model preset</span>
-              <Select value={presetIndex} onValueChange={(value) => { if (value) setPresetIndex(value) }} disabled={nav.creating}>
-                <SelectTrigger aria-label="Agent and model preset" className="h-11 w-full"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Session defaults</SelectItem>
-                  {presets.map((preset, index) => <SelectItem key={`${preset.name}:${index}`} value={String(index)}>{preset.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
           {resolution?.model ? (
             <div
               role="group"
@@ -259,17 +217,13 @@ export function NewSessionDialog({
             >
               <p>
                 Agent: {resolution.agentID ?? "Backend default"}
-                {resolution.agentSource === "backend"
-                  ? ""
-                  : ` · ${presetIndex === "default" ? sourceLabel(resolution.agentSource) : "preset"}`}
               </p>
               <p dir="ltr">
                 Model: {resolution.model.providerID}/{resolution.model.id}
-                {` · ${presetIndex === "default" ? sourceLabel(resolution.modelSource) : "preset"}`}
+                {` · ${sourceLabel(resolution.modelSource)}`}
               </p>
               <p>
                 Thinking: {resolution.model.variant ?? "Default"}
-                {` · ${presetIndex === "default" ? sourceLabel(resolution.thinkingSource) : "preset"}`}
               </p>
             </div>
           ) : null}

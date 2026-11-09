@@ -112,6 +112,19 @@ export type AgentConfigUpdateResult = {
   warnings: string[]
 }
 
+/** Set the engine default agent (writes the global `default_agent`). */
+export type AgentConfigDefaultResult = {
+  agentID: string
+  unchanged: boolean
+  warnings: string[]
+}
+
+/** Remove an agent's definition from its source file. */
+export type AgentConfigDeleteResult = {
+  agentID: string
+  warnings: string[]
+}
+
 export type AgentConfigErrorBody = {
   error: {
     code: string

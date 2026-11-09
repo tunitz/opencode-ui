@@ -8,7 +8,6 @@ type GatewayOptions = {
   agents: Handler
   notifications: Handler
   artifacts: Handler
-  sync?: Handler
   engine: Handler
   frontend: Handler
   bridge: { upgrade: (request: Request, server: PtyBridgeServer) => Promise<Response | undefined> }

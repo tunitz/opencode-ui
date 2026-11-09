@@ -1,31 +1,38 @@
-import { newSessionProjectError } from "@/lib/new-session-target"
-import { resolveNewSessionDefaults } from "@/lib/new-session-defaults"
-import type { openCode } from "@/lib/opencode"
-import type { OpenCodeController } from "@/lib/use-opencode"
-import type { WebUiPreferences } from "@/lib/web-ui-preferences"
+import type { AgentInfo, ConfigEntry, ModelRef } from "@/lib/opencode"
+import { effectiveDefaultAgent } from "@/lib/session-selection"
 
 /** Resolve everything against the clicked worktree, never a previously loaded catalog. */
 export async function createWorktreeSession(
   directory: string,
   projectID: string,
-  preferences: WebUiPreferences,
-  createSession: OpenCodeController["createSession"],
-  client: Pick<typeof openCode, "location" | "agent" | "model">
+  agents: AgentInfo[],
+  configEntries: ConfigEntry[],
+  createSession: (
+    projectID: string,
+    selection: { agentID: string | null; model: ModelRef },
+    directory?: string
+  ) => Promise<boolean>,
+  location: { get: (arg: { location: { directory: string } }) => Promise<{ project: { id: string } }> }
 ): Promise<{ created: boolean; error: string | null }> {
-  const location = { location: { directory } }
-  const resolved = await client.location.get(location)
-  const projectError = newSessionProjectError(resolved.project.id, projectID)
-  if (projectError) return { created: false, error: projectError }
-  const [agents, models] = await Promise.all([
-    client.agent.list(location),
-    client.model.list(location),
-  ])
-  const defaults = resolveNewSessionDefaults({
-    preferences, projectID, agents: agents.data, models: models.data,
-  })
-  if (defaults.error || !defaults.model) {
-    return { created: false, error: defaults.error ?? "No model is available for this worktree." }
+  const resolved = await location.get({ location: { directory } })
+  if (resolved.project.id !== projectID) {
+    return {
+      created: false,
+      error: "This worktree no longer belongs to the selected project.",
+    }
   }
-  const created = await createSession(projectID, { agentID: defaults.agentID, model: defaults.model }, directory)
+  const defaultAgentID = effectiveDefaultAgent(agents, configEntries)
+  const agent = defaultAgentID
+    ? (agents.find((candidate) => candidate.id === defaultAgentID) ?? null)
+    : null
+  const model = agent?.model ?? null
+  if (!model) {
+    return { created: false, error: "No model is configured for the default agent." }
+  }
+  const created = await createSession(
+    projectID,
+    { agentID: agent?.id ?? null, model },
+    directory
+  )
   return { created, error: created ? null : "Session creation failed." }
 }

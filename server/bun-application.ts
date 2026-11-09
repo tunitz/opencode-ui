@@ -13,14 +13,12 @@ export function createBunApplication(options: {
   agents: Service
   artifacts: Service
   notifications: Service
-  sync?: Service
 }) {
   const bridge = createPtyWebSocketBridge({ upstream: options.target, authorization: options.authorization, security: options.security })
   const fetch = createWebGateway({
     security: options.security,
     agents: options.agents.handleRequest, artifacts: options.artifacts.handleRequest,
     notifications: options.notifications.handleRequest,
-    sync: options.sync?.handleRequest,
     engine: (request) => proxyEngineRequest(request, { target: options.target, authorization: options.authorization }),
     frontend: createStaticHandler(options.directory), bridge,
   })

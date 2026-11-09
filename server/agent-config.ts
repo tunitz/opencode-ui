@@ -35,6 +35,8 @@ import {
   isAgentConfigMode,
   isAgentConfigPermissionEffect,
   type AgentConfigCatalog,
+  type AgentConfigDefaultResult,
+  type AgentConfigDeleteResult,
   type AgentConfigEffective,
   type AgentConfigEntry,
   type AgentConfigMode,
@@ -49,6 +51,7 @@ import {
 } from "../src/lib/agent-config-types.ts"
 
 export const AGENT_CONFIG_ROUTE = "/api/ui/agents"
+export const AGENT_CONFIG_DEFAULT_ROUTE = "/api/ui/agents/default"
 export const AGENT_CONFIG_MAX_FILE_BYTES = 256 * 1024
 export const AGENT_CONFIG_MAX_BODY_BYTES = 64 * 1024
 
@@ -793,6 +796,86 @@ function updateJsonc(
         )
       }
     }
+  }
+  return next
+}
+
+export function updateDefaultAgent(text: string, agentID: string): string {
+  const errors: ParseError[] = []
+  const root = parseJsonc(text, errors, { allowTrailingComma: true })
+  if (errors.length > 0 || !isRecord(root)) {
+    throw new AgentConfigError(
+      409,
+      "invalid_source",
+      "The JSONC configuration is invalid and was not edited."
+    )
+  }
+  const edits = modify(text, ["default_agent"], agentID, {
+    formattingOptions: {
+      insertSpaces: true,
+      tabSize: 2,
+      eol: text.includes("\r\n") ? "\r\n" : "\n",
+    },
+  })
+  const next = applyEdits(text, edits)
+  const after: ParseError[] = []
+  const parsed = parseJsonc(next, after, { allowTrailingComma: true })
+  if (
+    after.length > 0 ||
+    !isRecord(parsed) ||
+    parsed.default_agent !== agentID
+  ) {
+    throw new AgentConfigError(
+      409,
+      "invalid_result",
+      "The edited default agent could not be validated."
+    )
+  }
+  return next
+}
+
+export function removeJsoncAgent(text: string, agentID: string): string {
+  const errors: ParseError[] = []
+  const root = parseJsonc(text, errors, { allowTrailingComma: true })
+  if (errors.length > 0 || !isRecord(root)) {
+    throw new AgentConfigError(
+      409,
+      "invalid_source",
+      "The JSONC configuration is invalid and was not edited."
+    )
+  }
+  if (!Object.hasOwn(root, "agents")) return text
+  if (!isRecord(root.agents)) {
+    throw new AgentConfigError(
+      409,
+      "invalid_source",
+      "The agents field is not an object, so it was not edited."
+    )
+  }
+  if (!Object.hasOwn(root.agents, agentID)) return text
+  const edits = modify(text, ["agents", agentID], undefined, {
+    formattingOptions: {
+      insertSpaces: true,
+      tabSize: 2,
+      eol: text.includes("\r\n") ? "\r\n" : "\n",
+    },
+  })
+  const next = applyEdits(text, edits)
+  const after: ParseError[] = []
+  const parsed = parseJsonc(next, after, { allowTrailingComma: true })
+  if (after.length > 0 || !isRecord(parsed)) {
+    throw new AgentConfigError(
+      409,
+      "invalid_result",
+      "The edited JSONC could not be validated and was not saved."
+    )
+  }
+  if (isRecord(parsed.agents) && Object.hasOwn(parsed.agents, agentID)) {
+    throw new AgentConfigError(
+      409,
+      "invalid_result",
+      "The agent entry could not be removed."
+    )
   }
   return next
 }
@@ -2141,14 +2224,289 @@ export function createAgentConfigService(
     })
   }
 
+  async function deleteAgent(request: Request): Promise<Response> {
+    const contentType = request.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      ?.toLowerCase()
+    if (
+      contentType !== "application/json" &&
+      !contentType?.endsWith("+json")
+    ) {
+      throw new AgentConfigError(
+        415,
+        "content_type",
+        "Agent configuration mutations must use JSON."
+      )
+    }
+    let body: unknown
+    try {
+      const text = await request.text()
+      if (Buffer.byteLength(text, "utf8") > maxBodyBytes) {
+        throw new AgentConfigError(
+          413,
+          "too_large",
+          "The request is too large."
+        )
+      }
+      body = JSON.parse(text)
+    } catch (error) {
+      if (error instanceof AgentConfigError) throw error
+      throw new AgentConfigError(400, "invalid_json", "The request is not valid JSON.")
+    }
+    if (!isRecord(body)) {
+      throw new AgentConfigError(400, "invalid_request", "The request is invalid.")
+    }
+    const scope = body.scope
+    if (scope !== "global" && scope !== "project") {
+      throw new AgentConfigError(
+        400,
+        "invalid_scope",
+        "Choose the global or project scope."
+      )
+    }
+    const projectID =
+      typeof body.projectID === "string" && body.projectID
+        ? body.projectID
+        : null
+    if (projectID && !PROJECT_ID.test(projectID)) {
+      throw new AgentConfigError(400, "invalid_project", "The project ID is invalid.")
+    }
+    const agentID = body.agentID
+    if (typeof agentID !== "string" || !AGENT_ID.test(agentID)) {
+      throw new AgentConfigError(400, "invalid_agent", "The agent ID is invalid.")
+    }
+    const expectedHash = body.expectedHash
+    if (
+      expectedHash !== null &&
+      (typeof expectedHash !== "string" || !HASH.test(expectedHash))
+    ) {
+      throw new AgentConfigError(
+        400,
+        "invalid_hash",
+        "The expected file revision is invalid."
+      )
+    }
+
+    const scopeRoot = await resolveScope(scope, projectID, false)
+    const { catalog } = await buildCatalog(scopeRoot)
+    const entry = catalog.agents.find((candidate) => candidate.id === agentID)
+    if (!entry) {
+      throw new AgentConfigError(404, "agent_not_found", "That agent was not found.")
+    }
+    if (!entry.source) {
+      throw new AgentConfigError(
+        409,
+        "built_in",
+        "This agent is built in and has no definition to delete. Disable it instead."
+      )
+    }
+    if (entry.readonly) {
+      throw new AgentConfigError(
+        409,
+        "read_only",
+        "That agent source is read-only in this editor."
+      )
+    }
+    const source = entry.source
+    const absoluteTarget = validateTarget(scopeRoot, agentID, {
+      kind: source.kind,
+      relativePath: source.relativePath,
+    })
+
+    return withLock(absoluteTarget, async () => {
+      const current = await readTextFile(
+        scopeRoot.root,
+        source.relativePath,
+        maxFileBytes
+      )
+      if (!current) {
+        throw new AgentConfigError(
+          409,
+          "conflict",
+          "This agent definition no longer exists."
+        )
+      }
+      if (expectedHash !== null && expectedHash !== current.hash) {
+        throw new AgentConfigError(
+          409,
+          "conflict",
+          "This definition changed on disk. Refresh and try again."
+        )
+      }
+      if (source.kind === "markdown") {
+        await unlink(absoluteTarget)
+      } else {
+        const after = removeJsoncAgent(current.text, agentID)
+        if (after === current.text) {
+          throw new AgentConfigError(
+            409,
+            "agent_not_found",
+            "That agent entry is no longer in this file."
+          )
+        }
+        const latest = await readTextFile(
+          scopeRoot.root,
+          source.relativePath,
+          maxFileBytes
+        )
+        if ((latest?.hash ?? null) !== current.hash) {
+          throw new AgentConfigError(
+            409,
+            "conflict",
+            "This definition changed on disk. Refresh and try again."
+          )
+        }
+        await writeAtomic(scopeRoot.root, absoluteTarget, after, current.mode)
+      }
+      return jsonResponse(200, {
+        agentID,
+        warnings: entry.warnings,
+      } satisfies AgentConfigDeleteResult)
+    })
+  }
+
+  async function putDefaultAgent(request: Request): Promise<Response> {
+    const contentType = request.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      ?.toLowerCase()
+    if (
+      contentType !== "application/json" &&
+      !contentType?.endsWith("+json")
+    ) {
+      throw new AgentConfigError(
+        415,
+        "content_type",
+        "Agent configuration mutations must use JSON."
+      )
+    }
+    let body: unknown
+    try {
+      const text = await request.text()
+      if (Buffer.byteLength(text, "utf8") > maxBodyBytes) {
+        throw new AgentConfigError(
+          413,
+          "too_large",
+          "The request is too large."
+        )
+      }
+      body = JSON.parse(text)
+    } catch (error) {
+      if (error instanceof AgentConfigError) throw error
+      throw new AgentConfigError(400, "invalid_json", "The request is not valid JSON.")
+    }
+    if (!isRecord(body)) {
+      throw new AgentConfigError(400, "invalid_request", "The request is invalid.")
+    }
+    if (body.scope !== "global") {
+      throw new AgentConfigError(
+        400,
+        "invalid_scope",
+        "The default agent is configured in the global scope only."
+      )
+    }
+    const agentID = body.agentID
+    if (typeof agentID !== "string" || !AGENT_ID.test(agentID)) {
+      throw new AgentConfigError(400, "invalid_agent", "The agent ID is invalid.")
+    }
+
+    let nativeAgents: NativeAgent[]
+    try {
+      nativeAgents = await fetchAgents(null)
+    } catch {
+      throw new AgentConfigError(
+        503,
+        "catalog_unavailable",
+        "The native agent catalog is unavailable."
+      )
+    }
+    const target = nativeAgents.find((agent) => agent.id === agentID)
+    if (!target) {
+      throw new AgentConfigError(404, "agent_not_found", "That agent was not found.")
+    }
+    if (target.mode === "subagent" || target.hidden) {
+      throw new AgentConfigError(
+        400,
+        "invalid_default",
+        "The default agent must be a visible primary agent."
+      )
+    }
+
+    const scopeRoot = await resolveScope("global", null, true)
+
+    let relativePath: string = JSON_CONFIG_NAMES[1] as string
+    let current = await readTextFile(scopeRoot.root, relativePath, maxFileBytes)
+    if (!current) {
+      const json = await readTextFile(
+        scopeRoot.root,
+        JSON_CONFIG_NAMES[0] as string,
+        maxFileBytes
+      )
+      if (json) {
+        relativePath = JSON_CONFIG_NAMES[0] as string
+        current = json
+      }
+    }
+    const absoluteTarget = resolve(scopeRoot.root, relativePath)
+
+    return withLock(absoluteTarget, async () => {
+      const latest = current
+        ? await readTextFile(scopeRoot.root, relativePath, maxFileBytes)
+        : null
+      if (current && (latest?.hash ?? null) !== current.hash) {
+        throw new AgentConfigError(
+          409,
+          "conflict",
+          "The configuration file changed on disk. Refresh and try again."
+        )
+      }
+      const before = latest?.text ?? createNewJsoncText()
+      const after = updateDefaultAgent(before, agentID)
+      if (Buffer.byteLength(after, "utf8") > maxFileBytes) {
+        throw new AgentConfigError(
+          413,
+          "too_large",
+          "The edited configuration would be too large to save here."
+        )
+      }
+      const unchanged = after === before
+      if (!unchanged) {
+        const fresh = await readTextFile(scopeRoot.root, relativePath, maxFileBytes)
+        if ((fresh?.hash ?? null) !== (latest?.hash ?? null)) {
+          throw new AgentConfigError(
+            409,
+            "conflict",
+            "The configuration file changed on disk. Refresh and try again."
+          )
+        }
+        const mode = latest?.mode || 0o600
+        await writeAtomic(scopeRoot.root, absoluteTarget, after, mode)
+      }
+      return jsonResponse(200, {
+        agentID,
+        unchanged,
+        warnings: [],
+      } satisfies AgentConfigDefaultResult)
+    })
+  }
+
   async function handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname !== AGENT_CONFIG_ROUTE) {
+    const isDefault = url.pathname === AGENT_CONFIG_DEFAULT_ROUTE
+    if (url.pathname !== AGENT_CONFIG_ROUTE && !isDefault) {
       return jsonResponse(404, {
         error: { code: "not_found", message: "Agent configuration route not found." },
       })
     }
     if (request.method === "GET") {
+      if (isDefault) {
+        return jsonResponse(405, {
+          error: { code: "method_not_allowed", message: "Method not allowed." },
+        })
+      }
       try {
         return await getCatalog(url)
       } catch (error) {
@@ -2157,7 +2515,19 @@ export function createAgentConfigService(
     }
     if (request.method === "PUT") {
       try {
-        return await putCatalog(request)
+        return isDefault ? await putDefaultAgent(request) : await putCatalog(request)
+      } catch (error) {
+        return errorResponse(error)
+      }
+    }
+    if (request.method === "DELETE") {
+      if (isDefault) {
+        return jsonResponse(405, {
+          error: { code: "method_not_allowed", message: "Method not allowed." },
+        })
+      }
+      try {
+        return await deleteAgent(request)
       } catch (error) {
         return errorResponse(error)
       }

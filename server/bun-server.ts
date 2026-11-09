@@ -5,7 +5,6 @@ import { createAgentConfigService } from "./agent-config.ts"
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
-import { createUiSyncService } from "./ui-sync.ts"
 import type { PtyBridgeServer } from "./pty-websocket-bridge.ts"
 import { DEFAULT_ALLOWED_HOSTS, DEFAULT_ALLOWED_ORIGINS } from "./request-security.ts"
 import { BunConfigurationError, isLoopbackHost, validateHostname, validateOrigin, validatePath, validatePort } from "./bun-config.ts"
@@ -32,13 +31,27 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const legacyRoots = process.env.OPENCODE_UI_ARTIFACT_ROOTS?.split(",").map((value) => value.trim()).filter(Boolean)
   const roots = (options.artifactRoots ?? legacyRoots ?? DEFAULT_ARTIFACT_ROOTS).map((value) => resolve(validatePath(value)))
   const developmentOrigin = options.security ? undefined : process.env.OPENCODE_UI_DEV_ORIGIN
-  if (developmentOrigin && developmentOrigin !== `http://127.0.0.1:${port}`) throw new BunConfigurationError("Invalid development origin; use the existing Bun development script.")
+  if (developmentOrigin) validateOrigin(developmentOrigin)
+  const devExtraHosts = (options.security ? "" : process.env.OPENCODE_UI_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(validateHostname)
+  const devExtraOrigins = (options.security ? "" : process.env.OPENCODE_UI_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(validateOrigin)
   const security = options.security ? {
     allowedHosts: options.security.allowedHosts.map(validateHostname),
     allowedOrigins: options.security.allowedOrigins.map(validateOrigin),
   } : {
-    allowedHosts: DEFAULT_ALLOWED_HOSTS,
-    allowedOrigins: developmentOrigin ? [...DEFAULT_ALLOWED_ORIGINS, developmentOrigin] : DEFAULT_ALLOWED_ORIGINS,
+    allowedHosts: [...DEFAULT_ALLOWED_HOSTS, ...devExtraHosts],
+    allowedOrigins: [
+      ...DEFAULT_ALLOWED_ORIGINS,
+      ...(developmentOrigin ? [developmentOrigin] : []),
+      ...devExtraOrigins,
+    ],
   }
   if (options.security && !isLoopbackHost(hostname) &&
     (!security.allowedHosts.some((host) => !isLoopbackHost(host)) || !security.allowedOrigins.some((origin) => !isLoopbackHost(new URL(origin).hostname)))) {
@@ -73,7 +86,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const application = createBunApplication({
-    target, authorization, directory, agents, artifacts, notifications, sync: createUiSyncService(),
+    target, authorization, directory, agents, artifacts, notifications,
     security,
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {

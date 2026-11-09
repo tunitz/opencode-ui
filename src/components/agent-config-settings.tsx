@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   ArrowDownIcon,
+  ArrowLeftIcon,
   ArrowUpIcon,
   ChevronDownIcon,
-  InfoIcon,
+  ChevronRightIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   Trash2Icon,
@@ -22,7 +23,6 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
@@ -33,6 +33,13 @@ import {
 } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import {
+  Accordion,
+  AccordionHeader,
+  AccordionItem,
+  AccordionPanel,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,22 +49,29 @@ import {
 import {
   AgentConfigRequestError,
   agentConfigModelFromKey,
+  deleteAgentDefinition,
   fetchAgentConfigCatalog,
   saveAgentConfig,
+  saveDefaultAgent,
 } from "@/lib/agent-config"
+import {
+  agentModelLabel,
+  groupedAgents,
+  type AgentGroup,
+} from "@/lib/agent-list"
 import {
   AGENT_CONFIG_PERMISSION_ACTIONS,
   AGENT_CONFIG_PERMISSION_EFFECTS,
   agentConfigModelKey,
   type AgentConfigCatalog,
-  type AgentConfigEffective,
-  type AgentConfigEntry,
   type AgentConfigPatch,
   type AgentConfigPermissionRule,
   type AgentConfigSource,
+  type AgentConfigValues,
 } from "@/lib/agent-config-types"
 import { recordPerfRender } from "@/lib/perf-probe"
 import {
+  effectiveDefaultAgent,
   modelKey,
   selectableModels,
   variantsForModel,
@@ -66,6 +80,7 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 
 const INHERIT = "__inherit__"
+const AUTOSAVE_DELAY_MS = 600
 
 type DraftPermissionRule = AgentConfigPermissionRule & { key: string }
 
@@ -84,10 +99,6 @@ function nextPermissionKey(): string {
   permissionKeySequence += 1
   return `permission-rule-${permissionKeySequence}`
 }
-
-type PendingChange =
-  | { kind: "agent"; agentID: string }
-  | { kind: "reload" }
 
 const EMPTY_DRAFT: Draft = {
   model: INHERIT,
@@ -178,11 +189,10 @@ function permissionRulesEqual(
 }
 
 function buildPatch(
-  source: AgentConfigSource | null,
+  values: AgentConfigValues,
   draft: Draft,
   permissionsReadOnly: boolean
 ): { patch: AgentConfigPatch; error: null } | { patch: null; error: string } {
-  const values = source?.values ?? {}
   const patch: AgentConfigPatch = {}
   const sourceModel = values.model
     ? agentConfigModelKey(values.model)
@@ -260,9 +270,20 @@ function buildPatch(
   return { patch, error: null }
 }
 
+function applyPatchToValues(
+  values: AgentConfigValues,
+  patch: AgentConfigPatch
+): AgentConfigValues {
+  const next: Record<string, unknown> = { ...values }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key]
+    else next[key] = value
+  }
+  return next as AgentConfigValues
+}
+
 function AgentSettingSelect({
   label,
-  description,
   value,
   options,
   disabled,
@@ -270,7 +291,6 @@ function AgentSettingSelect({
   onValueChange,
 }: {
   label: string
-  description?: string
   value: string
   options: Option[]
   disabled?: boolean
@@ -340,37 +360,134 @@ function AgentSettingSelect({
           ))}
         </SelectContent>
       </Select>
-      {description ? <FieldDescription>{description}</FieldDescription> : null}
     </Field>
   )
 }
 
-function effectiveLabel(
-  effective: AgentConfigEffective | null,
-  source: AgentConfigSource | null
-): string {
-  if (!effective && source?.values.disabled) {
-    return "Disabled; not in the active engine catalog"
-  }
-  const model = effective?.model ?? source?.values.model ?? null
-  const parts: string[] = []
-  parts.push(model ? agentConfigModelKey(model) : "Backend default model")
-  if (effective) {
-    parts.push(effective.mode)
-    if (effective.hidden) parts.push("hidden")
-    if (effective.steps !== null) parts.push(`${effective.steps} steps`)
-  } else if (source?.values.mode) {
-    parts.push(source.values.mode)
-  }
-  return parts.join(" · ")
+const GROUP_LABELS: Record<AgentGroup, string> = {
+  primary: "Primary agents",
+  subagents: "Subagents",
+  hidden: "Hidden",
 }
 
-function sourceLabel(entry: AgentConfigEntry): string {
-  if (entry.source) return entry.source.label
-  if (entry.target) {
-    return `No ${entry.readonly ? "" : "scope "}override; ${entry.target.label}`
-  }
-  return "No editable source"
+function AccordionSection({
+  value,
+  title,
+  count,
+  children,
+}: {
+  value: string
+  title: string
+  count?: number
+  children: ReactNode
+}) {
+  return (
+    <AccordionItem
+      value={value}
+      className="overflow-hidden rounded-xl border border-foreground/10 bg-card"
+    >
+      <AccordionHeader>
+        <AccordionTrigger className="group/settings-section rounded-none px-3 hover:bg-muted/60">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="text-[13px] font-medium text-foreground">
+              {title}
+            </span>
+            {typeof count === "number" ? (
+              <span className="text-[11px] font-normal text-muted-foreground">
+                {count}
+              </span>
+            ) : null}
+          </span>
+          <ChevronRightIcon
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/settings-section:rotate-90 motion-reduce:transition-none"
+          />
+        </AccordionTrigger>
+      </AccordionHeader>
+      <AccordionPanel>
+        <div className="border-t border-foreground/10 px-3 py-3">{children}</div>
+      </AccordionPanel>
+    </AccordionItem>
+  )
+}
+
+function AgentList({
+  catalog,
+  defaultAgentID,
+  busy,
+  onSelect,
+}: {
+  catalog: AgentConfigCatalog
+  defaultAgentID: string | null
+  busy: boolean
+  onSelect: (id: string) => void
+}) {
+  const groups = groupedAgents(catalog.agents).filter(
+    ({ agents }) => agents.length > 0
+  )
+  return (
+    <Accordion
+      multiple
+      defaultValue={groups.map(({ group }) => group)}
+      className="space-y-2"
+    >
+      {groups.map(({ group, agents }) => (
+        <AccordionSection
+          key={group}
+          value={group}
+          title={GROUP_LABELS[group]}
+          count={agents.length}
+        >
+          <ul className="space-y-1">
+            {agents.map((agent) => {
+              const model =
+                agent.effective?.model ?? agent.source?.values.model ?? null
+              const description = agent.effective?.description ?? ""
+              const isDefault = agent.id === defaultAgentID
+              return (
+                <li key={agent.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="flex min-h-11 w-full flex-col items-start gap-0.5 rounded-lg px-2 py-2 text-start hover:bg-accent focus-visible:relative focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
+                    onClick={() => onSelect(agent.id)}
+                  >
+                    <span className="flex w-full min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate text-[14px] font-medium">
+                        {agent.name && agent.name !== agent.id
+                          ? agent.name
+                          : agent.id}
+                      </span>
+                      {isDefault ? (
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                          default
+                        </span>
+                      ) : null}
+                      <ChevronRightIcon
+                        aria-hidden="true"
+                        className="ms-auto size-4 shrink-0 text-muted-foreground rtl:rotate-180"
+                      />
+                    </span>
+                    {description ? (
+                      <span className="w-full truncate text-[12px] text-muted-foreground">
+                        {description}
+                      </span>
+                    ) : null}
+                    <span
+                      dir="ltr"
+                      className="w-full truncate font-mono text-[11px] text-muted-foreground"
+                    >
+                      {agentModelLabel(model)}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </AccordionSection>
+      ))}
+    </Accordion>
+  )
 }
 
 export function AgentConfigSettings({
@@ -385,22 +502,30 @@ export function AgentConfigSettings({
   recordPerfRender("AgentConfigSettings")
   const [catalog, setCatalog] = useState<AgentConfigCatalog | null>(null)
   const [selectedID, setSelectedID] = useState<string | null>(null)
+  const [view, setView] = useState<"list" | "detail">("list")
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
+  const [baseline, setBaseline] = useState<AgentConfigValues>({})
   const [loading, setLoading] = useState(false)
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [status, setStatus] = useState<string | null>(null)
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
   const [busy, setBusy] = useState(false)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [helpOpen, setHelpOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [openSection, setOpenSection] = useState<
+    "model" | "agent" | "permissions" | null
+  >("model")
   const [expandedRuleKey, setExpandedRuleKey] = useState<string | null>(null)
-  const [pendingChange, setPendingChange] = useState<PendingChange | null>(null)
   const requestRef = useRef(0)
   const catalogRef = useRef<AgentConfigCatalog | null>(null)
-  const dirtyRef = useRef(false)
   const wasActiveRef = useRef(active)
+  const hashRef = useRef<string | null>(null)
+  const draftRef = useRef(draft)
+  const baselineRef = useRef(baseline)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const savePromiseRef = useRef<Promise<boolean> | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (expectAbsent?: string) => {
     const request = ++requestRef.current
     setLoading(true)
     setCatalogError(null)
@@ -410,11 +535,14 @@ export function AgentConfigSettings({
         projectID: null,
       })
       if (request !== requestRef.current) return
-      setCatalog(next)
+      const catalogNext = expectAbsent
+        ? { ...next, agents: next.agents.filter((agent) => agent.id !== expectAbsent) }
+        : next
+      setCatalog(catalogNext)
       setSelectedID((current) =>
-        current && next.agents.some((agent) => agent.id === current)
+        current && catalogNext.agents.some((agent) => agent.id === current)
           ? current
-          : (next.agents[0]?.id ?? null)
+          : (catalogNext.agents[0]?.id ?? null)
       )
     } catch (error) {
       if (request !== requestRef.current) return
@@ -429,9 +557,6 @@ export function AgentConfigSettings({
     }
   }, [])
 
-  // Sync the ref used by the activation gate below in an effect (never during
-  // render). Declared before the gate so a catalog update and an activation in
-  // the same commit observe the new catalog.
   useEffect(() => {
     catalogRef.current = catalog
   }, [catalog])
@@ -440,9 +565,7 @@ export function AgentConfigSettings({
     const becameActive = active && !wasActiveRef.current
     wasActiveRef.current = active
     if (!active) return
-    if (becameActive && dirtyRef.current && catalogRef.current) {
-      return
-    }
+    if (becameActive && catalogRef.current) return
     void load()
   }, [active, load])
 
@@ -451,25 +574,44 @@ export function AgentConfigSettings({
     catalog?.agents[0] ??
     null
   const source = selected?.source ?? null
+  const defaultAgentID = useMemo(
+    () => effectiveDefaultAgent(nav.agents, nav.configEntries),
+    [nav.agents, nav.configEntries]
+  )
+  const isDefaultAgent = Boolean(selected && defaultAgentID === selected.id)
+  const canMakeDefault = Boolean(
+    selected &&
+      selected.effective?.mode === "primary" &&
+      !selected.effective?.hidden
+  )
   const selectedKey = selected
     ? `${selected.id}:${selected.source?.hash ?? ""}:${selected.target?.hash ?? ""}:${selected.target?.relativePath ?? ""}`
     : ""
 
   useEffect(() => {
     // A new selected source identity intentionally resets the editor state.
-    // Source refreshes with the same identity must not clobber the draft, so
-    // this effect is keyed by `selectedKey` rather than the source object.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    /* eslint-disable react-hooks/set-state-in-effect */
     setDraft(draftFromSource(source))
+    setBaseline(source?.values ?? {})
+    hashRef.current = selected?.target?.hash ?? null
     setSaveError(null)
-    setAdvancedOpen(false)
+    setSaveState("idle")
+    setOpenSection("model")
     setExpandedRuleKey(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey])
 
+  useEffect(() => {
+    draftRef.current = draft
+  }, [draft])
+  useEffect(() => {
+    baselineRef.current = baseline
+  }, [baseline])
+
   const models = useMemo(() => selectableModels(nav.models), [nav.models])
-  const sourceModel = source?.values.model ?? null
-  const sourceModelKey = agentConfigModelKey(sourceModel)
+  const baselineModel = baseline.model ?? null
+  const baselineModelKey = agentConfigModelKey(baselineModel)
   const base = modelBase(draft.model)
   const variant = modelVariant(draft.model)
   const selectedModelInfo =
@@ -477,12 +619,12 @@ export function AgentConfigSettings({
   const variantIds = variantsForModel(selectedModelInfo)
   const modelOptions: Option[] = [
     { value: INHERIT, label: "Inherit / remove model override" },
-    ...(sourceModelKey &&
-    !models.some((model) => modelKey(model) === modelBase(sourceModelKey))
+    ...(baselineModelKey &&
+    !models.some((model) => modelKey(model) === modelBase(baselineModelKey))
       ? [
           {
-            value: modelBase(sourceModelKey),
-            label: `${modelBase(sourceModelKey)} (unavailable)`,
+            value: modelBase(baselineModelKey),
+            label: `${modelBase(baselineModelKey)} (unavailable)`,
           },
         ]
       : []),
@@ -505,93 +647,177 @@ export function AgentConfigSettings({
 
   const permissionsReadOnly = Boolean(selected?.permissionsReadOnly)
   const patchResult = useMemo(
-    () => buildPatch(source, draft, permissionsReadOnly),
-    [draft, permissionsReadOnly, source]
+    () => buildPatch(baseline, draft, permissionsReadOnly),
+    [baseline, draft, permissionsReadOnly]
   )
   const patch = patchResult.error === null ? patchResult.patch : null
-  const invalidRuleIndex = !permissionsReadOnly
-    ? draft.permissions.findIndex((rule) => !rule.action.trim() || !rule.resource.trim())
-    : -1
-  const invalidSteps = draft.steps !== (source?.values.steps == null ? "" : String(source.values.steps)) &&
-    draft.steps !== "" && (!Number.isSafeInteger(Number(draft.steps)) || Number(draft.steps) < 0)
-  const dirty = patch !== null && Object.keys(patch).length > 0
-  const hasUnsavedDraft = dirty || patchResult.error !== null
+  const invalidSteps =
+    draft.steps !==
+      (baseline.steps === undefined || baseline.steps === null
+        ? ""
+        : String(baseline.steps)) &&
+    draft.steps !== "" &&
+    (!Number.isSafeInteger(Number(draft.steps)) || Number(draft.steps) < 0)
   const modelBusy = nav.modelsStatus === "loading"
   const selectedReadonly = Boolean(selected?.readonly || !selected?.target)
-  const sourceStepsValue = source?.values.steps
-  const sourceStepsText =
-    sourceStepsValue === undefined || sourceStepsValue === null
-      ? ""
-      : String(sourceStepsValue)
-  const advancedConfigured =
-    source?.values.description !== undefined ||
-    source?.values.mode !== undefined ||
-    source?.values.hidden !== undefined ||
-    source?.values.steps !== undefined ||
-    source?.values.disabled !== undefined
-  const advancedDirty =
-    draft.description !== (source?.values.description ?? "") ||
-    draft.mode !== (source?.values.mode ?? INHERIT) ||
-    draft.hidden !== valueText(source?.values.hidden) ||
-    draft.steps !== sourceStepsText ||
-    draft.disabled !== valueText(source?.values.disabled)
-  const permissionCounts = draft.permissions.reduce(
-    (counts, rule) => {
-      counts[rule.effect] += 1
-      return counts
-    },
-    { ask: 0, allow: 0, deny: 0 }
-  )
-
-  useEffect(() => {
-    dirtyRef.current = hasUnsavedDraft
-    onDirtyChange?.(hasUnsavedDraft)
-  }, [hasUnsavedDraft, onDirtyChange])
-
+  const deletable = Boolean(selected?.source && !selected.readonly)
   const permissionEditingDisabled =
     Boolean(selectedReadonly) || permissionsReadOnly
+  const hasPendingPatch = Boolean(
+    patch && Object.keys(patch).length > 0 && !patchResult.error
+  )
+  const saving = saveState === "saving"
 
-  function applyAgent(next: string) {
+  useEffect(() => {
+    onDirtyChange?.(hasPendingPatch || saving)
+  }, [hasPendingPatch, saving, onDirtyChange])
+
+  const saveNow = useCallback(async (): Promise<boolean> => {
+    if (!selected?.target || selectedReadonly) return true
+    if (savePromiseRef.current) await savePromiseRef.current
+    const result = buildPatch(
+      baselineRef.current,
+      draftRef.current,
+      permissionsReadOnly
+    )
+    if (result.error || !result.patch) return true
+    if (Object.keys(result.patch).length === 0) return true
+    const run = (async () => {
+      setSaveState("saving")
+      setSaveError(null)
+      try {
+        const response = await saveAgentConfig({
+          scope: "global",
+          projectID: null,
+          agentID: selected.id,
+          target: {
+            kind: selected.target!.kind,
+            relativePath: selected.target!.relativePath,
+          },
+          expectedHash: hashRef.current,
+          patch: result.patch,
+        })
+        hashRef.current = response.hash
+        const next = applyPatchToValues(baselineRef.current, result.patch)
+        baselineRef.current = next
+        setBaseline(next)
+        setSaveState("saved")
+        return true
+      } catch (error) {
+        setSaveState("idle")
+        setSaveError(
+          error instanceof AgentConfigRequestError
+            ? error.message
+            : "Changes could not be saved."
+        )
+        if (error instanceof AgentConfigRequestError && error.status === 409) {
+          void load()
+        }
+        return false
+      }
+    })()
+    savePromiseRef.current = run
+    const saved = await run
+    savePromiseRef.current = null
+    return saved
+  }, [selected, selectedReadonly, permissionsReadOnly, load])
+
+  useEffect(() => {
+    if (view !== "detail" || selectedReadonly) return
+    if (!hasPendingPatch) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null
+      void saveNow()
+    }, AUTOSAVE_DELAY_MS)
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+  }, [draft, baseline, view, selectedReadonly, hasPendingPatch, saveNow])
+
+  async function openAgent(next: string) {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const ok = await saveNow()
+    if (!ok) return
     setSelectedID(next)
-    setStatus(null)
+    setView("detail")
     setSaveError(null)
-    setPendingChange(null)
     setExpandedRuleKey(null)
-    setAdvancedOpen(false)
+    setOpenSection("model")
   }
 
-  function requestAgentChange(next: string) {
-    if (next === selected?.id) return
-    if (hasUnsavedDraft) {
-      setPendingChange({ kind: "agent", agentID: next })
-      return
+  async function requestBack() {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
     }
-    applyAgent(next)
-  }
-
-  function requestReload() {
-    if (hasUnsavedDraft) {
-      setPendingChange({ kind: "reload" })
-      return
-    }
-    setStatus(null)
-    void load()
-  }
-
-  function confirmPendingChange() {
-    const change = pendingChange
-    setPendingChange(null)
-    if (!change) return
-    if (change.kind === "agent") {
-      applyAgent(change.agentID)
-      return
-    }
-    setDraft(draftFromSource(source))
-    setExpandedRuleKey(null)
-    setAdvancedOpen(false)
+    const ok = await saveNow()
+    if (!ok) return
+    setView("list")
     setSaveError(null)
-    setStatus(null)
-    void load()
+  }
+
+  async function handleMakeDefault() {
+    if (!selected) return
+    setBusy(true)
+    setSaveError(null)
+    try {
+      await saveDefaultAgent({ scope: "global", agentID: selected.id })
+      await nav.reloadConfiguration()
+    } catch (error) {
+      setSaveError(
+        error instanceof AgentConfigRequestError
+          ? error.message
+          : "The default agent could not be saved."
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!selected?.source) return
+    const agentID = selected.id
+    const expectedHash = selected.source.hash
+    setDeleting(true)
+    setSaveError(null)
+    try {
+      await deleteAgentDefinition({
+        scope: "global",
+        projectID: null,
+        agentID,
+        expectedHash,
+      })
+      setDeleteOpen(false)
+      setView("list")
+      setSelectedID(null)
+      // Hide the deleted agent immediately, then reconcile with the engine.
+      setCatalog((current) =>
+        current
+          ? {
+              ...current,
+              agents: current.agents.filter((agent) => agent.id !== agentID),
+            }
+          : current
+      )
+      await nav.reloadConfiguration()
+      await load(agentID)
+    } catch (error) {
+      setDeleteOpen(false)
+      setSaveError(
+        error instanceof AgentConfigRequestError
+          ? error.message
+          : "The agent could not be deleted."
+      )
+    } finally {
+      setDeleting(false)
+    }
   }
 
   function updatePermissionRule(
@@ -604,7 +830,6 @@ export function AgentConfigSettings({
         ruleIndex === index ? { ...rule, ...patch } : rule
       ),
     }))
-    setStatus(null)
   }
 
   function addPermissionRule() {
@@ -614,15 +839,9 @@ export function AgentConfigSettings({
       ...current,
       permissions: [
         ...current.permissions,
-        {
-          key,
-          action: "",
-          resource: "*",
-          effect: "ask",
-        },
+        { key, action: "", resource: "*", effect: "ask" },
       ],
     }))
-    setStatus(null)
   }
 
   function removePermissionRule(index: number) {
@@ -636,7 +855,6 @@ export function AgentConfigSettings({
         (_rule, ruleIndex) => ruleIndex !== index
       ),
     }))
-    setStatus(null)
   }
 
   function movePermissionRule(index: number, offset: -1 | 1) {
@@ -649,286 +867,177 @@ export function AgentConfigSettings({
       permissions.splice(target, 0, rule)
       return { ...current, permissions }
     })
-    setStatus(null)
   }
 
-  async function handleSave() {
-    if (!selected || !selected.target || selectedReadonly) return
-    if (!patch) {
-      setSaveError(patchResult.error ?? "The changes are invalid.")
-      return
-    }
-    if (Object.keys(patch).length === 0) {
-      setStatus("No changes to save.")
-      return
-    }
-    setBusy(true)
-    setSaveError(null)
-    setStatus(null)
-    try {
-      const result = await saveAgentConfig({
-        scope: "global",
-        projectID: null,
-        agentID: selected.id,
-        target: {
-          kind: selected.target.kind,
-          relativePath: selected.target.relativePath,
-        },
-        expectedHash: selected.target.hash,
-        patch,
-      })
-      setStatus(
-        result.unchanged
-          ? "No file change was needed."
-          : "Saved. OpenCode normally reloads watched config automatically; this editor never triggers a live reload."
-      )
-      await load()
-    } catch (error) {
-      setSaveError(
-        error instanceof AgentConfigRequestError
-          ? error.message
-          : "Agent configuration could not be saved."
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
+  const permissionCounts = draft.permissions.reduce(
+    (counts, rule) => {
+      counts[rule.effect] += 1
+      return counts
+    },
+    { ask: 0, allow: 0, deny: 0 }
+  )
 
   return (
     <div className="space-y-4 px-1 pb-2">
-      <FieldGroup>
-        {loading ? (
-          <p
-            role="status"
-            className="flex items-center gap-2 text-[12px] text-muted-foreground"
-          >
-            <LoaderCircleIcon
-              aria-hidden="true"
-              className="size-4 animate-spin"
-            />
-            Loading agent configuration…
-          </p>
-        ) : null}
+      {loading ? (
+        <p
+          role="status"
+          className="flex items-center gap-2 text-[12px] text-muted-foreground"
+        >
+          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+          Loading agents…
+        </p>
+      ) : null}
 
-        {catalogError ? (
-          <div className="space-y-2">
-            <p role="alert" className="text-xs break-words text-destructive">
-              {catalogError}
-            </p>
+      {catalogError ? (
+        <div className="space-y-2">
+          <p role="alert" className="text-xs break-words text-destructive">
+            {catalogError}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full"
+            onClick={() => void load()}
+          >
+            <RefreshCwIcon aria-hidden="true" className="size-4" />
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
+      {catalog && catalog.agents.length === 0 && !loading ? (
+        <p className="text-xs text-muted-foreground">
+          No agents are available in the global catalog.
+        </p>
+      ) : null}
+
+      {catalog && view === "list" ? (
+        <AgentList
+          catalog={catalog}
+          defaultAgentID={defaultAgentID}
+          busy={busy}
+          onSelect={(id) => void openAgent(id)}
+        />
+      ) : null}
+
+      {selected && view === "detail" ? (
+        <>
+          <div className="flex items-center gap-2">
             <Button
               type="button"
-              variant="outline"
-              className="h-11 w-full"
-              onClick={() => void load()}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Back to all agents"
+              className="size-11 shrink-0 rounded-full"
+              onClick={() => void requestBack()}
             >
-              <RefreshCwIcon aria-hidden="true" className="size-4" />
-              Retry
+              <ArrowLeftIcon aria-hidden="true" className="size-5" />
             </Button>
-          </div>
-        ) : null}
-
-        {catalog && catalog.warnings.length > 0 ? (
-          <details className="group rounded-lg border border-border bg-muted/20">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-[12px] text-muted-foreground outline-none select-none focus-visible:ring-3 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-              <InfoIcon aria-hidden="true" className="size-4 shrink-0" />
-              <span>Configuration notes ({catalog.warnings.length})</span>
-              <ChevronDownIcon
-                aria-hidden="true"
-                className="ms-auto size-4 shrink-0 transition-transform group-open:rotate-180 motion-safe:transition-transform"
-              />
-            </summary>
-            <ul className="space-y-1 border-t border-border px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-              {catalog.warnings.map((warning) => (
-                <li key={warning} className="break-words">
-                  {warning}
-                </li>
-              ))}
-            </ul>
-          </details>
-        ) : null}
-
-        {catalog && catalog.agents.length === 0 && !loading ? (
-          <p className="text-xs text-muted-foreground">
-            No agents are available in the global catalog.
-          </p>
-        ) : null}
-
-        {selected ? (
-          <>
-            <AgentSettingSelect
-              label="Agent"
-              value={selected.id}
-              busy={busy}
-              options={catalog?.agents.map((agent) => ({
-                value: agent.id,
-                label: agent.id,
-                detail: sourceLabel(agent),
-              })) ?? []}
-              onValueChange={requestAgentChange}
-              description="Existing agents from the engine catalog or its global source."
-            />
-
-            <div className="rounded-xl border border-border bg-background/60 p-3">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span dir="ltr" className="text-[14px] font-medium">
-                  {selected.id}
+                <span dir="ltr" className="text-[15px] font-medium">
+                  {selected.name && selected.name !== selected.id
+                    ? selected.name
+                    : selected.id}
                 </span>
-                {selected.effective?.mode ? (
+                {isDefaultAgent ? (
                   <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {selected.effective.mode}
+                    default agent
                   </span>
                 ) : null}
-                {(selected.effective
-                  ? selected.effective.hidden
-                  : selected.source?.values.hidden) ? (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    hidden
-                  </span>
-                ) : null}
-                {selected.source?.values.disabled ||
-                selected.effective?.disabled ? (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    disabled
-                  </span>
-                ) : null}
-                {selected.readonly ? (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    source read-only
-                  </span>
-                ) : null}
-                {permissionsReadOnly ? (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    permission rules read-only
-                  </span>
-                ) : null}
-                <span className="ms-auto text-[11px] text-muted-foreground">
-                  {source?.kind === "markdown"
-                    ? "Markdown frontmatter"
-                    : source?.kind === "jsonc"
-                      ? "JSONC"
-                      : selected.target?.kind === "markdown"
-                        ? "Markdown frontmatter"
-                        : "JSONC"}
-                </span>
               </div>
-              <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px] leading-5">
-                <dt className="text-muted-foreground">Source</dt>
-                <dd dir="auto" className="min-w-0 break-words">
-                  {sourceLabel(selected)}
-                </dd>
-                <dt className="text-muted-foreground">Effective here</dt>
-                <dd dir="auto" className="min-w-0 break-words">
-                  {effectiveLabel(selected.effective, source)}
-                </dd>
-              </dl>
-              {selected.warnings.length > 0 ? (
-                <ul className="mt-2 space-y-1 text-[11px] leading-5 text-muted-foreground">
-                  {selected.warnings.map((warning) => (
-                    <li key={warning} className="break-words">
-                      {warning}
-                    </li>
-                  ))}
-                </ul>
+              {selected.effective?.description ? (
+                <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                  {selected.effective.description}
+                </p>
               ) : null}
             </div>
-
-            {selectedReadonly ? (
-              <p className="rounded-lg border border-border bg-muted/30 p-3 text-[12px] leading-5 text-muted-foreground">
-                This agent source is read-only here. Edit the file manually, or
-                choose an agent whose source is editable in the global scope.
-              </p>
-            ) : null}
-
-            <fieldset disabled={busy} className="min-w-0 space-y-4">
-            <FieldGroup>
-              <div className="flex items-baseline justify-between gap-2">
-                <h3 className="text-[14px] font-medium">Model & thinking</h3>
-                <span className="text-[11px] text-muted-foreground">
-                  Inherit or override
-                </span>
-              </div>
-              <AgentSettingSelect
-                label="Model"
-                value={base}
-                options={modelOptions}
-                disabled={
-                  busy || selectedReadonly || nav.modelsStatus !== "ready"
-                }
-                busy={modelBusy}
-                onValueChange={(value) => {
-                  setDraft((current) => ({ ...current, model: value }))
-                  setStatus(null)
-                }}
-                description={
-                  nav.modelsStatus === "error"
-                    ? "The model catalog is unavailable; model changes are disabled. Other fields can still be saved."
-                    : nav.modelsStatus === "ready"
-                      ? "Inherit removes the model override. The engine falls back to the agent or provider default."
-                      : "Loading the model catalog; other fields can still be saved."
-                }
-              />
-              <AgentSettingSelect
-                label="Thinking Level"
-                value={variant || INHERIT}
-                options={variantOptions}
-                disabled={
-                  busy || selectedReadonly ||
-                  base === INHERIT ||
-                  variantIds.length === 0
-                }
-                onValueChange={(value) => {
-                  const nextVariant = value === INHERIT ? "" : value
-                  setDraft((current) => ({
-                    ...current,
-                    model: nextVariant ? `${base}#${nextVariant}` : base,
-                  }))
-                  setStatus(null)
-                }}
-                description="Only variants exposed by the selected model are offered."
-              />
-              <Collapsible
-                open={advancedOpen}
-                onOpenChange={setAdvancedOpen}
-                className="rounded-xl border border-border"
+            {canMakeDefault ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 shrink-0 px-3"
+                disabled={busy || isDefaultAgent}
+                onClick={() => void handleMakeDefault()}
               >
-                <CollapsibleTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="h-auto min-h-11 w-full justify-between rounded-xl px-3 py-2.5 text-start hover:bg-muted/50"
-                    />
+                {isDefaultAgent ? "Default" : "Make default"}
+              </Button>
+            ) : null}
+          </div>
+
+          {selectedReadonly ? (
+            <p className="text-[12px] text-muted-foreground">
+              This source is read-only here.
+            </p>
+          ) : null}
+
+          {saveError ? (
+            <p role="alert" className="text-xs break-words text-destructive">
+              {saveError}
+            </p>
+          ) : null}
+          {!saveError && patchResult.error ? (
+            <p role="alert" className="text-xs break-words text-destructive">
+              {patchResult.error}
+            </p>
+          ) : null}
+          {!saveError && !patchResult.error && saving ? (
+            <p role="status" className="text-[11px] text-muted-foreground">
+              Saving…
+            </p>
+          ) : null}
+
+          <fieldset disabled={busy} className="min-w-0">
+            <Accordion
+              value={openSection ? [openSection] : []}
+              onValueChange={(value) => {
+                const next = value[0]
+                setOpenSection(
+                  next === "model" || next === "agent" || next === "permissions"
+                    ? next
+                    : null
+                )
+              }}
+              className="space-y-2"
+            >
+              <AccordionSection value="model" title="Model">
+              <FieldGroup>
+                <AgentSettingSelect
+                  label="Model"
+                  value={base}
+                  options={modelOptions}
+                  disabled={
+                    busy || selectedReadonly || nav.modelsStatus !== "ready"
                   }
-                >
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-[14px] font-medium">
-                      Advanced agent settings
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      Description, mode, visibility, steps, state
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    {advancedDirty ? (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                        Unsaved
-                      </span>
-                    ) : advancedConfigured ? (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                        Configured
-                      </span>
-                    ) : null}
-                    <ChevronDownIcon
-                      aria-hidden="true"
-                      className={cn(
-                        "size-4 text-muted-foreground motion-safe:transition-transform",
-                        advancedOpen && "rotate-180"
-                      )}
-                    />
-                  </span>
-                </CollapsibleTrigger>
-                <CollapsibleContent className="border-t border-border p-3">
-                  <FieldGroup>
+                  busy={modelBusy}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({ ...current, model: value }))
+                  }
+                />
+                <AgentSettingSelect
+                  label="Thinking Level"
+                  value={variant || INHERIT}
+                  options={variantOptions}
+                  disabled={
+                    busy ||
+                    selectedReadonly ||
+                    base === INHERIT ||
+                    variantIds.length === 0
+                  }
+                  onValueChange={(value) => {
+                    const nextVariant = value === INHERIT ? "" : value
+                    setDraft((current) => ({
+                      ...current,
+                      model: nextVariant ? `${base}#${nextVariant}` : base,
+                    }))
+                  }}
+                />
+              </FieldGroup>
+              </AccordionSection>
+
+              <AccordionSection value="agent" title="Agent">
+              <FieldGroup>
                     <Field>
                       <FieldLabel htmlFor="agent-config-description">
                         Description
@@ -937,20 +1046,14 @@ export function AgentConfigSettings({
                         id="agent-config-description"
                         value={draft.description}
                         disabled={busy || selectedReadonly}
-                        onChange={(event) => {
-                          const value = event.target.value
+                        onChange={(event) =>
                           setDraft((current) => ({
                             ...current,
-                            description: value,
+                            description: event.target.value,
                           }))
-                          setStatus(null)
-                        }}
-                        placeholder="Optional short description"
+                        }
                         className="h-11! text-[14px]"
                       />
-                      <FieldDescription>
-                        Blank removes the description override.
-                      </FieldDescription>
                     </Field>
                     <AgentSettingSelect
                       label="Mode"
@@ -962,10 +1065,9 @@ export function AgentConfigSettings({
                         { value: "all", label: "Primary and subagent" },
                       ]}
                       disabled={busy || selectedReadonly}
-                      onValueChange={(value) => {
+                      onValueChange={(value) =>
                         setDraft((current) => ({ ...current, mode: value }))
-                        setStatus(null)
-                      }}
+                      }
                     />
                     <AgentSettingSelect
                       label="Visibility"
@@ -976,10 +1078,9 @@ export function AgentConfigSettings({
                         { value: "true", label: "Hidden from primary picker" },
                       ]}
                       disabled={busy || selectedReadonly}
-                      onValueChange={(value) => {
+                      onValueChange={(value) =>
                         setDraft((current) => ({ ...current, hidden: value }))
-                        setStatus(null)
-                      }}
+                      }
                     />
                     <Field>
                       <FieldLabel htmlFor="agent-config-steps">Steps</FieldLabel>
@@ -991,22 +1092,22 @@ export function AgentConfigSettings({
                         value={draft.steps}
                         disabled={busy || selectedReadonly}
                         aria-invalid={invalidSteps || undefined}
-                        aria-describedby={invalidSteps ? "agent-config-steps-error" : undefined}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setDraft((current) => ({ ...current, steps: value }))
-                          setStatus(null)
-                        }}
-                        placeholder="Inherit"
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            steps: event.target.value,
+                          }))
+                        }
                         className="h-11! text-[14px]"
                       />
-                      <FieldDescription>
-                        A whole number of 0 or more. Blank removes the override.
-                      </FieldDescription>
-                      {invalidSteps ? <p id="agent-config-steps-error" className="text-xs text-destructive">Steps must be a whole number of 0 or more.</p> : null}
+                      {invalidSteps ? (
+                        <p className="text-xs text-destructive">
+                          Steps must be a whole number of 0 or more.
+                        </p>
+                      ) : null}
                     </Field>
                     <AgentSettingSelect
-                      label="Agent state"
+                      label="State"
                       value={draft.disabled}
                       options={[
                         { value: INHERIT, label: "Inherit / remove override" },
@@ -1014,94 +1115,35 @@ export function AgentConfigSettings({
                         { value: "true", label: "Disabled" },
                       ]}
                       disabled={busy || selectedReadonly}
-                      onValueChange={(value) => {
+                      onValueChange={(value) =>
                         setDraft((current) => ({ ...current, disabled: value }))
-                        setStatus(null)
-                      }}
-                      description="Disabling removes the agent from the active catalog. Sessions that already reference it may be affected."
+                      }
                     />
                   </FieldGroup>
-                </CollapsibleContent>
-              </Collapsible>
-            </FieldGroup>
+              </AccordionSection>
 
-            <section className="space-y-3 rounded-xl border border-border p-3">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div className="min-w-0">
-                  <h3 className="text-[14px] font-medium">Tool access</h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Agent-level permission rules
-                  </p>
-                </div>
+              <AccordionSection
+                value="permissions"
+                title="Permissions"
+                count={draft.permissions.length}
+              >
+                <div className="space-y-3">
                 <span className="text-[11px] text-muted-foreground">
                   {draft.permissions.length}{" "}
                   {draft.permissions.length === 1 ? "rule" : "rules"}
                   {draft.permissions.length > 0
-                    ? ` · ${permissionCounts.allow} allow · ${permissionCounts.deny} deny · ${permissionCounts.ask} ask`
+                    ? ` · ${permissionCounts.allow}/${permissionCounts.ask}/${permissionCounts.deny}`
                     : ""}
                 </span>
-              </div>
-              <p className="text-[11px] leading-5 text-muted-foreground">
-                Rules apply in order; the last matching rule wins. No match
-                falls back to ask. Allow/deny here only changes this agent&apos;s
-                source rules; policies, instructions, tool exposure, and
-                provider/auth can still block or avoid a tool.
-              </p>
-
-              <Collapsible
-                open={helpOpen}
-                onOpenChange={setHelpOpen}
-                className="rounded-lg border border-border bg-muted/20"
-              >
-                <CollapsibleTrigger
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="h-auto min-h-11 w-full justify-between rounded-lg px-3 py-2 text-start hover:bg-muted/50"
-                    />
-                  }
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <InfoIcon
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-muted-foreground"
-                    />
-                    <span className="text-[12px]">Rule syntax & limits</span>
-                  </span>
-                  <ChevronDownIcon
-                    aria-hidden="true"
-                    className={cn(
-                      "size-4 shrink-0 text-muted-foreground motion-safe:transition-transform",
-                      helpOpen && "rotate-180"
-                    )}
-                  />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-2 border-t border-border px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-                  <p>Actions name tools, including custom plugin and MCP actions. Resources are commands or paths; <code>*</code> matches any sequence and <code>?</code> one character. Shell matches raw command text; path actions expand <code>~</code>/<code>$HOME</code>.</p>
-                  <p>New rules are appended. These are source rules, not the merged engine ruleset. A broad <code>shell</code> + <code>*</code> + <code>allow</code> permits arbitrary commands within the limits of other policies and tool availability.</p>
-                </CollapsibleContent>
-              </Collapsible>
 
               {permissionsReadOnly ? (
-                <p
-                  role="note"
-                  className="rounded-lg border border-border bg-muted/30 p-2.5 text-[11px] leading-5 text-muted-foreground"
-                >
-                  This source&apos;s permission rules contain comments or
-                  unknown fields that cannot be safely preserved here, so they
-                  are read-only. Edit this file manually to change them.{" "}
-                  {selectedReadonly
-                    ? "This whole source is read-only here."
-                    : "Other fields can still be saved."}
+                <p className="text-[11px] text-muted-foreground">
+                  These rules cannot be edited here.
                 </p>
               ) : null}
 
               {draft.permissions.length === 0 ? (
-                <p className="text-[11px] leading-5 text-muted-foreground">
-                  No agent-specific permission rules. No matching rule defaults
-                  to ask.
-                </p>
+                <p className="text-[11px] text-muted-foreground">No rules.</p>
               ) : (
                 <ol className="space-y-2">
                   {draft.permissions.map((rule, index) => {
@@ -1140,7 +1182,7 @@ export function AgentConfigSettings({
                     return (
                       <li
                         key={rule.key}
-                        className="rounded-lg border border-border bg-background/60"
+                        className="rounded-lg border border-border"
                       >
                         {editable ? (
                           <Collapsible
@@ -1180,21 +1222,19 @@ export function AgentConfigSettings({
                                     list="agent-permission-actions"
                                     value={rule.action}
                                     aria-invalid={!rule.action.trim() || undefined}
-                                    aria-describedby={!rule.action.trim() ? `agent-permission-action-error-${index}` : undefined}
                                     onChange={(event) =>
                                       updatePermissionRule(index, {
                                         action: event.target.value,
                                       })
                                     }
-                                    placeholder="shell"
                                     className="h-11! font-mono text-[14px]"
                                     dir="ltr"
                                   />
-                                  <FieldDescription>
-                                    Tool or action name. Custom plugin/MCP
-                                    actions are allowed.
-                                  </FieldDescription>
-                                  {!rule.action.trim() ? <p id={`agent-permission-action-error-${index}`} className="text-xs text-destructive">Action is required.</p> : null}
+                                  {!rule.action.trim() ? (
+                                    <p className="text-xs text-destructive">
+                                      Action is required.
+                                    </p>
+                                  ) : null}
                                 </Field>
                                 <Field>
                                   <FieldLabel
@@ -1206,21 +1246,19 @@ export function AgentConfigSettings({
                                     id={`agent-permission-resource-${index}`}
                                     value={rule.resource}
                                     aria-invalid={!rule.resource.trim() || undefined}
-                                    aria-describedby={!rule.resource.trim() ? `agent-permission-resource-error-${index}` : undefined}
                                     onChange={(event) =>
                                       updatePermissionRule(index, {
                                         resource: event.target.value,
                                       })
                                     }
-                                    placeholder="*"
                                     className="h-11! font-mono text-[14px]"
                                     dir="ltr"
                                   />
-                                  <FieldDescription>
-                                    Command, path, or wildcard pattern. Use the
-                                    syntax guide above for examples.
-                                  </FieldDescription>
-                                  {!rule.resource.trim() ? <p id={`agent-permission-resource-error-${index}`} className="text-xs text-destructive">Resource is required.</p> : null}
+                                  {!rule.resource.trim() ? (
+                                    <p className="text-xs text-destructive">
+                                      Resource is required.
+                                    </p>
+                                  ) : null}
                                 </Field>
                                 <AgentSettingSelect
                                   label="Effect"
@@ -1310,134 +1348,48 @@ export function AgentConfigSettings({
                   <option key={action} value={action} />
                 ))}
               </datalist>
-            </section>
-            </fieldset>
-
-            <div className="sticky bottom-0 z-10 -mx-1 mt-3 space-y-2 border-t border-border bg-background/95 px-1 py-2 backdrop-blur-sm">
-              {patchResult.error ? (
-                <p
-                  role="alert"
-                  className="text-xs break-words text-destructive"
-                >
-                  {patchResult.error}
-                  {(invalidSteps && patchResult.error.startsWith("Steps")) || (invalidRuleIndex >= 0 && patchResult.error.startsWith("Rule")) ? (
-                    <button
-                      type="button"
-                      className="ms-2 underline"
-                      onClick={() => {
-                        const isStepsError = patchResult.error?.startsWith("Steps")
-                        const id = isStepsError ? "agent-config-steps" :
-                          `agent-permission-${draft.permissions[invalidRuleIndex]?.action.trim() ? "resource" : "action"}-${invalidRuleIndex}`
-                        if (isStepsError) setAdvancedOpen(true)
-                        else setExpandedRuleKey(draft.permissions[invalidRuleIndex]?.key ?? null)
-                        requestAnimationFrame(() => document.getElementById(id)?.focus())
-                      }}
-                    >
-                      Go to field
-                    </button>
-                  ) : null}
-                </p>
-              ) : null}
-              {saveError ? (
-                <p
-                  role="alert"
-                  className="text-xs break-words text-destructive"
-                >
-                  {saveError}
-                </p>
-              ) : null}
-              {status ? (
-                <p
-                  role="status"
-                  className="text-[12px] leading-5 break-words text-muted-foreground"
-                >
-                  {status}
-                </p>
-              ) : null}
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[11px] text-muted-foreground">
-                  {patchResult.error
-                    ? "Unsaved changes need attention"
-                    : hasUnsavedDraft
-                      ? "Unsaved changes"
-                      : selectedReadonly
-                        ? "Read-only source"
-                        : "No unsaved changes"}
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    className="h-11 min-w-28 flex-1 sm:flex-none"
-                    disabled={
-                      !dirty ||
-                      busy ||
-                      selectedReadonly ||
-                      Boolean(patchResult.error)
-                    }
-                    onClick={() => void handleSave()}
-                  >
-                    {busy ? (
-                      <LoaderCircleIcon
-                        aria-hidden="true"
-                        className="size-4 animate-spin"
-                      />
-                    ) : null}
-                    Save changes
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11 min-w-28 flex-1 sm:flex-none"
-                    disabled={busy || !hasUnsavedDraft}
-                    onClick={() => {
-                      setDraft(draftFromSource(source))
-                      setExpandedRuleKey(null)
-                      setSaveError(null)
-                      setStatus(null)
-                    }}
-                  >
-                    Discard changes
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11 min-w-28 flex-1 sm:flex-none"
-                    disabled={busy || loading}
-                    onClick={requestReload}
-                  >
-                    <RefreshCwIcon aria-hidden="true" className="size-4" />
-                    Reload
-                  </Button>
-                </div>
               </div>
-            </div>
-          </>
-        ) : null}
-      </FieldGroup>
+              </AccordionSection>
+            </Accordion>
+          </fieldset>
+
+          {deletable ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full text-destructive"
+              disabled={busy || deleting}
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2Icon aria-hidden="true" className="size-4" />
+              Delete agent
+            </Button>
+          ) : null}
+        </>
+      ) : null}
 
       <AlertDialog
-        open={pendingChange !== null}
+        open={deleteOpen}
         onOpenChange={(open) => {
-          if (!open) setPendingChange(null)
+          if (!deleting) setDeleteOpen(open)
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this agent?</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingChange?.kind === "agent"
-                ? `Selecting another agent will discard unsaved edits for ${selected?.id ?? "the current agent"}.`
-                : "Reloading will replace unsaved edits with the file's current content."}
+              Removes {selected?.id ?? "this agent"} from its definition file.
+              This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Keep editing</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={busy}
-              onClick={confirmPendingChange}
+              disabled={deleting}
+              onClick={() => void handleDelete()}
             >
-              Discard and continue
+              {deleting ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

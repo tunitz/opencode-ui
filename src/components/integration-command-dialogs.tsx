@@ -16,7 +16,6 @@ import {
 
 import { ConnectDialog } from "@/components/connect-dialog"
 import { StatsTokenChart } from "@/components/stats-token-chart"
-import { useWebUiPreferences } from "@/components/web-ui-preferences-provider"
 import {
   CommandDialogShell,
   ErrorNotice,
@@ -54,7 +53,6 @@ import { createWorktreeSession } from "@/lib/worktree-session"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import {
   worktreeDisplayName,
-  worktreeParentDirectoryPrefill,
 } from "@/lib/worktree-defaults"
 
 export type IntegrationCommandDialogKind =
@@ -278,7 +276,6 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   const [force, setForce] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const request = useRef(0)
-  const preferencesStore = useWebUiPreferences()
 
   useEffect(() => {
     if (!projectID) return
@@ -303,12 +300,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }, [projectID, reloadKey])
 
   if (!projectID) return null
-  const savedWorktreeParentDirectory = preferencesStore.ready
-    ? worktreeParentDirectoryPrefill(
-        preferencesStore.preferences.global.worktreeParentDirectory
-      )
-    : ""
-  const directory = directoryDraft ?? savedWorktreeParentDirectory
+  const directory = directoryDraft ?? ""
   const invalidDirectory = directory.trim().length > 0 && !isAbsoluteDirectory(directory)
 
   function openCreate() {
@@ -317,7 +309,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }
 
   async function create() {
-    if (!projectID || creating || invalidDirectory || !preferencesStore.ready) return
+    if (!projectID || creating || invalidDirectory) return
     setCreating(true)
     setError(null)
     try {
@@ -376,13 +368,13 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }
 
   async function startSession(entry: WorktreeDirectory) {
-    if (!projectID || sessionPending.current || nav.creating || nav.connection !== "connected" || !preferencesStore.ready) return
+    if (!projectID || sessionPending.current || nav.creating || nav.connection !== "connected") return
     sessionPending.current = true
     setSessionDirectory(entry.directory)
     setSessionError(null)
     setSessionCreateFailed(false)
     try {
-      const result = await createWorktreeSession(entry.directory, projectID, preferencesStore.preferences, nav.createSession, openCode)
+      const result = await createWorktreeSession(entry.directory, projectID, nav.agents, nav.configEntries, nav.createSession, openCode.location)
       if (!result.created) {
         setSessionError(result.error)
         setSessionCreateFailed(result.error === "Session creation failed.")
@@ -446,12 +438,11 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
               <div className="space-y-1.5">
                 <Label htmlFor="worktree-directory">Parent directory</Label>
                 <Input id="worktree-directory" value={directory} onChange={(event) => setDirectoryDraft(event.target.value)} placeholder="Optional absolute parent directory" className="h-11 font-mono text-[12px]" dir="ltr" disabled={creating} aria-invalid={invalidDirectory} />
-                {!preferencesStore.ready ? <p role="status" className="text-xs text-muted-foreground">Loading saved directory defaults…</p> : null}
                 {invalidDirectory ? <p className="text-xs text-destructive">Use an absolute directory or leave this blank.</p> : null}
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setMode("list")} disabled={creating}>Cancel</Button>
-                <Button type="button" className="h-11 px-4" onClick={() => void create()} disabled={creating || invalidDirectory || !preferencesStore.ready} aria-busy={creating}>
+                <Button type="button" className="h-11 px-4" onClick={() => void create()} disabled={creating || invalidDirectory} aria-busy={creating}>
                   {creating ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <WrenchIcon aria-hidden="true" className="size-4" />}
                   Create
                 </Button>
@@ -489,7 +480,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
                           size="icon-lg"
                           className="size-11"
                           aria-label={`New session in ${entry.directory}`}
-                          disabled={Boolean(sessionDirectory) || nav.creating || nav.connection !== "connected" || !preferencesStore.ready}
+                          disabled={Boolean(sessionDirectory) || nav.creating || nav.connection !== "connected"}
                           aria-busy={sessionDirectory === entry.directory}
                           onClick={() => void startSession(entry)}
                         >
@@ -509,7 +500,6 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
               <ErrorNotice error={mode === "list" ? error : null} />
               {sessionDirectory ? <p role="status" className="text-xs text-muted-foreground">Creating session…</p> : null}
               {!sessionDirectory && nav.connection !== "connected" ? <p role="status" className="text-xs text-muted-foreground">Reconnect to create a session.</p> : null}
-              {!sessionDirectory && nav.connection === "connected" && !preferencesStore.ready ? <p role="status" className="text-xs text-muted-foreground">Loading browser preferences…</p> : null}
               {sessionError ? <p role="alert" className="text-xs break-words text-destructive">{sessionCreateFailed ? nav.createError ?? sessionError : sessionError}</p> : null}
             </div>
           )}
