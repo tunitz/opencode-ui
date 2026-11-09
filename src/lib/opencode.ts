@@ -48,6 +48,7 @@ import type {
   SessionRevert,
   SessionStatsInfo,
   SessionTransferData,
+  TokenUsageInfo,
   SkillInfo,
   WorktreeDirectory,
 } from "@opencode/client"
@@ -99,6 +100,7 @@ export type {
   SessionRevert,
   SessionStatsInfo,
   SessionTransferData,
+  TokenUsageInfo,
   SkillInfo,
   WorktreeDirectory,
 }

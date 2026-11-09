@@ -13,11 +13,17 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowDownIcon,
+  ArrowUpIcon,
   BrainIcon,
   CircleAlertIcon,
   ChevronRightIcon,
+  EyeIcon,
   LoaderCircleIcon,
+  PencilLineIcon,
+  QuoteIcon,
+  SearchIcon,
   WrenchIcon,
+  XIcon,
 } from "lucide-react"
 
 import {
@@ -32,6 +38,22 @@ import { ProjectArtifacts } from "@/components/project-artifacts"
 import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Message, MessageContent } from "@/components/ui/message"
 import {
@@ -77,6 +99,18 @@ import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { toolCallSummary, toolInputDetail, toolTextOutput } from "@/lib/tool-details"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { messageText } from "@/lib/command-search"
+import { useToolVisibility } from "@/lib/use-tool-visibility"
+import {
+  shouldHideIntermediateText,
+  TOOL_VISIBILITY_MODES,
+  toolVisibilityLabel,
+  visibleConversationTools,
+  type ToolVisibilityMode,
+} from "@/lib/tool-visibility"
+import { useUndoToast } from "@/lib/undo-toast"
+import { useKeybindings } from "@/lib/use-keybindings"
+import { matchesKeybinding } from "@/lib/keybindings"
 
 type ToolLike = {
   id: string
@@ -140,11 +174,18 @@ function ItemWrap({
   author: "You" | "Assistant"
   children: ReactNode
 }) {
+  const findMatches = useContext(FindMatchContext)
+  const highlighted = findMatches?.has(messageId) === true
   return (
     <div
       data-message-id={messageId}
+      data-author={author === "Assistant" ? "assistant" : "user"}
+      data-find-match={highlighted ? "" : undefined}
       tabIndex={-1}
-      className="min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className={cn(
+        "min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        highlighted && "bg-amber-300/10 ring-1 ring-amber-400/50"
+      )}
     >
       <span className="sr-only">{author}:</span>
       {children}
@@ -154,8 +195,10 @@ function ItemWrap({
 
 const UserMessage = memo(function UserMessage({
   message,
+  onEditFromHere,
 }: {
   message: SessionMessageUser
+  onEditFromHere?: (message: SessionMessageUser) => void
 }) {
   const files = (message.files ?? []).map((file) => ({
     name: file.name ?? null,
@@ -179,6 +222,17 @@ const UserMessage = memo(function UserMessage({
               </BubbleContent>
             </Bubble>
           ) : null}
+          {onEditFromHere ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-11 self-end px-2 text-[11px] text-muted-foreground"
+              onClick={() => onEditFromHere(message)}
+            >
+              <PencilLineIcon aria-hidden="true" className="size-3.5" />
+              Edit from here
+            </Button>
+          ) : null}
         </MessageContent>
       </Message>
     </ItemWrap>
@@ -188,6 +242,14 @@ const UserMessage = memo(function UserMessage({
 const MOBILE_TOOL_DETAIL_LIMIT = 240
 const ToolDetailRowContext = createContext<string | null>(null)
 const ToolDetailPinContext = createContext<(key: string | null) => void>(() => {})
+
+const ToolVisibilityContext = createContext<{
+  mode: ToolVisibilityMode
+  runActive: boolean
+  findOpen: boolean
+}>({ mode: "all", runActive: false, findOpen: false })
+const ToolDiffContext = createContext<(file?: string) => void>(() => {})
+const FindMatchContext = createContext<ReadonlySet<string> | null>(null)
 
 function ToolErrorDetails({ error, name }: { error: string; name: string }) {
   const isDesktop = useIsDesktop()
@@ -239,7 +301,7 @@ function ToolErrorDetails({ error, name }: { error: string; name: string }) {
 }
 
 export function ToolTrace({
-  tools,
+  tools: allTools,
   open,
   onOpenChange,
 }: {
@@ -247,6 +309,13 @@ export function ToolTrace({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const visibility = useContext(ToolVisibilityContext)
+  const tools = visibleConversationTools(
+    allTools,
+    visibility.mode,
+    visibility.runActive,
+    visibility.findOpen
+  )
   const running = tools.some((tool) => tool.status === "running")
   const failed = tools.some((tool) => tool.status === "error")
   const status = failed ? "error" : running ? "running" : "completed"
@@ -256,6 +325,10 @@ export function ToolTrace({
     tools.length === 1
       ? `1 tool call: ${name}${summary ? ` · ${summary}` : ""}`
       : `${tools.length} tool calls: ${tools.map((tool) => toolLabel(tool)).join(", ")}`
+
+  if (tools.length === 0) {
+    return null
+  }
 
   return (
     <Trace>
@@ -308,9 +381,29 @@ export function ToolTrace({
 
 function ToolCallDetails({ tool }: { tool: ToolLike }) {
   const input = toolInputDetail(tool.input)
+  const openDiff = useContext(ToolDiffContext)
+  const candidate =
+    tool.input?.filePath ?? tool.input?.path ?? tool.input?.file
+  const fileChangeTool =
+    tool.files.length > 0 ||
+    Boolean(tool.name && /(?:write|edit|patch|apply|create_file)/i.test(tool.name))
+  const changedFiles =
+    fileChangeTool && typeof candidate === "string" && candidate.trim()
+      ? [candidate]
+      : []
   return <>
     {input !== undefined ? <ToolDetail label="Input" text={input} /> : null}
     {tool.output !== undefined ? <ToolDetail label="Output" text={tool.output} /> : null}
+    {tool.status === "completed" && changedFiles.length > 0 ? (
+      <Button
+        type="button"
+        variant="outline"
+        className="mt-2 h-11 px-3 text-xs"
+        onClick={() => openDiff(changedFiles[0])}
+      >
+        Open turn diff
+      </Button>
+    ) : null}
     {tool.status === "error" && tool.error ? <ToolErrorDetails error={tool.error} name={toolLabel(tool)} /> : null}
   </>
 }
@@ -600,6 +693,7 @@ function MessageItem({
   onToolOpenChange,
   expandedReasoningGroups,
   onReasoningOpenChange,
+  onEditFromHere,
 }: {
   message: SessionMessageInfo
   sessionKey: string | null
@@ -609,9 +703,10 @@ function MessageItem({
   onToolOpenChange: (key: string, open: boolean) => void
   expandedReasoningGroups: Record<string, true>
   onReasoningOpenChange: (key: string, open: boolean) => void
+  onEditFromHere?: (message: SessionMessageUser) => void
 }) {
   if (message.type === "user") {
-    return <UserMessage message={message} />
+    return <UserMessage message={message} onEditFromHere={onEditFromHere} />
   }
 
   if (message.type === "assistant") {
@@ -812,6 +907,7 @@ function RowView({
   expandedReasoningGroups,
   onReasoningOpenChange,
   onLiveTextGrow,
+  onEditFromHere,
 }: {
   row: ConversationRow
   sessionKey: string | null
@@ -822,7 +918,19 @@ function RowView({
   expandedReasoningGroups: Record<string, true>
   onReasoningOpenChange: (key: string, open: boolean) => void
   onLiveTextGrow?: () => void
+  onEditFromHere?: (message: SessionMessageUser) => void
 }) {
+  const visibility = useContext(ToolVisibilityContext)
+  if (
+    shouldHideIntermediateText(visibility.mode, {
+      runActive: visibility.runActive,
+      isFinalAnswer: false,
+      findOpen: visibility.findOpen,
+    }) &&
+    (row.kind === "live-text" || row.kind === "live-reasoning" || row.kind === "live-tools")
+  ) {
+    return null
+  }
   switch (row.kind) {
     case "message":
       return (
@@ -835,6 +943,7 @@ function RowView({
           onToolOpenChange={onToolOpenChange}
           expandedReasoningGroups={expandedReasoningGroups}
           onReasoningOpenChange={onReasoningOpenChange}
+          onEditFromHere={onEditFromHere}
         />
       )
     case "live-user":
@@ -994,11 +1103,16 @@ export function Conversation({
   hasOlder,
   loadingOlder,
   olderError,
+  serverVersion,
   revert,
   focusMessageID,
   onFocusMessageHandled,
   onRetry,
   onLoadOlder,
+  onOpenDiff,
+  onStageRevert,
+  onClearRevert,
+  onRestorePrompt,
 }: {
   sessionKey: string | null
   hasSession: boolean
@@ -1009,16 +1123,36 @@ export function Conversation({
   hasOlder: boolean
   loadingOlder: boolean
   olderError: string | null
+  serverVersion: string | null
   revert: SessionRevert | null
   focusMessageID: string | null
   onFocusMessageHandled: () => void
   onRetry: () => void
   onLoadOlder: () => Promise<void>
+  onOpenDiff?: (path?: string | null) => void
+  onStageRevert?: (messageID: string) => Promise<string | null>
+  onClearRevert?: () => Promise<string | null>
+  onRestorePrompt?: (text: string) => void
 }) {
   recordPerfRender("Conversation")
   // Subscribed here, not in the app shell: streaming tokens re-render the
   // conversation only. Status-only consumers use a status subscription.
   const liveRun = useLiveRun(sessionKey)
+  const { mode: toolMode, setMode: setToolMode, error: toolModeError } =
+    useToolVisibility(serverVersion)
+  const { bindings } = useKeybindings()
+  const undo = useUndoToast()
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState("")
+  const [findIndex, setFindIndex] = useState(0)
+  const findInputRef = useRef<HTMLInputElement>(null)
+  const [selectionQuote, setSelectionQuote] = useState<string | null>(null)
+  const [citationOpen, setCitationOpen] = useState(false)
+  const [citationComment, setCitationComment] = useState("")
+  const [editTarget, setEditTarget] = useState<SessionMessageUser | null>(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const hadRevertRef = useRef(false)
   const visibleMessages = useMemo(() => {
     if (!revert) return messages
     const boundary = messages.findIndex(
@@ -1034,6 +1168,21 @@ export function Conversation({
     () => buildConversationRows(visibleMessages, live.items),
     [visibleMessages, live.items]
   )
+  const findMatches = useMemo(() => {
+    const query = findQuery.trim().toLocaleLowerCase()
+    if (!query) return []
+    return visibleMessages
+      .filter((message) => messageText(message).toLocaleLowerCase().includes(query))
+      .map((message) => message.id)
+      .slice(0, 200)
+  }, [findQuery, visibleMessages])
+  const findMatchSet = useMemo(
+    () => (findOpen ? new Set(findMatches) : null),
+    [findMatches, findOpen]
+  )
+  const runActive =
+    liveRun?.status === "running" || liveRun?.status === "submitting"
+  const zenHidesIntermediate = toolMode === "zen" && runActive && !findOpen
   const projectAttachmentMessages = useMemo(
     () => finalProjectArtifactMessages(visibleMessages, hasOlder),
     [visibleMessages, hasOlder]
@@ -1659,6 +1808,135 @@ export function Conversation({
     setShowJump(false)
   }, [cancelDisclosureAnchor, cancelPrependRestore, sessionKey])
 
+  // Cmd/Ctrl+F opens in-thread find only when the conversation owns focus.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      const findBinding = bindings.find((binding) => binding.command === "find.open")
+      const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
+      if (findBinding && matchesKeybinding(event, findBinding, platform)) {
+        const active = document.activeElement
+        const viewport = viewportRef.current
+        if (!viewport) return
+        if (active && (active === viewport || viewport.contains(active))) {
+          event.preventDefault()
+          setFindOpen(true)
+          requestAnimationFrame(() => findInputRef.current?.focus())
+        }
+      }
+      if (event.key === "Escape" && findOpen && !citationOpen) {
+        // The find input handles its own Escape; this covers focus elsewhere.
+        const active = document.activeElement
+        if (active instanceof Element && active.closest("[data-find-bar]")) return
+        setFindOpen(false)
+        setFindQuery("")
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [bindings, citationOpen, findOpen])
+
+  function captureSelection() {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setSelectionQuote(null)
+      return
+    }
+    const text = selection.toString().trim()
+    if (text.length < 3) {
+      setSelectionQuote(null)
+      return
+    }
+    const anchor = selection.anchorNode
+    const element =
+      anchor instanceof Element ? anchor : (anchor?.parentElement ?? null)
+    const item = element?.closest<HTMLElement>('[data-message-id][data-author="assistant"]')
+    if (!item || !viewportRef.current?.contains(item)) {
+      setSelectionQuote(null)
+      return
+    }
+    setSelectionQuote(text.slice(0, 2000))
+  }
+
+  function jumpToFindMatch(index: number) {
+    if (findMatches.length === 0) return
+    const wrapped = (index + findMatches.length) % findMatches.length
+    setFindIndex(wrapped)
+    const target = findMatches[wrapped]
+    const rowIndex = rowsRef.current.findIndex((row) => row.key === target)
+    if (rowIndex < 0) return
+    virtualizer.scrollToIndex(rowIndex, { align: "center" })
+    window.setTimeout(() => {
+      viewportRef.current
+        ?.querySelector<HTMLElement>(`[data-message-id="${target}"]`)
+        ?.focus({ preventScroll: true })
+    }, 120)
+  }
+
+  async function startEditFromHere(message: SessionMessageUser) {
+    if (!onStageRevert) return
+    hadRevertRef.current = Boolean(revert)
+    setEditTarget(message)
+    setEditError(null)
+    setEditBusy(true)
+    const failure = await onStageRevert(message.id)
+    setEditError(failure)
+    setEditBusy(false)
+  }
+
+  async function finishEdit(keepFiles: boolean) {
+    if (!editTarget) return
+    setEditBusy(true)
+    let failure: string | null = null
+    if (keepFiles && onClearRevert) {
+      failure = await onClearRevert()
+    }
+    if (!failure) onRestorePrompt?.(editTarget.text)
+    setEditBusy(false)
+    if (failure) {
+      setEditError(failure)
+      return
+    }
+    setEditTarget(null)
+  }
+
+  async function cancelEdit() {
+    // A preview staged by this dialog must not silently change the working
+    // tree. A revert that predated the dialog is left untouched.
+    if (!hadRevertRef.current && onClearRevert) {
+      await onClearRevert()
+    }
+    setEditTarget(null)
+    setEditError(null)
+  }
+
+  function insertCitation() {
+    if (!selectionQuote || !sessionKey) return
+    const quoted = selectionQuote
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n> ")
+    const comment = citationComment.trim()
+    const text = `> ${quoted}\n>\n> — Assistant${comment ? `\n\n${comment}` : ""}`
+    window.dispatchEvent(
+      new CustomEvent("composer-citation", {
+        detail: { sessionID: sessionKey, text, quote: selectionQuote },
+      })
+    )
+    setCitationOpen(false)
+    setCitationComment("")
+    setSelectionQuote(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  // Keep the current find result visible when the query or row set changes.
+  useEffect(() => {
+    if (!findOpen || findMatches.length === 0) return
+    jumpToFindMatch(Math.min(findIndex, findMatches.length - 1))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jumpToFindMatch is intentionally ephemeral
+  }, [findOpen, findMatches.length, findQuery])
+
   if (!hasSession) {
     return (
       <ConversationNotice>
@@ -1694,12 +1972,17 @@ export function Conversation({
 
   return (
     <ToolDetailPinContext.Provider value={setSheetPinnedRowKey}>
+    <ToolVisibilityContext.Provider value={{ mode: toolMode, runActive, findOpen }}>
+    <ToolDiffContext.Provider value={(path) => onOpenDiff?.(path ?? null)}>
+    <FindMatchContext.Provider value={findMatchSet}>
     <div className="relative min-h-0 flex-1">
       <div
         ref={viewportRef}
         onScroll={handleScroll}
         onFocus={handleFocus}
         onBlur={handleBlur}
+        onMouseUp={captureSelection}
+        onKeyUp={captureSelection}
         onClickCapture={handleDisclosureClick}
         onWheelCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
         onTouchStartCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
@@ -1710,6 +1993,77 @@ export function Conversation({
         tabIndex={0}
         className="safe-horizontal h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain scrollbar-thin scrollbar-gutter-stable md:px-0"
       >
+        {findOpen ? (
+          <div
+            data-find-bar
+            className="sticky top-0 z-30 mx-1 mb-1 flex items-center gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-sm backdrop-blur"
+          >
+            <SearchIcon aria-hidden="true" className="ms-1 size-4 shrink-0 text-muted-foreground" />
+            <Input
+              ref={findInputRef}
+              value={findQuery}
+              onChange={(event) => {
+                setFindQuery(event.target.value)
+                setFindIndex(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return
+                if (event.key === "Escape") {
+                  event.preventDefault()
+                  setFindOpen(false)
+                  setFindQuery("")
+                  viewportRef.current?.focus()
+                  return
+                }
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  jumpToFindMatch(findIndex + (event.shiftKey ? -1 : 1))
+                }
+              }}
+              aria-label="Find in conversation"
+              placeholder="Find in conversation"
+              className="h-11 min-w-0 flex-1 border-0 bg-transparent text-base shadow-none md:text-sm"
+            />
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {findQuery.trim()
+                ? `${findMatches.length ? findIndex + 1 : 0}/${findMatches.length}`
+                : ""}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              className="size-11 shrink-0 p-0"
+              aria-label="Previous match"
+              disabled={findMatches.length === 0}
+              onClick={() => jumpToFindMatch(findIndex - 1)}
+            >
+              <ArrowUpIcon aria-hidden="true" className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="size-11 shrink-0 p-0"
+              aria-label="Next match"
+              disabled={findMatches.length === 0}
+              onClick={() => jumpToFindMatch(findIndex + 1)}
+            >
+              <ArrowDownIcon aria-hidden="true" className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="size-11 shrink-0 p-0"
+              aria-label="Close find"
+              onClick={() => {
+                setFindOpen(false)
+                setFindQuery("")
+                viewportRef.current?.focus()
+              }}
+            >
+              <XIcon aria-hidden="true" className="size-4" />
+            </Button>
+          </div>
+        ) : null}
         {olderError || loadingOlder || hasOlder ? (
           <div className="py-2 text-center">
             <Button
@@ -1766,6 +2120,7 @@ export function Conversation({
                   expandedReasoningGroups={expandedReasoningGroups}
                   onReasoningOpenChange={handleReasoningOpenChange}
                   onLiveTextGrow={followIfAtBottom}
+                  onEditFromHere={(message) => void startEditFromHere(message)}
                 /></ToolDetailRowContext.Provider>
               </div>
             )
@@ -1802,6 +2157,25 @@ export function Conversation({
             <p className="mt-1">Use /redo to clear the staged revert and restore the messages/files.</p>
           </div>
         ) : null}
+        {zenHidesIntermediate ? (
+          <div
+            role="status"
+            className="mx-1 my-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+          >
+            <span>Zen hides intermediate text and tools while the turn runs.</span>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 px-3 text-xs"
+              onClick={() => {
+                setFindOpen(true)
+                requestAnimationFrame(() => findInputRef.current?.focus())
+              }}
+            >
+              Reveal with Find
+            </Button>
+          </div>
+        ) : null}
         {liveRun ? (
           <div className="py-3">
             {liveRun.notices.length > 0 && liveRun.status !== "notice" ? (
@@ -1820,6 +2194,155 @@ export function Conversation({
           </div>
         ) : null}
       </div>
+      <div className="absolute top-2 end-2 z-20">
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-lg"
+                aria-label={`Tool visibility: ${toolVisibilityLabel(toolMode)}`}
+                className="size-11 rounded-full bg-background/80 text-muted-foreground backdrop-blur"
+              />
+            }
+          >
+            <EyeIcon aria-hidden="true" className="size-4" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" side="bottom" className="min-w-52">
+            {TOOL_VISIBILITY_MODES.map((mode) => (
+              <DropdownMenuItem
+                key={mode}
+                className="min-h-11"
+                aria-checked={mode === toolMode}
+                onClick={() => {
+                  const previous = toolMode
+                  if (setToolMode(mode)) {
+                    undo.showUndo(
+                      `Tool visibility: ${toolVisibilityLabel(mode)}`,
+                      () => setToolMode(previous)
+                    )
+                  }
+                }}
+              >
+                <span className="w-4 text-center" aria-hidden="true">
+                  {mode === toolMode ? "✓" : ""}
+                </span>
+                {toolVisibilityLabel(mode)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {toolModeError ? (
+        <p role="alert" className="absolute top-14 end-2 z-20 max-w-56 rounded-lg bg-background px-2 py-1 text-[10px] text-destructive shadow">
+          {toolModeError}
+        </p>
+      ) : null}
+      {selectionQuote && !citationOpen ? (
+        <Button
+          type="button"
+          variant="secondary"
+          className="absolute bottom-16 start-1/2 z-30 h-11 -translate-x-1/2 gap-1.5 rounded-full px-3 text-xs shadow-lg"
+          onClick={() => {
+            setCitationComment("")
+            setCitationOpen(true)
+          }}
+        >
+          <QuoteIcon aria-hidden="true" className="size-4" />
+          Cite selection
+        </Button>
+      ) : null}
+      <Dialog open={citationOpen} onOpenChange={setCitationOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add citation</DialogTitle>
+            <DialogDescription>
+              The quote is inserted into the composer as attributed plain text.
+            </DialogDescription>
+          </DialogHeader>
+          <blockquote
+            dir="auto"
+            className="max-h-40 overflow-y-auto rounded-lg border-s-2 border-border bg-muted/40 px-3 py-2 text-[13px] whitespace-pre-wrap"
+          >
+            {selectionQuote}
+          </blockquote>
+          <Textarea
+            value={citationComment}
+            onChange={(event) => setCitationComment(event.target.value)}
+            aria-label="Citation comment"
+            placeholder="Optional comment"
+            rows={2}
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" className="h-11" onClick={() => setCitationOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" className="h-11" onClick={insertCitation}>
+              Insert citation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={Boolean(editTarget)}
+        onOpenChange={(open) => {
+          if (!open) void cancelEdit()
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit from here</DialogTitle>
+            <DialogDescription>
+              Staged with the native revert boundary. Confirm before anything is
+              kept.
+            </DialogDescription>
+          </DialogHeader>
+          {editTarget ? (
+            <>
+              <p dir="auto" className="max-h-32 overflow-y-auto rounded-lg bg-muted/50 px-3 py-2 text-[13px] whitespace-pre-wrap">
+                {editTarget.text}
+              </p>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                {editBusy ? (
+                  <p role="status" className="flex items-center gap-2">
+                    <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+                    Staging native revert preview…
+                  </p>
+                ) : revert?.messageID === editTarget.id ? (
+                  <p role="status">
+                    Preview: {revert.files?.length ?? 0} file
+                    {(revert.files?.length ?? 0) === 1 ? "" : "s"} affected by the native revert.
+                  </p>
+                ) : (
+                  <p role="status">No file effects were reported for this boundary.</p>
+                )}
+                {revert?.files?.length ? (
+                  <ul aria-label="Revert preview files" className="max-h-24 overflow-y-auto">
+                    {revert.files.slice(0, 8).map((file) => (
+                      <li key={file.file} dir="ltr" className="truncate font-mono text-[10px]">
+                        {file.file} (+{file.additions}/−{file.deletions})
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+              {editError ? <p role="alert" className="text-xs text-destructive">{editError}</p> : null}
+            </>
+          ) : null}
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void cancelEdit()}>
+              Cancel
+            </Button>
+            <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void finishEdit(true)}>
+              Keep files, restore prompt
+            </Button>
+            <Button type="button" className="h-11" disabled={editBusy} onClick={() => void finishEdit(false)}>
+              Revert files and restore prompt
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {showJump ? (
         <Button
           type="button"
@@ -1832,6 +2355,9 @@ export function Conversation({
         </Button>
       ) : null}
     </div>
+    </FindMatchContext.Provider>
+    </ToolDiffContext.Provider>
+    </ToolVisibilityContext.Provider>
     </ToolDetailPinContext.Provider>
   )
 }

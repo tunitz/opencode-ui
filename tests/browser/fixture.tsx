@@ -102,7 +102,11 @@ function useSyntheticNav(initialInspectorOpen = false) {
   const [activeSessionID, setActiveSessionID] = useState<string | null>("s-alpha")
   const [scope, setScope] = useState<OpenCodeController["scope"]>("all")
   const [inspectorOpen, setInspectorOpen] = useState(initialInspectorOpen)
-  const [inspectorTab, setInspectorTab] = useState<"files" | "changes">("changes")
+  const [inspectorTab, setInspectorTab] = useState<
+    "command" | "files" | "changes" | "activity" | "session"
+  >("changes")
+  const [changesScope, setChangesScope] = useState<"working" | "turn">("working")
+  const [diffFocusPath, setDiffFocusPath] = useState<string | null>(null)
 
   const activeSession =
     sessions.find((entry) => entry.id === activeSessionID) ?? null
@@ -153,6 +157,16 @@ function useSyntheticNav(initialInspectorOpen = false) {
     attachments: [],
     inspectorOpen,
     inspectorTab,
+    changesScope,
+    diffFocusPath,
+    archivedSessions: [] as SessionInfo[],
+    archivedStatus: "ready" as const,
+    archivedError: null,
+    inbox: [],
+    inboxStatus: "ready" as const,
+    inboxError: null,
+    inboxBusy: {},
+    composerRestore: null,
     selectProject: async (projectID: string) => {
       log("selectProject", projectID)
       setScope("project")
@@ -192,16 +206,48 @@ function useSyntheticNav(initialInspectorOpen = false) {
       return null
     },
     sendPrompt: async () => null,
-    openInspector: (tab: "files" | "changes") => {
+    openInspector: (tab: "command" | "files" | "changes" | "activity" | "session") => {
       log("openInspector", tab)
       setInspectorTab(tab)
       setInspectorOpen(true)
     },
+    openInspectorDiff: (path?: string | null) => {
+      log("openInspectorDiff", path ?? undefined)
+      setDiffFocusPath(path ?? null)
+      setChangesScope("turn")
+      setInspectorTab("changes")
+      setInspectorOpen(true)
+    },
+    setChangesScope: (scope: "working" | "turn") => {
+      log("setChangesScope", scope)
+      setChangesScope(scope)
+    },
+    setSessionArchived: async (sessionID: string, archived: boolean) => {
+      log("setSessionArchived", `${sessionID}:${archived}`)
+      return null
+    },
+    loadArchivedSessions: async () => {
+      log("loadArchivedSessions")
+      return null
+    },
+    unarchiveSession: async (sessionID: string) => {
+      log("unarchiveSession", sessionID)
+      return null
+    },
+    loadInbox: async () => null,
+    cancelInboxItem: async () => null,
+    takeBackInboxItem: async () => null,
+    steerInboxItem: async () => null,
+    clearComposerRestore: () => undefined,
+    loadTurnDiff: async () => ({ ok: false, reason: "Synthetic turn diff is unavailable." }),
+    loadSessionContext: async () => null,
+    loadSessionStats: async () => null,
+    searchSessions: async () => ({ ok: true, sessions: [] }),
     closeInspector: () => {
       log("closeInspector")
       setInspectorOpen(false)
     },
-    setInspectorTab: (tab: "files" | "changes") => {
+    setInspectorTab: (tab: "command" | "files" | "changes" | "activity" | "session") => {
       log("setInspectorTab", tab)
       setInspectorTab(tab)
     },
@@ -421,7 +467,7 @@ function ComposerFixture() {
       <div className="flex h-svh min-h-0">
         <SessionSidebar nav={nav} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <AppHeader nav={nav} />
+          <AppHeader nav={nav} onOpenSettings={() => undefined} onOpenWorktrees={() => undefined} />
           <main className="flex min-h-0 flex-1 flex-col md:px-6 lg:px-8">
             <Composer nav={nav} />
           </main>
@@ -470,6 +516,7 @@ function ConversationFixture({ history = false, longToolErrors = false }: { hist
           hasOlder={hasOlder}
           loadingOlder={loadingOlder}
           olderError={null}
+          serverVersion="fixture"
           revert={null}
           focusMessageID={null}
           onFocusMessageHandled={() => undefined}
@@ -494,6 +541,7 @@ function ChangesFixture() {
     <Providers nav={nav}>
       <div className="h-svh overflow-y-auto p-4">
         <ChangesPanel
+          nav={nav}
           session={sessions[0]}
           onOpenFile={(path) => {
             qaWindow.__qa.openedFiles.push(path)
@@ -516,7 +564,7 @@ function InspectorFixture() {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center gap-2 border-b border-border p-2">
             <span className="text-sm">Synthetic inspector host</span>
-            <SessionInspector nav={nav} />
+            <SessionInspector nav={nav} onOpenSettings={() => undefined} onOpenWorktrees={() => undefined} />
           </header>
           <main className="p-4 text-xs">
             <p data-qa-active>Active: {nav.activeSessionID}</p>
@@ -525,7 +573,7 @@ function InspectorFixture() {
             </p>
           </main>
         </div>
-        <SessionInspectorPanel nav={nav} />
+        <SessionInspectorPanel nav={nav} onOpenSettings={() => undefined} onOpenWorktrees={() => undefined} />
       </div>
     </Providers>
   )

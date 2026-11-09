@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { AgentConfigSettings } from "@/components/agent-config-settings"
 import { NotificationsSettings } from "@/components/notifications-settings"
+import { KeybindingsSettings } from "@/components/keybindings-settings"
 import {
   fixedDesktopSettingsStyle,
   fixedMobileDrawerStyle,
@@ -44,6 +45,7 @@ function PreferencesPanel({
 
   const isAgentsTab = tab === "agents"
   const isNotificationsTab = tab === "notifications"
+  const isKeysTab = tab === "keys"
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -53,7 +55,7 @@ function PreferencesPanel({
             id="preferences-title"
             className="text-[17px] leading-6 font-semibold tracking-tight"
           >
-            {isAgentsTab ? "Agent definitions" : "Preferences"}
+            {isAgentsTab ? "Agent definitions" : isKeysTab ? "Keyboard shortcuts" : "Preferences"}
           </h2>
           <p className="text-[12px] leading-5 text-muted-foreground">
             {isAgentsTab
@@ -106,6 +108,13 @@ function PreferencesPanel({
           >
             Alerts
           </TabsTrigger>
+          <TabsTrigger
+            value="keys"
+            aria-label="Keyboard shortcuts"
+            className="px-1 text-[12px]"
+          >
+            Keys
+          </TabsTrigger>
         </TabsList>
         <ScrollArea
           viewportClassName="h-full"
@@ -113,6 +122,9 @@ function PreferencesPanel({
         >
           <TabsContent value="notifications">
             <NotificationsSettings />
+          </TabsContent>
+          <TabsContent value="keys">
+            <KeybindingsSettings />
           </TabsContent>
           <TabsContent value="agents" keepMounted>
             <AgentConfigSettings

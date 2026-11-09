@@ -98,12 +98,12 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
 import { recordPerfRender } from "@/lib/perf-probe"
-import { parseSessionShortcuts, shortcutStorageKey, updateSessionShortcut, type SessionShortcuts, type SessionShortcut } from "@/lib/session-shortcuts"
+import type { SessionShortcuts, SessionShortcut } from "@/lib/session-shortcuts"
+import { useSessionShortcuts } from "@/lib/use-session-shortcuts"
 import { worktreeNavigationProject } from "@/lib/worktree-navigation"
 
 export type SessionNavProps = OpenCodeController
 
-const shortcutsChanged = "opencode-ui:session-shortcuts-changed"
 const SIDEBAR_COLLAPSED_KEY = "opencode-ui:desktop-sidebar-collapsed"
 
 function readSidebarCollapsed(): boolean {
@@ -114,38 +114,6 @@ function readSidebarCollapsed(): boolean {
     return false
   }
 }
-function subscribeShortcuts(callback: () => void) {
-  window.addEventListener("storage", callback)
-  window.addEventListener(shortcutsChanged, callback)
-  return () => {
-    window.removeEventListener("storage", callback)
-    window.removeEventListener(shortcutsChanged, callback)
-  }
-}
-
-function useSessionShortcuts(version: string | null) {
-  const key = version ? shortcutStorageKey(window.location.origin, version) : null
-  const raw = useSyncExternalStore(subscribeShortcuts, () => {
-    try { return key ? localStorage.getItem(key) ?? "" : "" } catch { return "" }
-  }, () => "")
-  const shortcuts = useMemo(() => parseSessionShortcuts(raw), [raw])
-  const [error, setError] = useState<string | null>(null)
-  function update(id: string, change: Partial<SessionShortcut>) {
-    if (!key) { setError("Session labels and pins are unavailable until the server version is known."); return false }
-    try {
-      const current = parseSessionShortcuts(localStorage.getItem(key))
-      localStorage.setItem(key, JSON.stringify(updateSessionShortcut(current, id, change)))
-      window.dispatchEvent(new Event(shortcutsChanged))
-      setError(null)
-      return true
-    } catch {
-      setError("Could not save session labels and pins in this browser.")
-      return false
-    }
-  }
-  return { shortcuts, update, error }
-}
-
 function ConnectionRetry({ onRetry }: { onRetry: () => void }) {
   return (
     <Button
@@ -810,6 +778,7 @@ function SessionList({
   const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
+  const [archivedOpen, setArchivedOpen] = useState(false)
   const onSelectRef = useRef(onSelect)
   useEffect(() => {
     onSelectRef.current = onSelect
@@ -1035,6 +1004,69 @@ function SessionList({
                   </AccordionSection>
                 )
               })}
+            </Accordion>
+          ) : null}
+          {!searching ? (
+            <Accordion
+              key="archived"
+              value={archivedOpen ? ["archived"] : []}
+              onValueChange={(value) => {
+                const next = value.includes("archived")
+                setArchivedOpen(next)
+                if (next) void nav.loadArchivedSessions()
+              }}
+              className="mt-2 space-y-2 pb-3"
+            >
+              <AccordionSection
+                value="archived"
+                title="Archived"
+                count={nav.archivedStatus === "loading" ? undefined : nav.archivedSessions.length}
+                contentClassName="p-1"
+              >
+                {nav.archivedStatus === "error" ? (
+                  <div role="alert" className="space-y-1 px-2 py-1 text-xs text-destructive">
+                    <p className="break-words">{nav.archivedError ?? "Could not load archived sessions."}</p>
+                    <Button variant="outline" className="h-11 px-3 text-xs" onClick={() => void nav.loadArchivedSessions()}>
+                      Retry
+                    </Button>
+                  </div>
+                ) : null}
+                {nav.archivedStatus === "loading" && nav.archivedSessions.length === 0 ? (
+                  <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
+                    Loading archived sessions…
+                  </p>
+                ) : null}
+                {nav.archivedSessions.length === 0 && (nav.archivedStatus === "ready" || nav.archivedStatus === "idle") ? (
+                  <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
+                    No archived sessions in this scope.
+                  </p>
+                ) : null}
+                <ul className="space-y-0.5" aria-label="Archived sessions">
+                  {nav.archivedSessions.map((session) => (
+                    <li key={session.id} className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-11 min-w-0 flex-1 justify-start px-2.5 text-start font-normal"
+                        title={session.id}
+                        onClick={() => void nav.openSessionByID(session.id)}
+                      >
+                        <span dir="auto" className="min-w-0 truncate text-[13px]">
+                          {session.title?.trim() || session.id}
+                        </span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 shrink-0 px-2 text-[11px]"
+                        onClick={() => void nav.unarchiveSession(session.id)}
+                      >
+                        Unarchive
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </AccordionSection>
             </Accordion>
           ) : null}
         </nav>

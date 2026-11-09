@@ -32,6 +32,8 @@ import {
 } from "@/lib/files"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { insertProjectReference, isSafeReferencePath } from "@/lib/file-references"
+import { readCurrentKeybindings } from "@/lib/use-keybindings"
+import { matchesKeybinding } from "@/lib/keybindings"
 import { cn } from "@/lib/utils"
 
 type LoadStatus = "idle" | "loading" | "ready" | "error"
@@ -655,7 +657,73 @@ function DiffCounts({
   )
 }
 
-function DiffPatch({ file }: { file: FileDiffInfo }) {
+export function countDiffMatches(patch: string, find: string): number {
+  const query = find.trim()
+  if (!query) return 0
+  const needle = query.toLocaleLowerCase()
+  return renderPatch(patch).lines.reduce((total, line) => {
+    const text = line.text.toLocaleLowerCase()
+    let count = 0
+    let index = text.indexOf(needle)
+    while (index >= 0) {
+      count += 1
+      index = text.indexOf(needle, index + needle.length)
+    }
+    return total + count
+  }, 0)
+}
+
+function HighlightedLine({
+  text,
+  find,
+  startIndex,
+  activeMatch,
+}: {
+  text: string
+  find: string
+  startIndex: number
+  activeMatch: number
+}) {
+  const query = find.trim()
+  if (!query) return <>{text || " "}</>
+  const lower = text.toLocaleLowerCase()
+  const needle = query.toLocaleLowerCase()
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  let match = startIndex
+  let index = lower.indexOf(needle)
+  while (index >= 0) {
+    if (index > cursor) parts.push(text.slice(cursor, index))
+    const selected = match === activeMatch
+    parts.push(
+      <mark
+        key={`${match}:${index}`}
+        data-diff-match={match}
+        className={cn(
+          "rounded-sm bg-amber-300/70 text-foreground dark:bg-amber-400/40",
+          selected && "outline-2 outline-amber-500"
+        )}
+      >
+        {text.slice(index, index + needle.length)}
+      </mark>
+    )
+    match += 1
+    cursor = index + needle.length
+    index = lower.indexOf(needle, cursor)
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return <>{parts.length ? parts : " "}</>
+}
+
+function DiffPatch({
+  file,
+  find = "",
+  activeMatch = 0,
+}: {
+  file: FileDiffInfo
+  find?: string
+  activeMatch?: number
+}) {
   const rendered = useMemo(() => renderPatch(file.patch), [file.patch])
   if (!file.patch.trim()) {
     return (
@@ -663,6 +731,15 @@ function DiffPatch({ file }: { file: FileDiffInfo }) {
         No textual patch is available for this file.
       </p>
     )
+  }
+  const matchStarts: number[] = []
+  const needle = find.trim().toLocaleLowerCase()
+  let matchCursor = 0
+  for (const line of rendered.lines) {
+    matchStarts.push(matchCursor)
+    if (needle) {
+      matchCursor += line.text.toLocaleLowerCase().split(needle).length - 1
+    }
   }
   return (
     <>
@@ -677,35 +754,49 @@ function DiffPatch({ file }: { file: FileDiffInfo }) {
         aria-label={`Diff for ${file.file}`}
         className="max-h-[45svh] overflow-auto rounded-xl border border-border/70 bg-muted/40 p-3 font-mono text-[13px] leading-5 whitespace-pre"
       >
-        {rendered.lines.map((line) => (
-          <span
-            key={line.key}
-            className={cn(
-              "block",
-              line.kind === "addition" && "bg-diff-added/10 text-diff-added",
-              line.kind === "deletion" && "bg-diff-removed/10 text-diff-removed",
-              line.kind === "hunk" && "text-sky-700 dark:text-sky-300",
-              line.kind === "meta" && "text-muted-foreground"
-            )}
-          >
-            {line.text || " "}
-          </span>
-        ))}
+        {rendered.lines.map((line, lineIndex) => {
+          const start = matchStarts[lineIndex] ?? 0
+          return (
+            <span
+              key={line.key}
+              className={cn(
+                "block",
+                line.kind === "addition" && "bg-diff-added/10 text-diff-added",
+                line.kind === "deletion" && "bg-diff-removed/10 text-diff-removed",
+                line.kind === "hunk" && "text-sky-700 dark:text-sky-300",
+                line.kind === "meta" && "text-muted-foreground"
+              )}
+            >
+              <HighlightedLine
+                text={line.text}
+                find={find}
+                startIndex={start}
+                activeMatch={activeMatch}
+              />
+            </span>
+          )
+        })}
       </pre>
     </>
   )
 }
 
 export function ChangesPanel({
+  nav,
   session,
   refreshRef,
   onOpenFile,
 }: {
+  nav: OpenCodeController
   session: SessionInfo
   refreshRef?: { current: InspectorPanelHandle | null }
   onOpenFile?: (path: string) => void
 }) {
   const directory = session.location?.directory ?? null
+  const scope = nav?.changesScope ?? "working"
+  const focusPath = nav?.diffFocusPath ?? null
+  const loadTurnDiff = nav?.loadTurnDiff
+  const context = JSON.stringify([session.id, directory, scope])
   const [files, setFiles] = useState<FileDiffInfo[]>([])
   const [filesContext, setFilesContext] = useState<string | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -713,15 +804,49 @@ export function ChangesPanel({
   const [error, setError] = useState<string | null>(null)
   const [branch, setBranch] = useState<string | null | undefined>(undefined)
   const [reloadKey, setReloadKey] = useState(0)
+  const [fallbackReason, setFallbackReason] = useState<string | null>(null)
+  const [find, setFind] = useState("")
+  const [activeMatch, setActiveMatch] = useState(0)
+  const findRef = useRef<HTMLInputElement>(null)
   const request = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
-  const context = JSON.stringify([session.id, directory])
 
   const loadDiff = useCallback(async (): Promise<string | null | undefined> => {
     const requestID = ++request.current
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    setStatus("loading")
+    setError(null)
+    setFallbackReason(null)
+
+    if (scope === "turn") {
+      // Native session diff with no explicit boundary means the latest turn;
+      // a loaded message id would point at the wrong turn while a new prompt
+      // is still running.
+      if (!loadTurnDiff) {
+        setFallbackReason("Turn diff is unavailable in this host. Showing the working tree.")
+      } else {
+        const result = await loadTurnDiff(session.id)
+        if (requestID !== request.current) return undefined
+        if (result.ok) {
+          setFiles(result.files)
+          setFilesContext(context)
+          setSelectedPath((current) =>
+            current && result.files.some((file) => file.file === current)
+              ? current
+              : (focusPath && result.files.some((file) => file.file === focusPath)
+                  ? focusPath
+                  : (result.files[0]?.file ?? null))
+          )
+          setStatus("ready")
+          return null
+        }
+        setFallbackReason(
+          `Turn diff unavailable: ${result.reason}. Showing the working tree.`
+        )
+      }
+    }
 
     const url = directory ? vcsDiffUrl(directory) : null
 
@@ -741,12 +866,9 @@ export function ChangesPanel({
     ).then((body) => {
       if (requestID === request.current) setBranch(body.data?.branch?.current || null)
     }).catch(() => {
-      // The diff can still be shown when branch information is unavailable.
       if (requestID === request.current && !controller.signal.aborted) setBranch(null)
     })
 
-    setStatus("loading")
-    setError(null)
     try {
       const body = await apiJson<{ data: FileDiffInfo[] }>(url, controller.signal)
       if (requestID !== request.current) return undefined
@@ -756,7 +878,9 @@ export function ChangesPanel({
       setSelectedPath((current) =>
         current && next.some((file) => file.file === current)
           ? current
-          : (next[0]?.file ?? null)
+          : (focusPath && next.some((file) => file.file === focusPath)
+              ? focusPath
+              : (next[0]?.file ?? null))
       )
       setStatus("ready")
       return null
@@ -767,7 +891,7 @@ export function ChangesPanel({
       setError(message)
       return message
     }
-  }, [context, directory])
+  }, [context, directory, focusPath, loadTurnDiff, scope, session.id])
 
   const cancelRequest = useCallback(() => {
     request.current++
@@ -794,20 +918,116 @@ export function ChangesPanel({
   const visibleFiles = filesContext === context ? files : []
   const totals = diffTotals(visibleFiles)
   const selected = visibleFiles.find((file) => file.file === selectedPath) ?? null
+  const matchCount = selected ? countDiffMatches(selected.patch, find) : 0
+
+  useEffect(() => {
+    if (!find.trim()) return
+    const container = document.querySelector<HTMLElement>(
+      `[data-diff-match="${Math.min(activeMatch, Math.max(0, matchCount - 1))}"]`
+    )
+    container?.scrollIntoView({ block: "nearest" })
+  }, [activeMatch, find, matchCount])
+
+  function stepMatch(direction: 1 | -1) {
+    if (matchCount === 0) return
+    setActiveMatch((current) => (current + direction + matchCount) % matchCount)
+  }
 
   return (
-    <div className="space-y-3">
+    <div
+      className="space-y-3"
+      data-diff-scope
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return
+        const binding = readCurrentKeybindings().find(
+          (candidate) => candidate.command === "find.open"
+        )
+        const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
+        if (binding && matchesKeybinding(event.nativeEvent, binding, platform)) {
+          event.preventDefault()
+          findRef.current?.focus()
+        }
+      }}
+    >
+      <div
+        role="group"
+        aria-label="Diff scope"
+        className="flex gap-1 rounded-full bg-muted p-1"
+      >
+        <Button
+          type="button"
+          variant={scope === "working" ? "secondary" : "ghost"}
+          aria-pressed={scope === "working"}
+          className="h-11 min-w-0 flex-1 rounded-full px-3 text-xs"
+          onClick={() => nav?.setChangesScope("working")}
+        >
+          Working tree
+        </Button>
+        <Button
+          type="button"
+          variant={scope === "turn" ? "secondary" : "ghost"}
+          aria-pressed={scope === "turn"}
+          className="h-11 min-w-0 flex-1 rounded-full px-3 text-xs"
+          onClick={() => nav?.setChangesScope("turn")}
+        >
+          This turn
+        </Button>
+      </div>
+
       <p className="text-xs text-muted-foreground">
         Branch: <span dir="auto" className="font-medium text-foreground">{branch === undefined ? "Loading…" : branch ?? "Unavailable"}</span>
       </p>
       <p className="text-[11px] text-muted-foreground">
-        VCS HEAD to working copy — not the session turn.
+        {scope === "working"
+          ? "VCS HEAD to working copy — not the session turn."
+          : "Native session diff for the latest turn."}
       </p>
+      {fallbackReason ? (
+        <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-foreground">
+          {fallbackReason}
+        </p>
+      ) : null}
+
+      <form
+        className="flex items-center gap-1"
+        onSubmit={(event) => {
+          event.preventDefault()
+          stepMatch(1)
+        }}
+      >
+        <Input
+          ref={findRef}
+          data-diff-find
+          value={find}
+          onChange={(event) => {
+            setFind(event.target.value)
+            setActiveMatch(0)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault()
+              stepMatch(event.shiftKey ? -1 : 1)
+            }
+          }}
+          placeholder="Find in diff"
+          aria-label="Find in diff"
+          className="h-11 min-w-0 flex-1 text-base md:text-sm"
+        />
+        <span className="min-w-12 shrink-0 text-center text-[11px] tabular-nums text-muted-foreground">
+          {find.trim() ? `${matchCount ? activeMatch + 1 : 0}/${matchCount}` : ""}
+        </span>
+        <Button type="button" variant="outline" className="h-11 px-2 text-xs" aria-label="Previous diff match" disabled={matchCount === 0} onClick={() => stepMatch(-1)}>
+          ↑
+        </Button>
+        <Button type="button" variant="outline" className="h-11 px-2 text-xs" aria-label="Next diff match" disabled={matchCount === 0} onClick={() => stepMatch(1)}>
+          ↓
+        </Button>
+      </form>
 
       {status === "loading" ? (
         <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
           <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-          {visibleFiles.length > 0 ? "Refreshing diff; showing previous results…" : "Loading working-tree diff…"}
+          {visibleFiles.length > 0 ? "Refreshing diff; showing previous results…" : "Loading diff…"}
         </p>
       ) : null}
       {status === "error" ? (
@@ -826,7 +1046,7 @@ export function ChangesPanel({
       {status === "ready" && filesContext === context && visibleFiles.length === 0 ? (
         <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
           <FileQuestionIcon aria-hidden="true" className="size-4" />
-          No changes in this working tree.
+          {scope === "turn" ? "No changes in this turn." : "No changes in this working tree."}
         </p>
       ) : null}
       {visibleFiles.length > 0 ? (
@@ -842,7 +1062,10 @@ export function ChangesPanel({
                   variant={selectedPath === file.file ? "secondary" : "ghost"}
                   aria-pressed={selectedPath === file.file}
                   className="h-auto min-h-11 w-full justify-start gap-2 rounded-lg px-2 py-1.5 text-start font-normal"
-                  onClick={() => setSelectedPath(file.file)}
+                  onClick={() => {
+                    setSelectedPath(file.file)
+                    setActiveMatch(0)
+                  }}
                 >
                   <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] uppercase">
                     {file.status}
@@ -865,7 +1088,7 @@ export function ChangesPanel({
                   Open read-only file
                 </Button>
               ) : null}
-              <DiffPatch file={selected} />
+              <DiffPatch file={selected} find={find} activeMatch={activeMatch} />
             </section>
           ) : null}
         </>

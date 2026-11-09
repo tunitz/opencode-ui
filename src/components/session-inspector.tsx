@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from "react"
 import {
-  FileTextIcon,
-  GitCompareArrowsIcon,
   ListTreeIcon,
   LoaderCircleIcon,
+  SettingsIcon,
+  FolderGit2Icon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   RefreshCwIcon,
   XIcon,
 } from "lucide-react"
 
+import type { InspectorPanelHandle } from "@/components/files-panel"
 import {
-  ChangesPanel,
-  FilesPanel,
-  type InspectorPanelHandle,
-} from "@/components/files-panel"
-import { WorkingTreeShortcut } from "@/components/working-tree-shortcut"
+  getInspectorTab,
+  INSPECTOR_TABS,
+} from "@/components/inspector/registry"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -26,14 +25,10 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
+import { contextLimitForModel, formatTokenCount } from "@/lib/context-usage"
+import { INSPECTOR_TAB_LABELS, type InspectorTab } from "@/lib/inspector-tabs"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
@@ -48,6 +43,26 @@ function focusInspectorTrigger() {
   })
 }
 
+function liveStatus(nav: OpenCodeController): string {
+  if (nav.runningSessionIDs[nav.activeSessionID ?? ""]) return "Running"
+  if (nav.inbox.length > 0) return `${nav.inbox.length} queued`
+  if (nav.pendingPermissions.length + nav.pendingForms.length > 0) {
+    return "Needs an answer"
+  }
+  return "Idle"
+}
+
+function contextSummary(nav: OpenCodeController): string | null {
+  const session = nav.activeSession
+  if (!session) return null
+  const limit = contextLimitForModel(nav.models, session.model)
+  const tokens = session.tokens
+  if (!tokens) return null
+  const used = tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
+  if (!limit) return `${formatTokenCount(used)} tokens`
+  return `${Math.min(100, Math.round((used / limit) * 100))}% ctx`
+}
+
 function InspectorTrigger({
   nav,
   sheet = false,
@@ -60,7 +75,7 @@ function InspectorTrigger({
     <Button
       variant="ghost"
       size="icon-lg"
-      aria-label="Session inspector: files and working tree"
+      aria-label="Session inspector"
       data-inspector-trigger=""
       aria-expanded={sheet ? undefined : open}
       aria-controls={!sheet && open ? INSPECTOR_ID : undefined}
@@ -68,11 +83,8 @@ function InspectorTrigger({
         sheet
           ? undefined
           : () => {
-              if (open) {
-                nav.closeInspector()
-              } else {
-                nav.openInspector(nav.inspectorTab)
-              }
+              if (open) nav.closeInspector()
+              else nav.openInspector(nav.inspectorTab)
             }
       }
       className="size-11 rounded-full text-foreground"
@@ -81,9 +93,7 @@ function InspectorTrigger({
 
   return (
     <Tooltip>
-      <TooltipTrigger
-        render={sheet ? <SheetTrigger render={button} /> : button}
-      >
+      <TooltipTrigger render={sheet ? <SheetTrigger render={button} /> : button}>
         <ListTreeIcon aria-hidden="true" className="size-5" />
       </TooltipTrigger>
       <TooltipContent side="bottom">Session inspector</TooltipContent>
@@ -91,195 +101,230 @@ function InspectorTrigger({
   )
 }
 
-function InspectorBody({
+function TabStrip({
   nav,
   mode,
 }: {
   nav: OpenCodeController
   mode: "sheet" | "sidebar"
 }) {
+  return (
+    <div className="relative shrink-0">
+      <div
+        role="tablist"
+        aria-label="Inspector sections"
+        data-inspector-tablist
+        className="flex overflow-x-auto scrollbar-none px-2 [scrollbar-width:none]"
+        onKeyDown={(event) => {
+          const keys = ["ArrowRight", "ArrowLeft", "Home", "End"]
+          if (!keys.includes(event.key)) return
+          event.preventDefault()
+          const rtl = document.documentElement.getAttribute("dir") === "rtl"
+          const current = INSPECTOR_TABS.findIndex((tab) => tab.id === nav.inspectorTab)
+          let next: number
+          if (event.key === "Home") next = 0
+          else if (event.key === "End") next = INSPECTOR_TABS.length - 1
+          else {
+            const delta = event.key === "ArrowRight" ? 1 : -1
+            next = (current + (rtl ? -delta : delta) + INSPECTOR_TABS.length) % INSPECTOR_TABS.length
+          }
+          const target = INSPECTOR_TABS[next]
+          nav.setInspectorTab(target.id)
+          document
+            .getElementById(`${INSPECTOR_ID}-tab-${target.id}`)
+            ?.focus()
+        }}
+      >
+        {INSPECTOR_TABS.map((tab) => {
+          const selected = nav.inspectorTab === tab.id
+          const badge = tab.badge(nav)
+          const Icon = tab.icon
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`${INSPECTOR_ID}-panel-${tab.id}`}
+              id={`${INSPECTOR_ID}-tab-${tab.id}`}
+              tabIndex={selected ? 0 : -1}
+              data-inspector-tab={tab.id}
+              onClick={() => nav.setInspectorTab(tab.id as InspectorTab)}
+              className={cn(
+                "relative flex min-h-11 shrink-0 items-center gap-1.5 rounded-t-lg px-2.5 text-[12px] font-medium transition-colors motion-reduce:transition-none",
+                selected
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Icon aria-hidden="true" className="size-4" />
+              <span className="whitespace-nowrap">{tab.label}</span>
+              {badge > 0 ? (
+                <span className="rounded-full bg-primary px-1.5 text-[10px] tabular-nums text-primary-foreground">
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              ) : null}
+              {selected ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground"
+                />
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-y-0 end-0 w-8 bg-linear-to-l from-sidebar to-transparent",
+          mode === "sheet" && "from-card"
+        )}
+      />
+    </div>
+  )
+}
+
+function InspectorBody({
+  nav,
+  mode,
+  onOpenSettings,
+  onOpenWorktrees,
+}: {
+  nav: OpenCodeController
+  mode: "sheet" | "sidebar"
+  onOpenSettings: () => void
+  onOpenWorktrees: () => void
+}) {
   recordPerfRender("SessionInspector")
-  const tab = nav.inspectorTab
   const [refreshing, setRefreshing] = useState(false)
-  const [refreshError, setRefreshError] = useState<string | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const [preview, setPreview] = useState<{ context: string; path: string; sequence: number } | null>(null)
-  const refreshRun = useRef(0)
-  const tabRef = useRef(tab)
-  const sessionRef = useRef(nav.activeSessionID)
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null)
+  const [filesPath, setFilesPath] = useState<string | undefined>(undefined)
   const filesRefreshRef = useRef<InspectorPanelHandle | null>(null)
   const changesRefreshRef = useRef<InspectorPanelHandle | null>(null)
-  const previewContext = JSON.stringify([nav.activeSessionID, nav.activeSession?.location?.directory])
+  const tab = nav.inspectorTab
+  const definition = getInspectorTab(tab)
+  const Panel = definition.component
+  const sessionTitle = nav.activeSession?.title?.trim() || "Untitled session"
+  const context = contextSummary(nav)
 
   useEffect(() => {
-    tabRef.current = tab
-    sessionRef.current = nav.activeSessionID
-    refreshRun.current += 1
     void Promise.resolve().then(() => {
-      setRefreshing(false)
-      setRefreshError(null)
-      setLastUpdated(null)
+      setRefreshMessage(null)
     })
-  }, [nav.activeSessionID, nav.inspectorTab, tab])
+  }, [nav.activeSessionID, tab])
 
-  if (!nav.activeSession) {
-    return null
-  }
+  useEffect(() => {
+    void Promise.resolve().then(() => setFilesPath(undefined))
+  }, [nav.activeSessionID])
 
-  const sessionTitle =
-    nav.activeSession.title?.trim() || "Untitled session"
+  if (!nav.activeSession) return null
 
   async function handleRefresh() {
     if (refreshing) return
-    const run = ++refreshRun.current
-    const startedTab = tabRef.current
-    const startedSession = sessionRef.current
     setRefreshing(true)
-    setRefreshError(null)
-
-    let failure: string | null | undefined
+    setRefreshMessage(null)
     try {
-      failure =
-        startedTab === "files"
-          ? filesRefreshRef.current
-            ? await filesRefreshRef.current.refresh()
-            : "Files are not ready to refresh yet."
-          : changesRefreshRef.current
-            ? await changesRefreshRef.current.refresh()
-            : "Working tree is not ready to refresh yet."
+      if (tab === "files" || tab === "changes") {
+        const handle =
+          tab === "files" ? filesRefreshRef.current : changesRefreshRef.current
+        const failure = handle ? await handle.refresh() : "This panel is not ready yet."
+        setRefreshMessage(
+          failure === undefined
+            ? "Refreshed."
+            : failure
+              ? `Refresh failed: ${failure}`
+              : "Refreshed."
+        )
+      } else {
+        nav.refreshSessions()
+        await nav.loadInbox()
+        if (tab === "session") await nav.loadArchivedSessions()
+        setRefreshMessage("Refreshed native state.")
+      }
     } catch (error) {
-      failure = error instanceof Error ? error.message : String(error)
+      setRefreshMessage(
+        `Refresh failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+    } finally {
+      setRefreshing(false)
     }
-
-    if (
-      run !== refreshRun.current ||
-      tabRef.current !== startedTab ||
-      sessionRef.current !== startedSession
-    ) {
-      return
-    }
-    setRefreshing(false)
-    if (failure === undefined) {
-      setLastUpdated(null)
-      return
-    }
-    if (failure) {
-      setRefreshError(failure)
-      setLastUpdated(null)
-    } else {
-      setLastUpdated(new Date())
-    }
-  }
-
-  function handleCollapse() {
-    nav.closeInspector()
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>("[data-inspector-rail-trigger]")?.focus()
-    })
   }
 
   const refreshButton = (
-    <Button
-      type="button"
-      variant="outline"
-      aria-label={
-        refreshing
-          ? "Refreshing session inspector"
-          : "Refresh session inspector"
-      }
-      aria-busy={refreshing}
-      disabled={refreshing}
-      className="h-11 w-11 rounded-full p-0"
-      onClick={() => void handleRefresh()}
-    >
-      {refreshing ? (
-        <LoaderCircleIcon
-          aria-hidden="true"
-          className="size-4 animate-spin"
-        />
-      ) : (
-        <RefreshCwIcon aria-hidden="true" className="size-4" />
-      )}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            aria-label="Refresh inspector"
+            aria-busy={refreshing}
+            disabled={refreshing}
+            onClick={() => void handleRefresh()}
+            className="size-11 rounded-full p-0"
+          />
+        }
+      >
+        {refreshing ? (
+          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+        ) : (
+          <RefreshCwIcon aria-hidden="true" className="size-4" />
+        )}
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Refresh</TooltipContent>
+    </Tooltip>
   )
-
-  const refreshStatus = refreshing ? (
-    <span role="status" className="text-[11px] text-muted-foreground">
-      Refreshing…
-    </span>
-  ) : lastUpdated ? (
-    <span role="status" className="text-[11px] text-muted-foreground">
-      {tab === "files" ? "Files" : "Working tree"} refreshed ·{" "}
-      {lastUpdated.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })}
-    </span>
-  ) : null
 
   return (
     <>
       {mode === "sheet" ? (
-        <div className="flex shrink-0 flex-row items-start justify-between px-5 pt-5 pb-3">
-          <div className="min-w-0 flex-1 space-y-1">
-            <SheetTitle
-              id={`${INSPECTOR_ID}-title`}
-              className="text-[17px] font-semibold tracking-tight"
-            >
-              Session inspector
-            </SheetTitle>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-              <SheetDescription
-                id={`${INSPECTOR_ID}-description`}
-                className="min-w-0 max-w-full truncate text-[12px]"
-                dir="auto"
-                title={sessionTitle}
-              >
+        <div className="shrink-0 px-4 pt-1.5">
+          <div
+            aria-hidden="true"
+            className="mx-auto mb-1.5 h-1 w-10 rounded-full bg-muted-foreground/30"
+          />
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <SheetTitle className="truncate text-[15px] font-semibold tracking-tight">
                 {sessionTitle}
+              </SheetTitle>
+              <SheetDescription className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px]">
+                <span>{liveStatus(nav)}</span>
+                {context ? <span className="tabular-nums">{context}</span> : null}
               </SheetDescription>
-              {refreshStatus}
             </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {refreshButton}
-            <SheetClose
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label="Close session inspector"
-                  className="h-11 w-11 rounded-full p-0"
-                />
-              }
-              onClick={focusInspectorTrigger}
-            >
-              <XIcon aria-hidden="true" className="size-5" />
-            </SheetClose>
+            <div className="flex shrink-0 items-center gap-0.5">
+              {refreshButton}
+              <SheetClose
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label="Close session inspector"
+                    className="size-11 rounded-full p-0"
+                  />
+                }
+                onClick={focusInspectorTrigger}
+              >
+                <XIcon aria-hidden="true" className="size-5" />
+              </SheetClose>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="shrink-0 px-5 pt-5 pb-3">
-          <div className="flex items-start justify-between gap-1">
-            <div className="min-w-0 flex-1 space-y-1">
-              <h2
-                id={`${INSPECTOR_ID}-title`}
-                className="text-[17px] font-semibold tracking-tight"
-              >
-                Session inspector
+        <div className="shrink-0 px-4 pt-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-[15px] font-semibold tracking-tight">
+                {sessionTitle}
               </h2>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                <p
-                  id={`${INSPECTOR_ID}-description`}
-                  className="min-w-0 max-w-full truncate text-[12px] text-muted-foreground"
-                  dir="auto"
-                  title={sessionTitle}
-                >
-                  {sessionTitle}
-                </p>
-                {refreshStatus}
-              </div>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                <span>{liveStatus(nav)}</span>
+                {context ? <span className="tabular-nums">{context}</span> : null}
+              </p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-0.5">
               {refreshButton}
               <Tooltip>
                 <TooltipTrigger
@@ -288,115 +333,129 @@ function InspectorBody({
                       type="button"
                       variant="ghost"
                       aria-label="Collapse session inspector"
-                      className="h-11 w-11 rounded-full p-0"
-                      onClick={handleCollapse}
+                      className="size-11 rounded-full p-0"
+                      onClick={() => {
+                        nav.closeInspector()
+                        requestAnimationFrame(() => {
+                          document
+                            .querySelector<HTMLElement>("[data-inspector-rail-trigger]")
+                            ?.focus()
+                        })
+                      }}
                     />
                   }
                 >
                   <PanelRightCloseIcon aria-hidden="true" className="size-5" />
                 </TooltipTrigger>
-                <TooltipContent side="left">
-                  Collapse session inspector
-                </TooltipContent>
+                <TooltipContent side="left">Collapse inspector</TooltipContent>
               </Tooltip>
             </div>
-          </div>
-          <div className="mt-3 flex min-w-0">
-            <WorkingTreeShortcut
-              sessionID={nav.activeSession.id}
-              directory={nav.activeSession.location?.directory ?? null}
-              onOpen={() => nav.openInspector("changes")}
-            />
           </div>
         </div>
       )}
 
-      {refreshError ? (
-        <div
-          role="alert"
-          className="mx-4 mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 px-3 py-2 text-xs text-destructive"
+      {refreshMessage ? (
+        <p
+          role="status"
+          className={cn(
+            "mx-3 mt-1.5 rounded-lg px-2 py-1 text-[11px] break-words",
+            refreshMessage.startsWith("Refresh failed")
+              ? "text-destructive"
+              : "text-muted-foreground"
+          )}
         >
-          <span className="min-w-0 break-words">
-            Refresh failed: {refreshError}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11 shrink-0 px-3 text-xs"
-            onClick={() => void handleRefresh()}
-          >
-            Retry
-          </Button>
-        </div>
+          {refreshMessage}
+        </p>
       ) : null}
 
-      <Tabs
-        value={tab}
-        onValueChange={(value) => {
-          if (value === "files" || value === "changes") {
-            nav.setInspectorTab(value)
-          }
-        }}
-        className="min-h-0 flex-1 overflow-hidden"
+      <div className={cn("mt-1 shrink-0", mode === "sheet" && "sticky top-0 z-10 bg-card")}>
+        <TabStrip nav={nav} mode={mode} />
+      </div>
+
+      <div
+        id={`${INSPECTOR_ID}-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`${INSPECTOR_ID}-tab-${tab}`}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
-        <TabsList className={mode === "sidebar" ? "mx-3 mb-1 w-[calc(100%-1.5rem)] shrink-0" : "mx-4 mb-1 w-[calc(100%-2rem)] shrink-0"}>
-          <TabsTrigger value="files">Files</TabsTrigger>
-          <TabsTrigger value="changes">Working tree</TabsTrigger>
-        </TabsList>
-        <TabsContent value="files" className="min-h-0 flex-1 overflow-hidden">
-          <ScrollArea viewportClassName="h-full" className={mode === "sidebar" ? "h-full px-3 pb-4" : "h-full px-4 pb-4"}>
-            <FilesPanel
-              key={`${nav.activeSession.id}:${nav.activeSession.location?.directory ?? ""}:${preview?.context === previewContext ? preview.sequence : 0}`}
+        {tab === "command" ? (
+          <Panel
+            nav={nav}
+            mode={mode}
+            filesRefreshRef={filesRefreshRef}
+            changesRefreshRef={changesRefreshRef}
+            filesInitialPath={filesPath}
+            onOpenFile={(path) => {
+              setFilesPath(path)
+              nav.setInspectorTab("files")
+            }}
+            onClose={() => {
+              nav.closeInspector()
+              if (mode === "sheet") focusInspectorTrigger()
+            }}
+            onOpenSettings={onOpenSettings}
+            onOpenWorktrees={onOpenWorktrees}
+          />
+        ) : (
+          <ScrollArea
+            viewportClassName="h-full"
+            className={cn(
+              "h-full",
+              mode === "sheet"
+                ? "px-1 pb-[max(1rem,env(safe-area-inset-bottom))]"
+                : "pb-4"
+            )}
+          >
+            <Panel
               nav={nav}
-              session={nav.activeSession}
-              refreshRef={filesRefreshRef}
-              initialPath={preview?.context === previewContext ? preview.path : undefined}
-            />
-          </ScrollArea>
-        </TabsContent>
-        <TabsContent value="changes" className="min-h-0 flex-1 overflow-hidden">
-          <ScrollArea viewportClassName="h-full" className={mode === "sidebar" ? "h-full px-3 pb-4" : "h-full px-4 pb-4"}>
-            <ChangesPanel
-              key={`${nav.activeSession.id}:${nav.activeSession.location?.directory ?? ""}`}
-              session={nav.activeSession}
-              refreshRef={changesRefreshRef}
+              mode={mode}
+              filesRefreshRef={filesRefreshRef}
+              changesRefreshRef={changesRefreshRef}
+              filesInitialPath={filesPath}
               onOpenFile={(path) => {
-                setPreview((previous) => ({ context: previewContext, path, sequence: (previous?.sequence ?? 0) + 1 }))
+                setFilesPath(path)
                 nav.setInspectorTab("files")
               }}
+              onClose={() => {
+                nav.closeInspector()
+                if (mode === "sheet") focusInspectorTrigger()
+              }}
+              onOpenSettings={onOpenSettings}
+              onOpenWorktrees={onOpenWorktrees}
             />
           </ScrollArea>
-        </TabsContent>
-      </Tabs>
+        )}
+      </div>
     </>
   )
 }
 
 /** Mobile trigger + bottom sheet. Desktop uses the persistent right sidebar. */
-export function SessionInspector({ nav }: { nav: OpenCodeController }) {
+export function SessionInspector({
+  nav,
+  onOpenSettings,
+  onOpenWorktrees,
+}: {
+  nav: OpenCodeController
+  onOpenSettings: () => void
+  onOpenWorktrees: () => void
+}) {
   const isDesktop = useIsDesktop()
   const open = nav.inspectorOpen
 
-  if (!nav.activeSession) {
-    return null
-  }
-
-  if (isDesktop) {
-    return null
-  }
-
-  function handleOpenChange(next: boolean) {
-    if (!next) {
-      nav.closeInspector()
-      return
-    }
-    if (!nav.inspectorOpen) {
-      nav.openInspector(nav.inspectorTab)
-    }
-  }
+  if (!nav.activeSession || isDesktop) return null
 
   return (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          nav.closeInspector()
+          return
+        }
+        if (!nav.inspectorOpen) nav.openInspector(nav.inspectorTab)
+      }}
+    >
       <InspectorTrigger nav={nav} sheet />
       <SheetContent
         side="bottom"
@@ -405,15 +464,26 @@ export function SessionInspector({ nav }: { nav: OpenCodeController }) {
         className="gap-0 overflow-hidden rounded-t-xl bg-card p-0"
         style={fixedMobileDrawerStyle()}
       >
-        <InspectorBody nav={nav} mode="sheet" />
+        <InspectorBody
+          nav={nav}
+          mode="sheet"
+          onOpenSettings={onOpenSettings}
+          onOpenWorktrees={onOpenWorktrees}
+        />
       </SheetContent>
     </Sheet>
   )
 }
 
-function InspectorRail({ nav }: { nav: OpenCodeController }) {
-  const expand = () => nav.openInspector(nav.inspectorTab)
-
+function InspectorRail({
+  nav,
+  onOpenSettings,
+  onOpenWorktrees,
+}: {
+  nav: OpenCodeController
+  onOpenSettings: () => void
+  onOpenWorktrees: () => void
+}) {
   return (
     <aside
       data-desktop-sidebar="inspector"
@@ -437,7 +507,7 @@ function InspectorRail({ nav }: { nav: OpenCodeController }) {
                 aria-label="Expand session inspector"
                 aria-expanded={false}
                 data-inspector-rail-trigger=""
-                onClick={expand}
+                onClick={() => nav.openInspector(nav.inspectorTab)}
                 className="size-11 rounded-lg text-foreground"
               />
             }
@@ -448,40 +518,54 @@ function InspectorRail({ nav }: { nav: OpenCodeController }) {
         </Tooltip>
       </div>
       <div className="flex flex-col gap-1 p-2">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-lg"
-                aria-label="Show inspector files"
-                onClick={() => nav.openInspector("files")}
-                className="size-11 rounded-lg text-muted-foreground"
-              />
-            }
-          >
-            <FileTextIcon aria-hidden="true" className="size-4" />
-          </TooltipTrigger>
-          <TooltipContent side="left">Files</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-lg"
-                aria-label="Show working tree"
-                onClick={() => nav.openInspector("changes")}
-                className="size-11 rounded-lg text-muted-foreground"
-              />
-            }
-          >
-            <GitCompareArrowsIcon aria-hidden="true" className="size-4" />
-          </TooltipTrigger>
-          <TooltipContent side="left">Working tree</TooltipContent>
-        </Tooltip>
+        {INSPECTOR_TABS.map((tab) => {
+          const Icon = tab.icon
+          const badge = tab.badge(nav)
+          return (
+            <Tooltip key={tab.id}>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-lg"
+                    aria-label={`Show inspector ${INSPECTOR_TAB_LABELS[tab.id]}`}
+                    onClick={() => nav.openInspector(tab.id)}
+                    className="relative size-11 rounded-lg text-muted-foreground"
+                  />
+                }
+              >
+                <Icon aria-hidden="true" className="size-4" />
+                {badge > 0 ? (
+                  <span className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
+                ) : null}
+              </TooltipTrigger>
+              <TooltipContent side="left">{tab.label}</TooltipContent>
+            </Tooltip>
+          )
+        })}
+      </div>
+      <div className="mt-auto flex flex-col gap-1 p-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-lg"
+          aria-label="Inspector settings"
+          className="size-11 rounded-lg text-muted-foreground"
+          onClick={onOpenSettings}
+        >
+          <SettingsIcon aria-hidden="true" className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-lg"
+          aria-label="Project worktrees"
+          className="size-11 rounded-lg text-muted-foreground"
+          onClick={onOpenWorktrees}
+        >
+          <FolderGit2Icon aria-hidden="true" className="size-4" />
+        </Button>
       </div>
     </aside>
   )
@@ -490,17 +574,29 @@ function InspectorRail({ nav }: { nav: OpenCodeController }) {
 /**
  * Persistent, non-modal desktop inspector. It pushes the conversation instead
  * of overlaying it and stays open until collapsed; clicking outside never
- * dismisses it. The collapsed rail mirrors the session navigation rail.
+ * dismisses it. The collapsed rail mirrors every inspector tab.
  */
-export function SessionInspectorPanel({ nav }: { nav: OpenCodeController }) {
+export function SessionInspectorPanel({
+  nav,
+  onOpenSettings,
+  onOpenWorktrees,
+}: {
+  nav: OpenCodeController
+  onOpenSettings: () => void
+  onOpenWorktrees: () => void
+}) {
   const isDesktop = useIsDesktop()
 
-  if (!isDesktop || !nav.activeSession) {
-    return null
-  }
+  if (!isDesktop || !nav.activeSession) return null
 
   if (!nav.inspectorOpen) {
-    return <InspectorRail nav={nav} />
+    return (
+      <InspectorRail
+        nav={nav}
+        onOpenSettings={onOpenSettings}
+        onOpenWorktrees={onOpenWorktrees}
+      />
+    )
   }
 
   return (
@@ -509,15 +605,19 @@ export function SessionInspectorPanel({ nav }: { nav: OpenCodeController }) {
       data-desktop-sidebar="inspector"
       data-inspector-mode="full"
       data-side="right"
-      aria-labelledby={`${INSPECTOR_ID}-title`}
-      aria-describedby={`${INSPECTOR_ID}-description`}
+      aria-label="Session inspector"
       style={{ backgroundColor: "var(--sidebar)" }}
       className={cn(
         "flex h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
         DESKTOP_SIDEBAR_WIDTH
       )}
     >
-      <InspectorBody nav={nav} mode="sidebar" />
+      <InspectorBody
+        nav={nav}
+        mode="sidebar"
+        onOpenSettings={onOpenSettings}
+        onOpenWorktrees={onOpenWorktrees}
+      />
     </aside>
   )
 }

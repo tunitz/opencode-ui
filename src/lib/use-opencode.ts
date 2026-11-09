@@ -8,6 +8,7 @@ import {
   type ConfigEntry,
   type CommandInfo,
   type FormAnswer,
+  type FileDiffInfo,
   type FormInfo,
   type LocationPublicInfo,
   type ModelInfo,
@@ -18,8 +19,11 @@ import {
   type PromptSkillAttachment,
   type SessionInfo,
   type SessionInboxCompaction,
+  type SessionInboxInfo,
   type SessionMessageInfo,
   type SessionRevert,
+  type SessionStatsInfo,
+  type TokenUsageInfo,
 } from "@/lib/opencode"
 import {
   applySessionTitle,
@@ -49,6 +53,14 @@ import { removeDraft } from "@/lib/drafts"
 import { isAbsoluteDirectory } from "@/lib/session-commands"
 import { backoffDelay } from "@/lib/reconnect"
 import { mergeOlderMessages } from "@/lib/message-history"
+import {
+  normalizeChangesScope,
+  normalizeInspectorTab,
+  readInspectorTab,
+  writeInspectorTab,
+  type ChangesScope,
+  type InspectorTab,
+} from "@/lib/inspector-tabs"
 import { promptDelivery } from "@/lib/queue"
 import {
   type ComposerAttachment,
@@ -73,17 +85,33 @@ export type ConnectionStatus = "connecting" | "connected" | "offline"
 export type LoadStatus = "idle" | "loading" | "ready" | "error"
 export type StreamStatus = "idle" | "connecting" | "ready" | "lost"
 export type ProjectScope = "project" | "all"
-export type InspectorTab = "files" | "changes"
+export type { ChangesScope, InspectorTab }
 
 export type NewSessionSelection = {
   agentID: string | null
   model: ModelRef
 }
 
-/** Historical/requested Activity is normalized to Files; it has no UI now. */
-function normalizeInspectorTab(tab: string | null | undefined): InspectorTab {
-  if (tab === "changes") return "changes"
-  return "files"
+export type RestoredPromptFile = { uri: string; name: string; mime: string }
+
+export type ComposerRestore = {
+  sessionID: string
+  text: string
+  files: RestoredPromptFile[]
+  nonce: number
+}
+
+export type SessionDiffResult =
+  | { ok: true; files: FileDiffInfo[] }
+  | { ok: false; reason: string }
+
+export type SessionSearchResult =
+  | { ok: true; sessions: SessionInfo[] }
+  | { ok: false; error: string }
+
+export type SessionContextSnapshot = {
+  messages: SessionMessageInfo[]
+  tokens: TokenUsageInfo | null
 }
 
 type SessionQuery = {
@@ -181,6 +209,16 @@ export type OpenCodeState = {
   attachments: ComposerAttachment[]
   inspectorOpen: boolean
   inspectorTab: InspectorTab
+  changesScope: ChangesScope
+  diffFocusPath: string | null
+  archivedSessions: SessionInfo[]
+  archivedStatus: LoadStatus
+  archivedError: string | null
+  inbox: SessionInboxInfo[]
+  inboxStatus: LoadStatus
+  inboxError: string | null
+  inboxBusy: Record<string, true>
+  composerRestore: ComposerRestore | null
   focusMessageID: string | null
 }
 
@@ -210,14 +248,28 @@ export type OpenCodeController = OpenCodeState & {
     skills?: readonly PromptSkillAttachment[]
   ) => Promise<string | null>
   openSession: (session: SessionInfo) => void
-  openInspector: (tab: InspectorTab | "activity") => void
+  openInspector: (tab: InspectorTab) => void
   closeInspector: () => void
-  setInspectorTab: (tab: InspectorTab | "activity") => void
+  setInspectorTab: (tab: InspectorTab) => void
+  setChangesScope: (scope: ChangesScope) => void
+  openInspectorDiff: (path?: string | null) => void
+  setSessionArchived: (sessionID: string, archived: boolean) => Promise<string | null>
+  loadArchivedSessions: () => Promise<string | null>
+  unarchiveSession: (sessionID: string) => Promise<string | null>
+  loadInbox: (sessionID?: string) => Promise<string | null>
+  cancelInboxItem: (inboxID: string) => Promise<string | null>
+  takeBackInboxItem: (inboxID: string) => Promise<string | null>
+  steerInboxItem: (inboxID: string) => Promise<string | null>
+  clearComposerRestore: () => void
+  loadTurnDiff: (sessionID: string, from?: string, to?: string) => Promise<SessionDiffResult>
+  loadSessionContext: (sessionID: string) => Promise<SessionContextSnapshot | null>
+  loadSessionStats: (sessionID: string) => Promise<SessionStatsInfo | null>
+  searchSessions: (query: string, archived?: boolean) => Promise<SessionSearchResult>
   addAttachment: (
     attachment: ComposerAttachment,
     sessionID?: string
   ) => string | null
-  removeAttachment: (attachmentID: string) => void
+  removeAttachment: (attachmentID: string, sessionID?: string) => void
   attachProjectFile: (relativePath: string) => Promise<string | null>
   interruptSession: () => Promise<string | null>
   switchAgent: (agentID: string) => Promise<string | null>
@@ -353,15 +405,42 @@ export function useOpenCode(): OpenCodeController {
     Record<string, ComposerAttachment[]>
   >({})
   const [inspectorOpen, setInspectorOpen] = useState(readInspectorOpen)
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files")
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("command")
+  const [changesScope, setChangesScopeState] = useState<ChangesScope>("working")
+  const [diffFocusPath, setDiffFocusPath] = useState<string | null>(null)
+  const [archivedSessions, setArchivedSessions] = useState<SessionInfo[]>([])
+  const [archivedStatus, setArchivedStatus] = useState<LoadStatus>("idle")
+  const [archivedError, setArchivedError] = useState<string | null>(null)
+  const [inbox, setInbox] = useState<SessionInboxInfo[]>([])
+  const [inboxStatus, setInboxStatus] = useState<LoadStatus>("idle")
+  const [inboxError, setInboxError] = useState<string | null>(null)
+  const [inboxBusy, setInboxBusy] = useState<Record<string, true>>({})
+  const [composerRestore, setComposerRestore] = useState<ComposerRestore | null>(null)
   const [focusMessageID, setFocusMessageID] = useState<string | null>(null)
+  const archivedRequest = useRef(0)
+  const inboxRequest = useRef(0)
+  const restoreSequence = useRef(0)
+  const inspectorSessionRef = useRef<string | null>(null)
+  const inspectorTabRef = useRef<InspectorTab>("command")
   const attachmentSequence = useRef(0)
   const attachmentsRef = useRef<Record<string, ComposerAttachment[]>>({})
   const messagesRef = useRef<SessionMessageInfo[]>([])
+  const sessionsRef = useRef<SessionInfo[]>([])
+  const inboxRef = useRef<SessionInboxInfo[]>([])
+  const inboxBusyRef = useRef<Record<string, true>>({})
+  const inboxSessionRef = useRef<string | null>(null)
 
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
+
+  useEffect(() => {
+    inboxRef.current = inbox
+  }, [inbox])
 
   // Restore unread metadata only after the backend version is known, because
   // the key is scoped to this origin and backend build. Storage failure or
@@ -698,10 +777,10 @@ export function useOpenCode(): OpenCodeController {
   )
 
   const removeAttachment = useCallback(
-    (attachmentID: string) => {
-      const sessionID = activeSessionRef.current
-      if (!sessionID) return
-      setSessionAttachments(sessionID, (current) =>
+    (attachmentID: string, sessionID?: string) => {
+      const target = sessionID ?? activeSessionRef.current
+      if (!target) return
+      setSessionAttachments(target, (current) =>
         current.filter((item) => item.id !== attachmentID)
       )
     },
@@ -749,23 +828,54 @@ export function useOpenCode(): OpenCodeController {
     [addAttachment, sessions]
   )
 
-  const openInspector = useCallback((tab: InspectorTab | "activity") => {
-    setInspectorTab(normalizeInspectorTab(tab))
-    setInspectorOpen(true)
-    persistInspectorOpen(true)
+  const setInspectorTabSafe = useCallback((tab: InspectorTab) => {
+    const next = normalizeInspectorTab(tab)
+    inspectorTabRef.current = next
+    setInspectorTab(next)
+    const sessionID = activeSessionRef.current
+    if (sessionID) writeInspectorTab(sessionID, next)
   }, [])
 
-  const setInspectorTabSafe = useCallback(
-    (tab: InspectorTab | "activity") => {
-      setInspectorTab(normalizeInspectorTab(tab))
+  const openInspector = useCallback(
+    (tab: InspectorTab) => {
+      setInspectorTabSafe(tab)
+      setInspectorOpen(true)
+      persistInspectorOpen(true)
     },
-    []
+    [setInspectorTabSafe]
   )
 
   const closeInspector = useCallback(() => {
     setInspectorOpen(false)
     persistInspectorOpen(false)
   }, [])
+
+  const setChangesScope = useCallback((scope: ChangesScope) => {
+    setChangesScopeState(normalizeChangesScope(scope))
+  }, [])
+
+  const openInspectorDiff = useCallback(
+    (path?: string | null) => {
+      setChangesScopeState("turn")
+      setDiffFocusPath(path ?? null)
+      openInspector("changes")
+    },
+    [openInspector]
+  )
+
+  // Restore the per-session selected tab when the selection changes. This is a
+  // view preference only; it never substitutes for engine state.
+  useEffect(() => {
+    const sessionID = activeSessionID
+    if (sessionID === inspectorSessionRef.current) return
+    inspectorSessionRef.current = sessionID
+    void Promise.resolve().then(() => {
+      if (inspectorSessionRef.current !== sessionID) return
+      const stored = sessionID ? readInspectorTab(sessionID) : "command"
+      inspectorTabRef.current = stored
+      setInspectorTab(stored)
+    })
+  }, [activeSessionID])
 
   const loadSessions = useCallback(
     async (
@@ -785,6 +895,7 @@ export function useOpenCode(): OpenCodeController {
           const response = await openCode.session.list({
             limit: SESSION_LIMIT,
             order: "desc",
+            archived: false,
             ...(cursor ? { cursor } : {}),
             ...(nextProjectID ? { project: nextProjectID } : {}),
             ...(nextDirectory ? { directory: nextDirectory } : {}),
@@ -1019,6 +1130,48 @@ export function useOpenCode(): OpenCodeController {
     setPendingForms(forms.status === "fulfilled" ? forms.value : [])
   }, [])
 
+  const loadInboxFor = useCallback(async (sessionID: string) => {
+    const request = ++inboxRequest.current
+    if (inboxSessionRef.current !== sessionID) {
+      inboxSessionRef.current = sessionID
+      setInbox([])
+      setInboxBusy({})
+      inboxBusyRef.current = {}
+    }
+    setInboxStatus("loading")
+    setInboxError(null)
+    try {
+      const items = await openCode.session.inbox.list({ sessionID })
+      if (request !== inboxRequest.current || activeSessionRef.current !== sessionID) {
+        return null
+      }
+      setInbox(items)
+      setInboxStatus("ready")
+      return null
+    } catch (error) {
+      if (request !== inboxRequest.current || activeSessionRef.current !== sessionID) {
+        return null
+      }
+      setInboxStatus("error")
+      setInboxError(errorMessage(error))
+      return errorMessage(error)
+    }
+  }, [])
+
+  const loadInbox = useCallback(
+    async (sessionID?: string) => {
+      const target = sessionID ?? activeSessionRef.current
+      if (!target) {
+        setInbox([])
+        setInboxStatus("idle")
+        setInboxError(null)
+        return "Select a session first."
+      }
+      return loadInboxFor(target)
+    },
+    [loadInboxFor]
+  )
+
   const loadCommands = useCallback(async (targetDirectory: string) => {
     const request = ++commandRequest.current
     await Promise.resolve()
@@ -1193,6 +1346,74 @@ export function useOpenCode(): OpenCodeController {
             event.type === "session.deleted"
           ) {
             notifySessionListChange({ sessionID: event.data.sessionID })
+          }
+
+          // Archive is native, so the active list must follow durable archive
+          // events even when another client performed the change.
+          if (event.type === "session.archived") {
+            const archivedID = event.data.sessionID
+            setSessions((current) => current.filter((session) => session.id !== archivedID))
+            if (activeSessionRef.current === archivedID) {
+              activeSessionRef.current = null
+              setActiveSessionID(null)
+              setMessages([])
+              setHistoryStatus("idle")
+              setHistoryError(null)
+            }
+          } else if (event.type === "session.unarchived") {
+            const unarchivedID = event.data.sessionID
+            setArchivedSessions((current) =>
+              current.filter((session) => session.id !== unarchivedID)
+            )
+            // Unarchiving from another client must make the session visible in
+            // the active navigator without a manual refresh.
+            void openCode.session
+              .get({ sessionID: unarchivedID })
+              .then((session) => {
+                setSessions((current) => withSessionSnapshot(current, session))
+              })
+              .catch(() => {
+                // The session may have been removed again.
+              })
+          }
+
+          // Reconcile the native inbox from durable events; pending order is
+          // never reordered locally, only additions/removals/delivery flags.
+          if (
+            event.type === "session.inbox.enqueued" &&
+            event.data.sessionID === activeSessionRef.current
+          ) {
+            const item = event.data.item
+            setInbox((current) =>
+              current.some((entry) => entry.id === event.data.inboxID)
+                ? current
+                : [...current, { ...item, id: event.data.inboxID } as SessionInboxInfo]
+            )
+            setInboxStatus("ready")
+          } else if (
+            event.type === "session.inbox.delivered" ||
+            event.type === "session.inbox.cancelled"
+          ) {
+            if (event.data.sessionID === activeSessionRef.current) {
+              const inboxID = event.data.inboxID
+              setInbox((current) => current.filter((item) => item.id !== inboxID))
+              setInboxBusy((current) => {
+                const next = { ...current }
+                delete next[inboxID]
+                return next
+              })
+            }
+          } else if (event.type === "session.inbox.delivery.changed") {
+            if (event.data.sessionID === activeSessionRef.current) {
+              const { inboxID, delivery } = event.data
+              setInbox((current) =>
+                current.map((item) =>
+                  item.type === "user" && item.id === inboxID
+                    ? { ...item, delivery }
+                    : item
+                )
+              )
+            }
           }
 
           const sessionID = eventSessionID(event)
@@ -1592,6 +1813,23 @@ export function useOpenCode(): OpenCodeController {
     void Promise.resolve().then(() => loadPending(activeSessionID))
   }, [activeSessionID, loadPending, wakeKey])
 
+  // The native inbox is the queue of the current session. It is refetched on
+  // selection and wake, then reconciled from inbox events.
+  useEffect(() => {
+    if (!activeSessionID) {
+      inboxRequest.current += 1
+      inboxSessionRef.current = null
+      void Promise.resolve().then(() => {
+        setInbox([])
+        setInboxStatus("idle")
+        setInboxError(null)
+      })
+      return
+    }
+
+    void Promise.resolve().then(() => loadInboxFor(activeSessionID))
+  }, [activeSessionID, loadInboxFor, wakeKey])
+
   // Native project/plugin command catalog follows the selected session
   // directory. Connection, wake, config and command.updated events refetch it.
   const commandDirectory =
@@ -1895,6 +2133,238 @@ export function useOpenCode(): OpenCodeController {
         return null
       } catch (error) {
         return errorMessage(error)
+      }
+    },
+    []
+  )
+
+  const loadArchivedSessions = useCallback(async () => {
+    const request = ++archivedRequest.current
+    setArchivedStatus("loading")
+    setArchivedError(null)
+    try {
+      const projectID =
+        scopeRef.current === "project" ? locationRef.current?.project.id : undefined
+      const directory =
+        scopeRef.current === "project" ? directoryRef.current || undefined : undefined
+      const data: SessionInfo[] = []
+      let cursor: string | undefined
+      const seen = new Set<string>()
+      do {
+        const response = await openCode.session.list({
+          limit: SESSION_LIMIT,
+          order: "desc",
+          archived: true,
+          ...(cursor ? { cursor } : {}),
+          ...(projectID ? { project: projectID } : {}),
+          ...(directory ? { directory } : {}),
+        })
+        data.push(...response.data)
+        cursor = response.cursor?.next ?? undefined
+        if (cursor && seen.has(cursor)) throw new Error("Archive pagination did not advance.")
+        if (cursor) seen.add(cursor)
+      } while (cursor && request === archivedRequest.current)
+
+      if (request !== archivedRequest.current) return null
+      setArchivedSessions(data)
+      setArchivedStatus("ready")
+      return null
+    } catch (error) {
+      if (request !== archivedRequest.current) return null
+      setArchivedStatus("error")
+      setArchivedError(errorMessage(error))
+      return errorMessage(error)
+    }
+  }, [])
+
+  const setSessionArchived = useCallback(
+    async (sessionID: string, archived: boolean) => {
+      try {
+        await openCode.session.update({ sessionID, archived })
+        setSessions((current) => current.filter((session) => session.id !== sessionID))
+        setArchivedSessions((current) =>
+          current.filter((session) => session.id !== sessionID)
+        )
+        if (!archived) {
+          refreshSessions()
+          return null
+        }
+        if (activeSessionRef.current === sessionID) {
+          activeSessionRef.current = null
+          setActiveSessionID(null)
+          setMessages([])
+          setHistoryStatus("idle")
+          setHistoryError(null)
+        }
+        refreshSessions()
+        void loadArchivedSessions()
+        return null
+      } catch (error) {
+        return errorMessage(error)
+      }
+    },
+    [loadArchivedSessions, refreshSessions]
+  )
+
+  const unarchiveSession = useCallback(
+    (sessionID: string) => setSessionArchived(sessionID, false),
+    [setSessionArchived]
+  )
+
+  const cancelInboxItem = useCallback(async (inboxID: string) => {
+    const sessionID = activeSessionRef.current
+    if (!sessionID) return "Select a session first."
+    if (inboxBusyRef.current[inboxID]) {
+      return "That queued message is already being delivered."
+    }
+    inboxBusyRef.current[inboxID] = true
+    setInboxBusy((current) => ({ ...current, [inboxID]: true }))
+    try {
+      await openCode.session.inbox.cancel({ sessionID, inboxID })
+      setInbox((current) => current.filter((item) => item.id !== inboxID))
+      return null
+    } catch (error) {
+      const tag = errorTag(error)
+      if (tag === "InboxNotFoundError" || tag === "NotFoundError") {
+        setInbox((current) => current.filter((item) => item.id !== inboxID))
+        return "That queued message is no longer waiting; it may already be delivered."
+      }
+      return errorMessage(error)
+    } finally {
+      delete inboxBusyRef.current[inboxID]
+      setInboxBusy((current) => {
+        const next = { ...current }
+        delete next[inboxID]
+        return next
+      })
+    }
+  }, [])
+
+  const steerInboxItem = useCallback(async (inboxID: string) => {
+    const sessionID = activeSessionRef.current
+    if (!sessionID) return "Select a session first."
+    if (inboxBusyRef.current[inboxID]) {
+      return "That queued message is already being delivered."
+    }
+    inboxBusyRef.current[inboxID] = true
+    setInboxBusy((current) => ({ ...current, [inboxID]: true }))
+    try {
+      await openCode.session.inbox.update({ sessionID, inboxID, delivery: "steer" })
+      setInbox((current) =>
+        current.map((item) =>
+          item.id === inboxID && item.type === "user"
+            ? { ...item, delivery: "steer" }
+            : item
+        )
+      )
+      return null
+    } catch (error) {
+      return errorMessage(error)
+    } finally {
+      delete inboxBusyRef.current[inboxID]
+      setInboxBusy((current) => {
+        const next = { ...current }
+        delete next[inboxID]
+        return next
+      })
+    }
+  }, [])
+
+  const takeBackInboxItem = useCallback(async (inboxID: string) => {
+    const sessionID = activeSessionRef.current
+    if (!sessionID) return "Select a session first."
+    const item = inboxRef.current.find((entry) => entry.id === inboxID)
+    if (!item) return "That queued message is no longer waiting."
+    if (item.type !== "user") {
+      return "Only user prompts can be taken back into the composer."
+    }
+    const failure = await cancelInboxItem(inboxID)
+    if (failure) return failure
+    const files: RestoredPromptFile[] = (item.payload.files ?? []).flatMap((file) => {
+      const name = file.name ?? "attachment"
+      if (file.source.type === "uri") {
+        return [{ uri: file.source.uri, name, mime: file.mime }]
+      }
+      return file.data
+        ? [{ uri: `data:${file.mime};base64,${file.data}`, name, mime: file.mime }]
+        : []
+    })
+    restoreSequence.current += 1
+    setComposerRestore({
+      sessionID,
+      text: item.payload.text,
+      files,
+      nonce: restoreSequence.current,
+    })
+    return null
+  }, [cancelInboxItem])
+
+  const clearComposerRestore = useCallback(() => setComposerRestore(null), [])
+
+  const loadTurnDiff = useCallback(
+    async (sessionID: string, from?: string, to?: string): Promise<SessionDiffResult> => {
+      try {
+        const files = await openCode.session.diff({
+          sessionID,
+          ...(from ? { from } : {}),
+          ...(to ? { to } : {}),
+        })
+        return { ok: true, files }
+      } catch (error) {
+        return { ok: false, reason: errorMessage(error) }
+      }
+    },
+    []
+  )
+
+  const loadSessionContext = useCallback(
+    async (sessionID: string): Promise<SessionContextSnapshot | null> => {
+      try {
+        const messages = await openCode.session.context({ sessionID })
+        const session =
+          sessionsRef.current.find((entry) => entry.id === sessionID) ??
+          (await openCode.session.get({ sessionID }))
+        return { messages, tokens: session.tokens ?? null }
+      } catch {
+        return null
+      }
+    },
+    []
+  )
+
+  const loadSessionStats = useCallback(
+    async (sessionID: string): Promise<SessionStatsInfo | null> => {
+      try {
+        return await openCode.session.stats({})
+      } catch {
+        // Session stats are aggregate; the session detail still renders.
+        void sessionID
+        return null
+      }
+    },
+    []
+  )
+
+  const searchSessions = useCallback(
+    async (query: string, archived = false): Promise<SessionSearchResult> => {
+      const text = query.trim()
+      if (!text) return { ok: true, sessions: [] }
+      try {
+        const projectID =
+          scopeRef.current === "project" ? locationRef.current?.project.id : undefined
+        const directory =
+          scopeRef.current === "project" ? directoryRef.current || undefined : undefined
+        const response = await openCode.session.list({
+          search: text,
+          archived,
+          limit: SESSION_LIMIT,
+          order: "desc",
+          ...(projectID ? { project: projectID } : {}),
+          ...(directory ? { directory } : {}),
+        })
+        return { ok: true, sessions: response.data }
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) }
       }
     },
     []
@@ -2781,6 +3251,16 @@ export function useOpenCode(): OpenCodeController {
     attachments,
     inspectorOpen,
     inspectorTab,
+    changesScope,
+    diffFocusPath,
+    archivedSessions,
+    archivedStatus,
+    archivedError,
+    inbox,
+    inboxStatus,
+    inboxError,
+    inboxBusy,
+    composerRestore,
     focusMessageID,
   }
 
@@ -2812,6 +3292,20 @@ export function useOpenCode(): OpenCodeController {
     openInspector,
     closeInspector,
     setInspectorTab: setInspectorTabSafe,
+    setChangesScope,
+    openInspectorDiff,
+    setSessionArchived,
+    loadArchivedSessions,
+    unarchiveSession,
+    loadInbox,
+    cancelInboxItem,
+    takeBackInboxItem,
+    steerInboxItem,
+    clearComposerRestore,
+    loadTurnDiff,
+    loadSessionContext,
+    loadSessionStats,
+    searchSessions,
     addAttachment,
     removeAttachment,
     attachProjectFile,

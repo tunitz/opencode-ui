@@ -220,12 +220,12 @@ async function openPage(
   viewport: { width: number; height: number },
   fixture: string,
   storage?: Record<string, string>,
-  options: { hasTouch?: boolean } = {}
+  options: { hasTouch?: boolean; reducedMotion?: "reduce" | "no-preference"; dir?: "ltr" | "rtl" } = {}
 ) {
   assert(browser, "Browser is unavailable.")
   const context = await browser.newContext({
     viewport,
-    reducedMotion: "no-preference",
+    reducedMotion: options.reducedMotion ?? "no-preference",
     locale: "en-US",
     timezoneId: "UTC",
     hasTouch: options.hasTouch ?? false,
@@ -234,12 +234,16 @@ async function openPage(
     const url = new URL(route.request().url())
     return url.origin === base ? route.continue() : route.abort()
   })
-  if (storage) {
-    await context.addInitScript((entries) => {
-      for (const [key, value] of Object.entries(entries)) {
-        window.localStorage.setItem(key, value)
-      }
-    }, storage)
+  if (storage || options.dir) {
+    await context.addInitScript(
+      ({ entries, dir }) => {
+        if (dir) document.documentElement.setAttribute("dir", dir)
+        for (const [key, value] of Object.entries(entries ?? {})) {
+          window.localStorage.setItem(key, value)
+        }
+      },
+      { entries: storage, dir: options.dir }
+    )
   }
   const page = await context.newPage()
   currentPage = page
@@ -1105,8 +1109,11 @@ if (browser) {
         String(await drawer.getAttribute("data-side"))
       )
       check(
-        "the working-tree summary lives inside the right sidebar",
-        await drawer.getByRole("button", { name: /Working tree on synthetic-main/ }).isVisible()
+        "the sidebar exposes all five inspector tabs",
+        (await drawer.getByRole("tab").count()) === 5 &&
+          (await drawer.getByRole("tab", { name: "Command" }).isVisible()) &&
+          (await drawer.getByRole("tab", { name: "Activity" }).isVisible()),
+        String(await drawer.getByRole("tab").count())
       )
 
       await page.locator("[data-qa-active]").click()
@@ -1115,7 +1122,7 @@ if (browser) {
         await drawer.isVisible()
       )
 
-      await page.getByRole("tab", { name: "Working tree" }).click()
+      await page.getByRole("tab", { name: "Changes" }).click()
       await drawer.getByText("synthetic-main").first().waitFor({ state: "visible" })
       await page.getByRole("button", { name: /src\/app\.ts/ }).click()
       await page.getByRole("button", { name: "Open read-only file" }).click()
@@ -1165,12 +1172,164 @@ if (browser) {
     }
   })
 
+  await run("inspector workspace covers all viewports, themes, RTL, and reduced motion", async ({ check }) => {
+    const sizes: Array<[number, number]> = [
+      [390, 844],
+      [768, 900],
+      [1024, 900],
+      [1280, 900],
+      [1440, 900],
+    ]
+    for (const [width, height] of sizes) {
+      for (const theme of ["light", "dark"] as const) {
+        const opened = await openPage({ width, height }, "inspector", { theme })
+        const page = opened.page
+        try {
+          if (width < 768) {
+            await page.getByRole("button", { name: "Session inspector" }).click()
+          }
+          const drawer = page.locator('[data-desktop-sidebar="inspector"], [data-fixed-drawer="inspector"]')
+          await drawer.first().waitFor({ state: "visible" })
+          const tabs = drawer.getByRole("tab")
+          check(
+            `${width}x${height} ${theme} shows five inspector tabs`,
+            (await tabs.count()) === 5,
+            String(await tabs.count())
+          )
+          const command = drawer.getByRole("tab", { name: "Command" })
+          const box = await command.boundingBox()
+          check(
+            `${width}x${height} ${theme} tab targets are 44px`,
+            Boolean(box && box.height >= 44),
+            JSON.stringify(box)
+          )
+          check(
+            `${width}x${height} ${theme} has no page errors`,
+            opened.pageErrors.length === 0,
+            opened.pageErrors.join(" | ")
+          )
+          mergeDiagnostics(
+            results.find((result) => result.name.startsWith("inspector workspace covers"))!,
+            opened
+          )
+        } finally {
+          await opened.context.close()
+        }
+      }
+    }
+
+    const rtl = await openPage({ width: 1280, height: 900 }, "inspector", undefined, { dir: "rtl" })
+    try {
+      await rtl.page.evaluate(() => document.documentElement.setAttribute("dir", "rtl"))
+      await rtl.page.waitForTimeout(50)
+      const direction = await rtl.page.evaluate(() => getComputedStyle(document.documentElement).direction)
+      const drawer = rtl.page.locator('[data-desktop-sidebar="inspector"]')
+      check("RTL sets the document text direction", direction === "rtl", direction)
+      check("RTL keeps all inspector tabs reachable", (await drawer.getByRole("tab").count()) === 5)
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("inspector workspace covers"))!,
+        rtl
+      )
+    } finally {
+      await rtl.context.close()
+    }
+
+    const reduced = await openPage(
+      { width: 390, height: 844 },
+      "inspector",
+      undefined,
+      { reducedMotion: "reduce", hasTouch: true }
+    )
+    try {
+      await reduced.page.getByRole("button", { name: "Session inspector" }).click()
+      const drawer = reduced.page.locator('[data-fixed-drawer="inspector"]')
+      await drawer.waitFor({ state: "visible" })
+      check(
+        "reduced motion opens the inspector sheet normally",
+        (await drawer.getByRole("tab").count()) === 5 && reduced.pageErrors.length === 0,
+        JSON.stringify(reduced.pageErrors)
+      )
+      const drawerBox = await settledEdge(reduced.page, drawer, "bottom")
+      check(
+        "mobile inspector uses about 88dvh",
+        Boolean(drawerBox && drawerBox.height > 0.85 * 844 && drawerBox.height < 0.9 * 844),
+        JSON.stringify(drawerBox)
+      )
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("inspector workspace covers"))!,
+        reduced
+      )
+    } finally {
+      await reduced.context.close()
+    }
+  })
+
+  await run("all five inspector tabs render on desktop and mobile", async ({ check }) => {
+    for (const viewport of [
+      { width: 1280, height: 900, mobile: false },
+      { width: 390, height: 844, mobile: true },
+    ]) {
+      const opened = await openPage(viewport, "inspector")
+      const page = opened.page
+      try {
+        const scope = viewport.mobile
+          ? page.locator('[data-fixed-drawer="inspector"]')
+          : page.locator('[data-desktop-sidebar="inspector"]')
+        if (viewport.mobile) {
+          await page.getByRole("button", { name: "Session inspector" }).click()
+        }
+        await scope.waitFor({ state: "visible" })
+
+        await scope.getByRole("tab", { name: "Command" }).click()
+        check(
+          `${viewport.width}px Command exposes a search field`,
+          await scope.getByRole("textbox", { name: /Search actions, sessions, messages, and files/ }).isVisible()
+        )
+
+        await scope.getByRole("tab", { name: "Files" }).click()
+        await scope.getByText("Project files", { exact: true }).waitFor({ state: "visible" })
+        check(`${viewport.width}px Files lists project files`, true)
+
+        await scope.getByRole("tab", { name: "Changes" }).click()
+        await scope.getByText("synthetic-main").first().waitFor({ state: "visible" })
+        check(
+          `${viewport.width}px Changes offers both scopes`,
+          (await scope.getByRole("button", { name: "Working tree", pressed: true }).count()) === 1 &&
+            (await scope.getByRole("button", { name: "This turn" }).count()) === 1
+        )
+
+        await scope.getByRole("tab", { name: "Activity" }).click()
+        await scope.getByText("Queue", { exact: true }).waitFor({ state: "visible" })
+        check(
+          `${viewport.width}px Activity shows run, queue, and attention`,
+          (await scope.getByText("Run", { exact: true }).count()) >= 1 &&
+            (await scope.getByText("Needs you", { exact: true }).count()) >= 1
+        )
+
+        await scope.getByRole("tab", { name: "Session" }).click()
+        await scope.getByText("Context & tokens").waitFor({ state: "visible" })
+        check(
+          `${viewport.width}px Session shows archive and local pin`,
+          (await scope.getByRole("button", { name: /Archive session/ }).count()) === 1 &&
+            (await scope.getByRole("button", { name: /Pin in this browser|Unpin in this browser/ }).count()) === 1
+        )
+        check(`${viewport.width}px tabs report no page errors`, opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+        mergeDiagnostics(
+          results.find((result) => result.name.startsWith("all five inspector tabs"))!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  })
+
   await run("mobile inspector is a bounded bottom sheet", async ({ check }) => {
     const opened = await openPage({ width: 390, height: 844 }, "inspector")
     const page = opened.page
     try {
       await resetQa(page)
-      await page.getByRole("button", { name: "Session inspector: files and working tree" }).click()
+      await page.getByRole("button", { name: "Session inspector" }).click()
       const drawer = page.locator('[data-fixed-drawer="inspector"]')
       await drawer.waitFor({ state: "visible" })
       const drawerBox = await settledEdge(page, drawer, "bottom")
@@ -1181,7 +1340,7 @@ if (browser) {
         JSON.stringify({ side: await drawer.getAttribute("data-side"), box: drawerBox })
       )
 
-      await page.getByRole("tab", { name: "Working tree" }).click()
+      await page.getByRole("tab", { name: "Changes" }).click()
       await drawer.getByText("synthetic-main").waitFor({ state: "visible" })
       await drawer.getByRole("button", { name: /src\/app\.ts/ }).click()
       await drawer.getByRole("button", { name: "Open read-only file" }).click()
@@ -1200,7 +1359,7 @@ if (browser) {
       const focus = await activeElement(page)
       check(
         "closing the mobile inspector returns focus to its trigger",
-        focus.ariaLabel === "Session inspector: files and working tree",
+        focus.ariaLabel === "Session inspector",
         JSON.stringify(focus)
       )
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))

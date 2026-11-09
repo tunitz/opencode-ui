@@ -18,6 +18,7 @@ import {
   LoaderCircleIcon,
   PaperclipIcon,
   PlusIcon,
+  SettingsIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react"
@@ -25,7 +26,14 @@ import {
 import { Dictation } from "@/components/dictation"
 import { BtwDialog } from "@/components/btw-dialog"
 import { FilesPanel } from "@/components/files-panel"
-import { Dialog, DialogTitle } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { ModelSettingsDrawer, ModelSettingsInline } from "@/components/model-settings"
 import {
   SessionCommandDialogs,
@@ -69,8 +77,23 @@ import {
   formatFileSize,
   inferMime,
   isSafeImageMime,
+  modelSupportsAttachment,
 } from "@/lib/files"
 import { readDraft, readDrafts, updateDraft } from "@/lib/drafts"
+import {
+  cycleRecall,
+  readPromptHistory,
+  readPromptStash,
+  recordPrompt,
+  removeStashedPrompt,
+  stashPreview,
+  stashPrompt,
+  type StashEntry,
+} from "@/lib/prompt-recall"
+import { useKeybindings } from "@/lib/use-keybindings"
+import { matchesKeybinding } from "@/lib/keybindings"
+import { useUndoToast } from "@/lib/undo-toast"
+import { Markdown } from "@/components/markdown"
 import { fileQueryRange, fileReference } from "@/lib/file-references"
 import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer-editor"
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
@@ -82,11 +105,73 @@ import type { PromptSkillAttachment } from "@/lib/opencode"
 
 type SelectedSkill = PromptSkillAttachment & { key: string }
 
+function decodeInlineText(uri: string): string | null {
+  const comma = uri.indexOf(",")
+  if (comma < 0) return null
+  const meta = uri.slice(0, comma)
+  const payload = uri.slice(comma + 1)
+  try {
+    if (meta.includes(";base64")) {
+      const binary = atob(payload)
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index)
+      }
+      return new TextDecoder().decode(bytes.slice(0, 262144))
+    }
+    return decodeURIComponent(payload).slice(0, 262144)
+  } catch {
+    return null
+  }
+}
+
+function isTextPreviewMime(mime: string): boolean {
+  return (
+    mime === "text/plain" ||
+    mime === "text/markdown" ||
+    mime === "text/csv" ||
+    mime === "application/json"
+  )
+}
+
+function CsvPreview({ text }: { text: string }) {
+  const rows = text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 50)
+    .map((line) => line.split(",").slice(0, 12))
+  return (
+    <div className="max-h-72 overflow-auto rounded-lg border border-border/70">
+      <table className="w-full text-start text-[12px]">
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className={rowIndex === 0 ? "bg-muted/60 font-medium" : undefined}>
+              {row.map((cell, cellIndex) => (
+                <td key={cellIndex} dir="auto" className="border-b border-border/60 px-2 py-1 whitespace-pre">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function AttachmentPreview({
   attachment,
 }: {
   attachment: ComposerAttachment
 }) {
+  const [open, setOpen] = useState(false)
+  const inlineText =
+    attachment.source === "inline" && isTextPreviewMime(attachment.mime)
+      ? decodeInlineText(attachment.uri)
+      : null
+  const audio =
+    attachment.mime.startsWith("audio/") && attachment.uri.startsWith("data:")
+
   if (
     attachment.previewDataUrl &&
     isSafeImageMime(attachment.mime) &&
@@ -102,7 +187,19 @@ function AttachmentPreview({
     )
   }
 
-  return (
+  if (audio) {
+    return (
+      <audio
+        controls
+        preload="metadata"
+        src={attachment.uri}
+        aria-label={`Preview audio ${attachment.name}`}
+        className="h-9 w-40 shrink-0"
+      />
+    )
+  }
+
+  const icon = (
     <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
       {attachment.source === "uri" ? (
         <FolderOpenIcon aria-hidden="true" className="size-4" />
@@ -111,9 +208,62 @@ function AttachmentPreview({
       )}
     </span>
   )
+
+  if (!inlineText) return icon
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Preview ${attachment.name}`}
+        className="rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+        onClick={() => setOpen(true)}
+      >
+        {icon}
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[85svh] max-w-2xl overflow-hidden">
+          <DialogTitle className="truncate text-base">{attachment.name}</DialogTitle>
+          <div className="min-h-0 overflow-y-auto">
+            {attachment.mime === "text/markdown" ? (
+              <div className="prose-sm message-markdown text-sm">
+                <Markdown>{inlineText}</Markdown>
+              </div>
+            ) : attachment.mime === "text/csv" ? (
+              <CsvPreview text={inlineText} />
+            ) : attachment.mime === "application/json" ? (
+              <pre dir="ltr" className="max-h-72 overflow-auto rounded-lg bg-muted/40 p-3 font-mono text-[12px]">
+                {(() => {
+                  try {
+                    return JSON.stringify(JSON.parse(inlineText), null, 2)
+                  } catch {
+                    return inlineText
+                  }
+                })()}
+              </pre>
+            ) : (
+              <pre dir="auto" className="max-h-72 overflow-auto rounded-lg bg-muted/40 p-3 text-[12px] whitespace-pre-wrap">
+                {inlineText}
+              </pre>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
 }
 
-export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: { nav: OpenCodeController; modelSettingsOpen?: boolean; onModelSettingsOpenChange?: (open: boolean) => void }) {
+export function Composer({
+  nav,
+  modelSettingsOpen,
+  onModelSettingsOpenChange,
+  onOpenSettings,
+}: {
+  nav: OpenCodeController
+  modelSettingsOpen?: boolean
+  onModelSettingsOpenChange?: (open: boolean) => void
+  onOpenSettings?: () => void
+}) {
   recordPerfRender("Composer")
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
     readDrafts()
@@ -190,6 +340,15 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
 
   const activeSession = nav.activeSession
   const draftKey = nav.activeSessionID ?? "__none__"
+  const { bindings } = useKeybindings()
+  const undo = useUndoToast()
+  const [recallIndex, setRecallIndex] = useState(-1)
+  const [citationsBySession, setCitationsBySession] = useState<
+    Record<string, Array<{ id: string; text: string; quote: string }>>
+  >({})
+  const citationSequence = useRef(0)
+  const [stashMenuOpen, setStashMenuOpen] = useState(false)
+  const [stashVersion, setStashVersion] = useState(0)
   const [feedbackSession, setFeedbackSession] = useState(draftKey)
   if (feedbackSession !== draftKey) {
     setFeedbackSession(draftKey)
@@ -199,6 +358,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     setDictationError(null)
     setSettingsError(null)
     setCommandFeedback(null)
+    setRecallIndex(-1)
   }
   useLayoutEffect(() => {
     activeDraftKeyRef.current = draftKey
@@ -259,6 +419,70 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     return () => window.removeEventListener("composer-insert-project-reference", listener)
   })
 
+  // Citations arrive as attributed plain text plus a removable chip. The text
+  // itself is written into the draft so drafts and stashes keep it.
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionID: string | null; text: string; quote: string }>).detail
+      if (!detail || detail.sessionID !== nav.activeSessionID || typeof detail.text !== "string") return
+      const current = draftsRef.current[draftKey] ?? ""
+      const insertion = `${current && !current.endsWith("\n") ? "\n\n" : ""}${detail.text}`
+      setDraft(current + insertion)
+      citationSequence.current += 1
+      const id = `citation-${citationSequence.current}`
+      setCitationsBySession((state) => ({
+        ...state,
+        [draftKey]: [...(state[draftKey] ?? []), { id, text: detail.text, quote: detail.quote }],
+      }))
+      requestAnimationFrame(() => editorRef.current?.focus())
+    }
+    window.addEventListener("composer-citation", listener)
+    return () => window.removeEventListener("composer-citation", listener)
+  })
+
+  // Sending a message is a local action; a successful take-back or restored
+  // prompt arrives here so the composer can keep drafts honest.
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionID: string | null; text: string }>).detail
+      if (!detail || detail.sessionID !== nav.activeSessionID || typeof detail.text !== "string") return
+      setDraft(detail.text)
+      requestAnimationFrame(() => editorRef.current?.focus())
+    }
+    window.addEventListener("composer-restore-text", listener)
+    return () => window.removeEventListener("composer-restore-text", listener)
+  })
+
+  // Taking a queued prompt back cancels the native inbox item and restores its
+  // exact text and attachments; it must re-enter the queue at the end.
+  useEffect(() => {
+    const restore = nav.composerRestore
+    if (!restore || restore.sessionID !== nav.activeSessionID) return
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (cancelled) return
+      setDraft(restore.text)
+      for (const file of restore.files) {
+        attachmentSequenceRef.current += 1
+        nav.addAttachment({
+          id: `restored-${attachmentSequenceRef.current}`,
+          name: file.name,
+          mime: file.mime,
+          size: null,
+          uri: file.uri,
+          source: file.uri.startsWith("data:") ? "inline" : "uri",
+        })
+      }
+      nav.clearComposerRestore()
+      requestAnimationFrame(() => editorRef.current?.focus())
+    })
+    return () => {
+      cancelled = true
+    }
+    // nav methods are stable callbacks; restore identity drives this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav.composerRestore, nav.activeSessionID])
+
   useEffect(() => {
     const directory = activeSession?.location?.directory
     if (!fileQuery || fileQuery.sessionID !== draftKey || !directory || !fileQuery.query.trim()) return
@@ -305,6 +529,19 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
   const unknownSlash = slashDraft !== null && !findSlashCommand(slashCommands, slashDraft.name)
   const slashText = draft.startsWith("/")
   const selectedSkills = skillsBySession[draftKey] ?? []
+  const citations = citationsBySession[draftKey] ?? []
+  const storage = typeof window === "undefined" ? null : window.localStorage
+  const origin = typeof window === "undefined" ? "" : window.location.origin
+  const backendVersion = nav.serverVersion
+  const stashed = useMemo(
+    () =>
+      storage && backendVersion && draftKey !== "__none__"
+        ? readPromptStash(storage, origin, backendVersion, draftKey)
+        : [],
+    // stashVersion invalidates storage reads after a mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stashVersion, draftKey, backendVersion, storage, origin]
+  )
 
   useEffect(() => {
     if (draft && !draft.startsWith("/") && lastPlainDraftRef.current[draftKey] === undefined) {
@@ -540,6 +777,91 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
       const next = existing.filter((skill) => !keys.has(skill.key))
       return { ...current, [sessionKey]: next }
     })
+  }
+
+  function recallHistory(): string[] {
+    if (!storage || !backendVersion || draftKey === "__none__") return []
+    return readPromptHistory(storage, origin, backendVersion, draftKey)
+  }
+
+  function rememberPrompt(text: string) {
+    if (!storage || !backendVersion || draftKey === "__none__" || !text.trim()) return
+    recordPrompt(storage, origin, backendVersion, draftKey, text)
+  }
+
+  function handleRecall(direction: "older" | "newer") {
+    const history = recallHistory()
+    const next = cycleRecall(history, recallIndex, direction)
+    if (next.text === null) {
+      if (recallIndex >= 0) setDraft("")
+      setRecallIndex(-1)
+      requestAnimationFrame(() => editorRef.current?.focus())
+      return
+    }
+    setRecallIndex(next.index)
+    setDraft(next.text)
+    requestAnimationFrame(() => {
+      editorRef.current?.focus()
+      editorRef.current?.setCaret(next.text!.length)
+    })
+  }
+
+  function handleStash() {
+    const text = draft
+    if (!text.trim()) {
+      setStashMenuOpen(true)
+      return
+    }
+    if (!storage || !backendVersion || draftKey === "__none__") {
+      setCommandFeedback({ tone: "error", text: "Stashing is unavailable until the server version is known." })
+      return
+    }
+    const next = stashPrompt(storage, origin, backendVersion, draftKey, text)
+    setStashVersion((current) => current + 1)
+    setDraft("")
+    setCitationsBySession((current) => {
+      const copy = { ...current }
+      delete copy[draftKey]
+      return copy
+    })
+    const entry = next[0]
+    undo.showUndo("Draft stashed", () => {
+      if (entry) {
+        removeStashedPrompt(storage, origin, backendVersion, draftKey, entry.id)
+        setStashVersion((current) => current + 1)
+      }
+      setDraft(text)
+    })
+  }
+
+  function restoreStash(entry: StashEntry) {
+    if (!storage || !backendVersion || draftKey === "__none__") return
+    const previous = draft
+    removeStashedPrompt(storage, origin, backendVersion, draftKey, entry.id)
+    setStashVersion((current) => current + 1)
+    setDraft(entry.text)
+    setStashMenuOpen(false)
+    undo.showUndo("Stashed draft restored", () => {
+      stashPrompt(storage, origin, backendVersion, draftKey, entry.text)
+      setStashVersion((current) => current + 1)
+      setDraft(previous)
+    })
+    requestAnimationFrame(() => {
+      editorRef.current?.focus()
+      editorRef.current?.setCaret(entry.text.length)
+    })
+  }
+
+  function discardDraft() {
+    const previous = draft
+    if (!previous) return
+    setDraft("")
+    setCitationsBySession((current) => {
+      const copy = { ...current }
+      delete copy[draftKey]
+      return copy
+    })
+    undo.showUndo("Draft discarded", () => setDraft(previous))
   }
 
   function openSessionDialog(
@@ -1087,6 +1409,58 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
       if (!hasText) event.preventDefault()
       void addFiles(files, nav.activeSessionID, "paste")
     }
+    // A large text paste becomes a text-file attachment only when the selected
+    // model and the prompt path accept text files; otherwise it stays inline
+    // with an honest notice and an undo action.
+    const LARGE_PASTE_BYTES = 32 * 1024
+    if (!files.length && plainText.length > LARGE_PASTE_BYTES) {
+      event.preventDefault()
+      event.stopPropagation()
+      const targetSessionID = nav.activeSessionID
+      const model = nav.activeSession?.model
+        ? nav.models.find(
+            (candidate) =>
+              candidate.providerID === nav.activeSession?.model?.providerID &&
+              candidate.id === nav.activeSession?.model?.id
+          ) ?? null
+        : null
+      const canAttach =
+        Boolean(targetSessionID) &&
+        nav.attachments.length < MAX_ATTACHMENT_COUNT &&
+        modelSupportsAttachment(model, "text/plain")
+      const beforePaste = draftsRef.current[draftKey] ?? ""
+      const pasteBytes = new TextEncoder().encode(plainText).length
+      if (canAttach && targetSessionID) {
+        attachmentSequenceRef.current += 1
+        const name = `pasted-text-${attachmentSequenceRef.current}.txt`
+        const file = new File([plainText], name, { type: "text/plain" })
+        void attachmentFromBrowserFile(
+          file,
+          `paste-text-${attachmentSequenceRef.current}`,
+          name
+        )
+          .then((attachment) => {
+            const failure = nav.addAttachment(attachment, targetSessionID)
+            if (failure) {
+              editorRef.current?.insertPlainText(plainText)
+              setAttachmentError(failure)
+              return
+            }
+            undo.showUndo(`Pasted ${formatFileSize(pasteBytes)} added as a text attachment`, () => {
+              nav.removeAttachment(attachment.id, targetSessionID)
+            })
+          })
+          .catch(() => {
+            editorRef.current?.insertPlainText(plainText)
+            undo.showUndo("Large paste kept inline", () => setDraft(beforePaste))
+          })
+        return
+      }
+      editorRef.current?.insertPlainText(plainText)
+      undo.showUndo("Large paste kept inline", () => setDraft(beforePaste))
+      return
+    }
+
     // Lexical's normal paste path normalizes CRLF. Insert the clipboard's
     // literal plain text instead so drafts and prompt bytes remain unchanged.
     if (plainText.includes("\r")) {
@@ -1128,6 +1502,13 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
 
       if (activeDraftKeyRef.current === sessionKey) setAttachmentError(null)
       clearExactSkills(sessionKey, submittedSkills)
+      if (!slashText) rememberPrompt(submitted)
+      setRecallIndex(-1)
+      setCitationsBySession((current) => {
+        const copy = { ...current }
+        delete copy[sessionKey]
+        return copy
+      })
 
       // Never discard edits made while admission was in flight.
       clearExactDraft(sessionKey, submitted, revision)
@@ -1160,6 +1541,38 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     const native = event.nativeEvent
     if (composingRef.current.isComposing(draftKey) || native.isComposing || native.keyCode === 229) {
       return
+    }
+
+    const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
+    const stashBinding = bindings.find((binding) => binding.command === "composer.stash")
+    const backgroundBinding = bindings.find(
+      (binding) => binding.command === "composer.backgroundSend"
+    )
+    if (stashBinding && matchesKeybinding(native, stashBinding, platform)) {
+      event.preventDefault()
+      handleStash()
+      return
+    }
+    if (backgroundBinding && matchesKeybinding(native, backgroundBinding, platform)) {
+      event.preventDefault()
+      if (canSend) {
+        void submit(responding ? "steer" : null)
+        focusComposer()
+      }
+      return
+    }
+
+    if (!pickerOpen && !fileQuery && recallHistory().length > 0) {
+      if (event.key === "ArrowUp" && (draft === "" || recallIndex >= 0)) {
+        event.preventDefault()
+        handleRecall("older")
+        return
+      }
+      if (event.key === "ArrowDown" && recallIndex >= 0) {
+        event.preventDefault()
+        handleRecall("newer")
+        return
+      }
     }
 
     if (fileQuery?.sessionID === draftKey) {
@@ -1304,6 +1717,46 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
           <Button type="button" variant="outline" className="min-h-11" disabled={!canSend} onClick={() => void submit(responding ? "steer" : null)}>
             Send as literal message{responding ? " (steer)" : ""}
           </Button>
+        </div>
+      ) : null}
+      {citations.length > 0 ? (
+        <div className="mb-1.5 px-4">
+          <ul aria-label="Citations in this draft" className="flex gap-1.5 overflow-x-auto pb-0.5">
+            {citations.map((citation) => (
+              <li
+                key={citation.id}
+                className="flex min-h-11 max-w-72 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-background/70 py-0.5 ps-3 pe-0.5"
+              >
+                <span className="min-w-0 truncate text-xs" dir="auto">
+                  {citation.quote}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove citation ${citation.quote.slice(0, 40)}`}
+                  className="size-11 shrink-0 rounded-full text-muted-foreground"
+                  onClick={() => {
+                    const at = draft.lastIndexOf(citation.text)
+                    setDraft(
+                      at >= 0
+                        ? (draft.slice(0, at) + draft.slice(at + citation.text.length)).trimEnd()
+                        : draft
+                    )
+                    setCitationsBySession((current) => ({
+                      ...current,
+                      [draftKey]: (current[draftKey] ?? []).filter((item) => item.id !== citation.id),
+                    }))
+                  }}
+                >
+                  <XIcon aria-hidden="true" className="size-4" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <p role="status" className="text-[11px] text-muted-foreground">
+            Citations are sent as attributed plain text.
+          </p>
         </div>
       ) : null}
       {selectedSkills.length > 0 ? (
@@ -1462,6 +1915,47 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
                 >
                   <ListEndIcon aria-hidden="true" className="size-4" />
                   Queue message
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={!canSend}
+                onClick={() => {
+                  void submit(responding ? "steer" : null)
+                  focusComposer()
+                }}
+              >
+                <ArrowUpIcon aria-hidden="true" className="size-4" />
+                Send and start a fresh draft
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={!draft.trim()}
+                onClick={handleStash}
+              >
+                <FileTextIcon aria-hidden="true" className="size-4" />
+                Stash draft
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={stashed.length === 0}
+                onClick={() => setStashMenuOpen(true)}
+              >
+                <FileTextIcon aria-hidden="true" className="size-4" />
+                Restore stashed draft{stashed.length ? ` (${stashed.length})` : ""}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="min-h-11"
+                disabled={!draft.trim()}
+                onClick={discardDraft}
+              >
+                <XIcon aria-hidden="true" className="size-4" />
+                Discard draft
+              </DropdownMenuItem>
+              {onOpenSettings ? (
+                <DropdownMenuItem className="min-h-11" onClick={onOpenSettings}>
+                  <SettingsIcon aria-hidden="true" className="size-4" />
+                  Open settings
                 </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
@@ -1645,6 +2139,57 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
         </p>
       </PopoverContent>
       </Popover>
+      <Dialog open={stashMenuOpen} onOpenChange={setStashMenuOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Stashed drafts</DialogTitle>
+            <DialogDescription>
+              Stored in this browser for this session. Restoring inserts the text.
+            </DialogDescription>
+          </DialogHeader>
+          {stashed.length === 0 ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              No stashed drafts for this session.
+            </p>
+          ) : (
+            <ul className="max-h-72 space-y-1 overflow-y-auto">
+              {stashed.map((entry) => (
+                <li key={entry.id} className="flex items-center gap-1 rounded-lg border border-border/70 p-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-11 min-w-0 flex-1 justify-start px-2 text-start text-[12px] font-normal"
+                    onClick={() => restoreStash(entry)}
+                  >
+                    <span className="line-clamp-2" dir="auto">{stashPreview(entry.text)}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-11 shrink-0 px-2 text-[11px] text-muted-foreground"
+                    onClick={() => {
+                      if (!storage || !backendVersion) return
+                      removeStashedPrompt(storage, origin, backendVersion, draftKey, entry.id)
+                      setStashVersion((current) => current + 1)
+                      undo.showUndo("Stashed draft deleted", () => {
+                        stashPrompt(storage, origin, backendVersion, draftKey, entry.text)
+                        setStashVersion((current) => current + 1)
+                      })
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" className="h-11" onClick={() => setStashMenuOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <SessionCommandDialogs
         kind={sessionDialog}
         nav={nav}
