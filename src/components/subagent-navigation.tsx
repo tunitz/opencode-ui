@@ -108,7 +108,7 @@ export function SubagentNavigation({ nav, title }: { nav: OpenCodeController; ti
     } catch { setNavigationError("Subagent session is unavailable. Try again.") }
   }
 
-  return <div className="relative flex min-w-0 flex-1 items-center justify-center">
+  return <div className="relative flex min-w-0 flex-1 items-center justify-center md:justify-start">
     {session.parentID ? <Button type="button" variant="ghost" size="icon-lg" className="size-11 shrink-0" aria-label="Return to parent session" disabled={parentBusy} onClick={() => void openParent()}><ArrowLeftIcon aria-hidden="true" className="rtl:rotate-180" /></Button> : null}
     <DropdownMenu open={open} onOpenChange={(next) => { if (next) { setBusy(true); setRetry((value) => value + 1) } setOpen(next) }} modal={false}>
       <h1 className="min-w-0" title={title} aria-label={title}>

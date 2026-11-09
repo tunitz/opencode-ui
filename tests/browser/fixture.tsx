@@ -10,7 +10,9 @@ import { StrictMode, useEffect, useState, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { AppDirection } from "@/components/app-direction"
+import { AppHeader } from "@/components/app-header"
 import { CommandCenter } from "@/components/command-center"
+import { Composer } from "@/components/composer"
 import { Conversation } from "@/components/conversation"
 import { ChangesPanel } from "@/components/files-panel"
 import { ModelSettingsDrawer } from "@/components/model-settings"
@@ -212,6 +214,7 @@ function useSyntheticNav(initialInspectorOpen = false) {
     interruptSession: async () => null,
     switchAgent: async () => null,
     switchModel: async () => null,
+    subscribeSessionListChanges: () => () => undefined,
     replyPermission: async () => null,
     replyForm: async () => null,
     cancelForm: async () => null,
@@ -233,6 +236,67 @@ function useSyntheticNav(initialInspectorOpen = false) {
   } as unknown as OpenCodeController
 
   return nav
+}
+
+function useComposerNav() {
+  const nav = useSyntheticNav()
+  return {
+    ...nav,
+    activeSession: nav.activeSession
+      ? {
+          ...nav.activeSession,
+          model: {
+            providerID: "commandcode",
+            id: "deepseek-v4.1-flash",
+            variant: "high",
+          },
+        }
+      : null,
+    models: [
+      {
+        id: "deepseek-v4.1-flash",
+        modelID: "deepseek-v4.1-flash",
+        providerID: "commandcode",
+        name: "DeepSeek V4.1 Flash",
+        variants: [{ id: "high" }, { id: "low" }],
+        enabled: true,
+        status: "active",
+        capabilities: {},
+        cost: [],
+        limit: { context: 100000, output: 10000 },
+        time: { released: now },
+      },
+    ] as unknown as OpenCodeController["models"],
+    agents: [
+      {
+        id: "build",
+        name: "Build",
+        mode: "primary",
+        hidden: false,
+      },
+    ] as unknown as OpenCodeController["agents"],
+    agentsStatus: "ready",
+    modelsStatus: "ready",
+    commands: [],
+    commandsStatus: "ready",
+    commandsError: null,
+    commandsDirectory: null,
+    draftPruneIds: [],
+    interrupting: false,
+    sending: false,
+    switchAgent: async (agentID: string) => {
+      log("switchAgent", agentID)
+      return null
+    },
+    switchModel: async (model: {
+      providerID: string
+      id: string
+      variant?: string
+    }) => {
+      log("switchModel", JSON.stringify(model))
+      return null
+    },
+  } as unknown as OpenCodeController
 }
 
 const longText = (index: number) =>
@@ -350,8 +414,24 @@ function CommandFixture() {
   )
 }
 
-function ConversationFixture({ history = false, longToolErrors = false }: { history?: boolean; longToolErrors?: boolean }) {
-  const nav = useSyntheticNav()
+function ComposerFixture() {
+  const nav = useComposerNav()
+  return (
+    <Providers nav={nav}>
+      <div className="flex h-svh min-h-0">
+        <SessionSidebar nav={nav} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <AppHeader nav={nav} />
+          <main className="flex min-h-0 flex-1 flex-col md:px-6 lg:px-8">
+            <Composer nav={nav} />
+          </main>
+        </div>
+      </div>
+    </Providers>
+  )
+}
+
+function ConversationFixture({ history = false, longToolErrors = false }: { history?: boolean; longToolErrors?: boolean }) {  const nav = useSyntheticNav()
   const [messages, setMessages] = useState(() => syntheticMessages(longToolErrors))
   const [hasOlder, setHasOlder] = useState(history)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -456,6 +536,8 @@ function Fixture() {
   switch (fixture) {
     case "command":
       return <CommandFixture />
+    case "composer":
+      return <ComposerFixture />
     case "conversation":
       return <ConversationFixture />
     case "conversation-history":

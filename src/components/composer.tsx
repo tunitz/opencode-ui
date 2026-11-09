@@ -26,7 +26,7 @@ import { Dictation } from "@/components/dictation"
 import { BtwDialog } from "@/components/btw-dialog"
 import { FilesPanel } from "@/components/files-panel"
 import { Dialog, DialogTitle } from "@/components/ui/dialog"
-import { ModelSettingsDrawer } from "@/components/model-settings"
+import { ModelSettingsDrawer, ModelSettingsInline } from "@/components/model-settings"
 import {
   SessionCommandDialogs,
   type SessionCommandDialogKind,
@@ -76,6 +76,7 @@ import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
+import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import type { PromptSkillAttachment } from "@/lib/opencode"
 
@@ -123,6 +124,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
   const [storageConflictKey, setStorageConflictKey] = useState<string | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [dictationError, setDictationError] = useState<string | null>(null)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
   const [attaching, setAttaching] = useState(false)
   const [skillsBySession, setSkillsBySession] = useState<
     Record<string, SelectedSkill[]>
@@ -163,6 +165,24 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
   const editorRef = useRef<ComposerEditorHandle>(null)
   const attachmentSequenceRef = useRef(0)
   const skillSequenceRef = useRef(0)
+  const formRef = useRef<HTMLFormElement>(null)
+  const [composerWidth, setComposerWidth] = useState(0)
+  const isDesktop = useIsDesktop()
+  const inlineModelSettings = isDesktop && composerWidth >= 760
+
+  useLayoutEffect(() => {
+    const element = formRef.current
+    if (!element) return
+    const measure = () => setComposerWidth(element.getBoundingClientRect().width)
+    measure()
+    if (typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setComposerWidth(entry.contentRect.width)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   // A touch interaction selects virtual-keyboard behavior; a mouse or pen
   // interaction selects hardware-keyboard behavior on hybrid devices.
@@ -177,6 +197,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     setInterruptError(null)
     setAttachmentError(null)
     setDictationError(null)
+    setSettingsError(null)
     setCommandFeedback(null)
   }
   useLayoutEffect(() => {
@@ -379,6 +400,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
     interruptError ??
     dictationError ??
     attachmentError ??
+    settingsError ??
     (commandFeedback?.tone === "error" ? commandFeedback.text : null)
   const statusText =
     visibleError ??
@@ -580,6 +602,13 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
       case "models":
       case "agents":
       case "thinking": {
+        if (inlineModelSettings) {
+          onModelSettingsOpenChange?.(true)
+          return {
+            ok: true,
+            message: "Opened the current session's model settings.",
+          }
+        }
         const opened = clickVisible('button[aria-label^="Active model"]')
         return opened
           ? {
@@ -1215,7 +1244,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
         }}
         modal={false}
       >
-      <form className="shrink-0" onSubmit={handleSubmit}>
+      <form ref={formRef} className="shrink-0" onSubmit={handleSubmit}>
       {activeSession && preview?.sessionID === draftKey ? (
         <Dialog open onOpenChange={(open) => { if (!open) setPreview(null) }}>
           <ResponsiveDialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl md:max-w-3xl">
@@ -1452,9 +1481,20 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
             }}
           />
 
+          {inlineModelSettings ? (
+            <ModelSettingsInline
+              nav={nav}
+              open={modelSettingsOpen}
+              onOpenChange={onModelSettingsOpenChange}
+              onError={setSettingsError}
+            />
+          ) : null}
+
           <div className="min-w-0 flex-1" aria-hidden="true" />
 
-          <ModelSettingsDrawer nav={nav} open={modelSettingsOpen} onOpenChange={onModelSettingsOpenChange} />
+          {inlineModelSettings ? null : (
+            <ModelSettingsDrawer nav={nav} open={modelSettingsOpen} onOpenChange={onModelSettingsOpenChange} />
+          )}
 
           {responding ? (
             <Button

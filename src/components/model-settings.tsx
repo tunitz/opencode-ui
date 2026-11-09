@@ -44,72 +44,18 @@ type Option = {
   disabled?: boolean
 }
 
-function SettingSelect({
-  name,
-  value,
-  options,
-  disabled,
-  busy,
-  showDetail,
-  onValueChange,
-}: {
-  name: string
-  value: string
-  options: Option[]
-  disabled?: boolean
-  busy?: boolean
-  showDetail?: boolean
-  onValueChange: (value: string) => void
-}) {
-  const selected = options.find((option) => option.value === value)
-  const fallbackLabel = value || "Default"
-  const triggerLabel =
-    showDetail && selected?.detail
-      ? selected.detail
-      : selected?.label ?? fallbackLabel
-  const ariaValue = triggerLabel
+type ModelSettingsState = ReturnType<typeof useModelSettingsState>
 
-  return (
-    <PickerSelect
-      label={name}
-      ariaLabel={`${name}, ${ariaValue}`}
-      value={value}
-      options={options}
-      disabled={disabled}
-      busy={busy}
-      showDetail={showDetail}
-      placeholder={value || "Default"}
-      triggerProps={{ "aria-busy": busy }}
-      onValueChange={onValueChange}
-      triggerClassName="h-11! w-full min-w-0 gap-2 overflow-hidden px-3 text-sm"
-    />
-  )
-}
+function useModelSettingsState(
+  nav: OpenCodeController,
+  onError?: (message: string | null) => void
+) {
+  const [selectorError, setSelectorErrorState] = useState<string | null>(null)
 
-function SettingRow({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="grid gap-1.5">
-      <span className="px-1 text-xs font-medium text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </div>
-  )
-}
-
-export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }: { nav: OpenCodeController; open?: boolean; onOpenChange?: (open: boolean) => void }) {
-  recordPerfRender("ModelSettingsDrawer")
-  const [localOpen, setLocalOpen] = useState(false)
-  const open = controlledOpen ?? localOpen
-  const setOpen = onOpenChange ?? setLocalOpen
-  const [selectorError, setSelectorError] = useState<string | null>(null)
-  const isDesktop = useIsDesktop()
+  function setSelectorError(message: string | null) {
+    setSelectorErrorState(message)
+    onError?.(message)
+  }
 
   const session = nav.activeSession
   const model = session?.model ?? null
@@ -198,7 +144,164 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
     if (failure) setSelectorError(failure)
   }
 
-  const thinkingLabel = model ? explicitVariant || "Default" : null
+  return {
+    nav,
+    session,
+    model,
+    agentID,
+    selectableModelList,
+    selectableAgentList,
+    selectedModelInfo,
+    explicitVariant,
+    variantSelectValue,
+    agentOptions,
+    modelOptions,
+    variantOptions,
+    running,
+    catalogError,
+    selectorError,
+    handleAgentChange,
+    handleModelChange,
+    handleVariantChange,
+  }
+}
+
+function SettingSelect({
+  name,
+  value,
+  options,
+  disabled,
+  busy,
+  showDetail,
+  onValueChange,
+}: {
+  name: string
+  value: string
+  options: Option[]
+  disabled?: boolean
+  busy?: boolean
+  showDetail?: boolean
+  onValueChange: (value: string) => void
+}) {
+  const selected = options.find((option) => option.value === value)
+  const fallbackLabel = value || "Default"
+  const triggerLabel =
+    showDetail && selected?.detail
+      ? selected.detail
+      : selected?.label ?? fallbackLabel
+  const ariaValue = triggerLabel
+
+  return (
+    <PickerSelect
+      label={name}
+      ariaLabel={`${name}, ${ariaValue}`}
+      value={value}
+      options={options}
+      disabled={disabled}
+      busy={busy}
+      showDetail={showDetail}
+      placeholder={value || "Default"}
+      triggerProps={{ "aria-busy": busy }}
+      onValueChange={onValueChange}
+      triggerClassName="h-11! w-full min-w-0 gap-2 overflow-hidden px-3 text-sm"
+    />
+  )
+}
+
+function SettingRow({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <span className="px-1 text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+function ModelSettingsForm({ state }: { state: ModelSettingsState }) {
+  return (
+    <div className="grid gap-4">
+      <SettingRow label="Agent">
+        <SettingSelect
+          name="Agent"
+          value={state.agentID ?? ""}
+          options={state.agentOptions}
+          disabled={!state.session || state.nav.switchingAgent}
+          busy={state.nav.switchingAgent}
+          onValueChange={(value) => void state.handleAgentChange(value)}
+        />
+      </SettingRow>
+      <SettingRow label="Model">
+        <SettingSelect
+          name="Model"
+          showDetail
+          value={modelRefKey(state.model)}
+          options={state.modelOptions}
+          disabled={!state.session || state.nav.switchingModel}
+          busy={state.nav.switchingModel}
+          onValueChange={(value) => void state.handleModelChange(value)}
+        />
+      </SettingRow>
+      <SettingRow label="Thinking Level">
+        <SettingSelect
+          name="Thinking Level"
+          value={state.variantSelectValue}
+          options={state.variantOptions}
+          disabled={!state.session || !state.selectedModelInfo || state.nav.switchingModel}
+          busy={state.nav.switchingModel}
+          onValueChange={(value) => void state.handleVariantChange(value)}
+        />
+      </SettingRow>
+      {state.model && state.explicitVariant ? (
+        <p className="px-1 text-[11px] leading-5 text-muted-foreground">
+          Changing Model keeps Thinking Level when the new model supports
+          it; otherwise it uses Default.
+        </p>
+      ) : null}
+      {state.running ? (
+        <p className="text-xs text-muted-foreground">
+          Changes apply to the next turn; the current run is unaffected.
+        </p>
+      ) : null}
+      {state.selectorError ? (
+        <p role="alert" className="text-xs break-words text-destructive">
+          {state.selectorError}
+        </p>
+      ) : null}
+      {state.catalogError ? (
+        <p role="alert" className="text-xs break-words text-destructive">
+          Agents or models could not be loaded.{" "}
+          <Button
+            type="button"
+            variant="link"
+            onClick={state.nav.retryCatalogs}
+            className="h-11 min-w-11 px-2 align-middle text-xs underline"
+          >
+            Retry
+          </Button>
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }: { nav: OpenCodeController; open?: boolean; onOpenChange?: (open: boolean) => void }) {
+  recordPerfRender("ModelSettingsDrawer")
+  const [localOpen, setLocalOpen] = useState(false)
+  const open = controlledOpen ?? localOpen
+  const setOpen = onOpenChange ?? setLocalOpen
+  const isDesktop = useIsDesktop()
+  const state = useModelSettingsState(nav)
+
+  const { model, agentID } = state
+  const thinkingLabel = model ? state.explicitVariant || "Default" : null
   const triggerLabel = model
     ? `${model.providerID}/${model.id} · Thinking Level ${thinkingLabel}`
     : "No model"
@@ -233,71 +336,6 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
     />
   )
 
-  const settingsBody = (
-    <div className="grid gap-4">
-      <SettingRow label="Agent">
-        <SettingSelect
-          name="Agent"
-          value={agentID ?? ""}
-          options={agentOptions}
-          disabled={!session || nav.switchingAgent}
-          busy={nav.switchingAgent}
-          onValueChange={(value) => void handleAgentChange(value)}
-        />
-      </SettingRow>
-      <SettingRow label="Model">
-        <SettingSelect
-          name="Model"
-          showDetail
-          value={modelRefKey(model)}
-          options={modelOptions}
-          disabled={!session || nav.switchingModel}
-          busy={nav.switchingModel}
-          onValueChange={(value) => void handleModelChange(value)}
-        />
-      </SettingRow>
-      <SettingRow label="Thinking Level">
-        <SettingSelect
-          name="Thinking Level"
-          value={variantSelectValue}
-          options={variantOptions}
-          disabled={!session || !selectedModelInfo || nav.switchingModel}
-          busy={nav.switchingModel}
-          onValueChange={(value) => void handleVariantChange(value)}
-        />
-      </SettingRow>
-      {model && explicitVariant ? (
-        <p className="px-1 text-[11px] leading-5 text-muted-foreground">
-          Changing Model keeps Thinking Level when the new model supports
-          it; otherwise it uses Default.
-        </p>
-      ) : null}
-      {running ? (
-        <p className="text-xs text-muted-foreground">
-          Changes apply to the next turn; the current run is unaffected.
-        </p>
-      ) : null}
-      {selectorError ? (
-        <p role="alert" className="text-xs break-words text-destructive">
-          {selectorError}
-        </p>
-      ) : null}
-      {catalogError ? (
-        <p role="alert" className="text-xs break-words text-destructive">
-          Agents or models could not be loaded.{" "}
-          <Button
-            type="button"
-            variant="link"
-            onClick={nav.retryCatalogs}
-            className="h-11 min-w-11 px-2 align-middle text-xs underline"
-          >
-            Retry
-          </Button>
-        </p>
-      ) : null}
-    </div>
-  )
-
   if (!isDesktop) {
     return (
       <Sheet open={open} onOpenChange={setOpen}>
@@ -320,7 +358,7 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
             </SheetDescription>
           </SheetHeader>
           <ScrollArea viewportClassName="max-h-[min(65svh,38rem)]" className="px-4 pb-5">
-            {settingsBody}
+            <ModelSettingsForm state={state} />
           </ScrollArea>
         </SheetContent>
       </Sheet>
@@ -345,9 +383,133 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
           </PopoverDescription>
         </PopoverHeader>
         <ScrollArea viewportClassName="max-h-[min(60svh,32rem)]" className="px-4 pb-5">
-          {settingsBody}
+          <ModelSettingsForm state={state} />
         </ScrollArea>
       </PopoverContent>
     </Popover>
+  )
+}
+
+const INLINE_TRIGGER_CLASS =
+  "h-11 w-auto min-w-11 justify-start gap-1 rounded-lg border-0 bg-transparent py-0 pe-1.5 ps-1.5 text-[14px] leading-6 font-medium text-foreground shadow-none hover:bg-muted/60 dark:bg-transparent dark:hover:bg-muted/60"
+
+export function ModelSettingsInline({
+  nav,
+  open: controlledOpen,
+  onOpenChange,
+  onError,
+}: {
+  nav: OpenCodeController
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  onError?: (message: string | null) => void
+}) {
+  recordPerfRender("ModelSettingsInline")
+  const [localOpen, setLocalOpen] = useState(false)
+  const open = controlledOpen ?? localOpen
+  const setOpen = onOpenChange ?? setLocalOpen
+  const state = useModelSettingsState(nav, onError)
+
+  const { session, model, agentID } = state
+  const thinkingLabel = model ? state.explicitVariant || "Default" : "Default"
+
+  return (
+    <div className="relative flex min-w-0 items-center gap-0.5">
+      <PickerSelect
+        label="Agent"
+        ariaLabel={`Agent, ${agentID ?? "None"}`}
+        value={agentID ?? ""}
+        options={state.agentOptions}
+        disabled={!session || nav.switchingAgent}
+        busy={nav.switchingAgent}
+        side="top"
+        align="start"
+        placeholder="Default"
+        triggerProps={{ "aria-busy": nav.switchingAgent }}
+        onValueChange={(value) => void state.handleAgentChange(value)}
+        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-48`}
+        iconClassName="size-3"
+      />
+      <PickerSelect
+        label="Model"
+        ariaLabel={`Model, ${model ? `${model.providerID}/${model.id}` : "No model"}`}
+        value={modelRefKey(model)}
+        options={state.modelOptions}
+        disabled={!session || nav.switchingModel}
+        busy={nav.switchingModel}
+        side="top"
+        align="start"
+        placeholder="No model"
+        triggerProps={{ "aria-busy": nav.switchingModel }}
+        renderValue={() =>
+          model ? (
+            <>
+              <span className="text-muted-foreground">{model.providerID}/</span>
+              {model.id}
+            </>
+          ) : (
+            "No model"
+          )
+        }
+        onValueChange={(value) => void state.handleModelChange(value)}
+        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-[20rem]`}
+        iconClassName="size-3"
+      />
+      <PickerSelect
+        label="Thinking Level"
+        ariaLabel={`Thinking Level, ${thinkingLabel}`}
+        value={state.variantSelectValue}
+        options={state.variantOptions}
+        disabled={!session || !state.selectedModelInfo || nav.switchingModel}
+        busy={nav.switchingModel}
+        side="top"
+        align="start"
+        placeholder="Default"
+        triggerProps={{ "aria-busy": nav.switchingModel }}
+        onValueChange={(value) => void state.handleVariantChange(value)}
+        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-32`}
+        iconClassName="size-3"
+      />
+      {state.catalogError ? (
+        <Button
+          type="button"
+          variant="ghost"
+          aria-label="Retry loading agents and models"
+          onClick={nav.retryCatalogs}
+          className="h-11 min-w-11 shrink-0 px-2 text-xs text-muted-foreground"
+        >
+          Retry
+        </Button>
+      ) : null}
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          nativeButton={false}
+          render={
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-0 start-0 h-0 w-0"
+            />
+          }
+        />
+        <PopoverContent
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="w-[min(30rem,calc(100vw-2rem))] gap-0 p-0"
+        >
+          <PopoverHeader className="px-5 pt-5 pb-3">
+            <PopoverTitle className="text-[17px] font-semibold tracking-tight">
+              Model settings
+            </PopoverTitle>
+            <PopoverDescription className="sr-only">
+              Agent, model, and thinking level for the next turn.
+            </PopoverDescription>
+          </PopoverHeader>
+          <ScrollArea viewportClassName="max-h-[min(60svh,32rem)]" className="px-4 pb-5">
+            <ModelSettingsForm state={state} />
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
+    </div>
   )
 }

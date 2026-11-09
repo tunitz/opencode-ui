@@ -943,6 +943,104 @@ if (browser) {
 }
 
 // ---------------------------------------------------------------------------
+// Composer inline model settings across desktop and mobile
+// ---------------------------------------------------------------------------
+if (browser) {
+  await run("desktop composer inline model settings chips and left-aligned header", async ({ check }) => {
+    const opened = await openPage({ width: 1440, height: 900 }, "composer")
+    const page = opened.page
+    try {
+      const agent = page.getByRole("combobox", { name: /^Agent,/ })
+      const model = page.getByRole("combobox", { name: /^Model,/ })
+      const thinking = page.getByRole("combobox", { name: /^Thinking Level,/ })
+      await agent.waitFor({ state: "visible" })
+      check("desktop composer shows the inline Agent picker", await agent.isVisible())
+      check("desktop composer shows the inline Model picker", await model.isVisible())
+      check("desktop composer shows the inline Thinking Level picker", await thinking.isVisible())
+      check(
+        "desktop composer omits the single Active model trigger when inline pickers are active",
+        (await page.getByRole("button", { name: /^Active model,/ }).count()) === 0
+      )
+
+      const titleBox = await page.locator("h1").first().boundingBox()
+      const surfaceBox = await page.locator("[data-composer-surface]").boundingBox()
+      check(
+        "desktop header title is left-aligned with the composer content edge",
+        Boolean(titleBox && surfaceBox && Math.abs(titleBox.x - surfaceBox.x) <= 2),
+        `title=${titleBox?.x} composer=${surfaceBox?.x}`
+      )
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("desktop composer inline"))!,
+        opened
+      )
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("narrow desktop composer keeps the model settings popover fallback", async ({ check }) => {
+    const opened = await openPage({ width: 1024, height: 900 }, "composer")
+    const page = opened.page
+    try {
+      const trigger = page.getByRole("button", { name: /^Active model,/ })
+      await trigger.waitFor({ state: "visible" })
+      check("narrow desktop keeps the single Active model trigger", await trigger.isVisible())
+      check(
+        "narrow desktop does not render inline pickers",
+        (await page.getByRole("combobox", { name: /^Agent,/ }).count()) === 0 &&
+          (await page.getByRole("combobox", { name: /^Model,/ }).count()) === 0 &&
+          (await page.getByRole("combobox", { name: /^Thinking Level,/ }).count()) === 0
+      )
+
+      await trigger.click()
+      const popover = page
+        .locator('[data-slot="popover-content"]')
+        .filter({ has: page.getByRole("heading", { name: "Model settings" }) })
+      await popover.waitFor({ state: "visible" })
+      check("narrow desktop opens model settings as an anchored popover", await popover.isVisible())
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("narrow desktop composer"))!,
+        opened
+      )
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("mobile composer keeps the model settings bottom sheet", async ({ check }) => {
+    const opened = await openPage({ width: 390, height: 844 }, "composer")
+    const page = opened.page
+    try {
+      const trigger = page.getByRole("button", { name: /^Active model,/ })
+      await trigger.waitFor({ state: "visible" })
+      check("mobile keeps the single Active model trigger", await trigger.isVisible())
+      check(
+        "mobile does not render inline pickers",
+        (await page.getByRole("combobox", { name: /^Agent,/ }).count()) === 0 &&
+          (await page.getByRole("combobox", { name: /^Model,/ }).count()) === 0 &&
+          (await page.getByRole("combobox", { name: /^Thinking Level,/ }).count()) === 0
+      )
+
+      await trigger.click()
+      const sheet = page
+        .locator('[data-slot="sheet-content"][data-side="bottom"]')
+        .filter({ has: page.getByRole("heading", { name: "Model settings" }) })
+      await sheet.waitFor({ state: "visible" })
+      check("mobile opens model settings as a bottom sheet", await sheet.isVisible())
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("mobile composer"))!,
+        opened
+      )
+    } finally {
+      await opened.context.close()
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Changes panel and inspector flow
 // ---------------------------------------------------------------------------
 if (browser) {

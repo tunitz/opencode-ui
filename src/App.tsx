@@ -93,7 +93,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
           />
           <Composer nav={nav} modelSettingsOpen={modelSettingsOpen} onModelSettingsOpenChange={setModelSettingsOpen} />
           </div>
-          {notes.hasWorkspace && <div className={notes.open ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8" : "hidden"}><NotesWorkspace /></div>}
+          {notes.hasWorkspace && <div className={notes.open ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6 lg:px-8" : "hidden"}><NotesWorkspace /></div>}
         </main>
       </div>
       <SessionInspectorPanel nav={nav} />

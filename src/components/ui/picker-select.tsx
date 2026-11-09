@@ -58,6 +58,8 @@ export function PickerSelect({
   triggerClassName,
   popupClassName,
   triggerProps,
+  renderValue,
+  iconClassName = "size-4",
 }: {
   value: string | null
   options: readonly PickerOption[]
@@ -77,6 +79,8 @@ export function PickerSelect({
   triggerClassName?: string
   popupClassName?: string
   triggerProps?: TriggerProps
+  renderValue?: (selected: PickerOption | null) => ReactNode
+  iconClassName?: string
 }) {
   const selected = options.find((option) => option.value === value) ?? null
   const selectedLabel = selected
@@ -121,11 +125,16 @@ export function PickerSelect({
             </span>
           ) : null}
           <span dir="auto" className="min-w-0 truncate">
-            {selectedLabel}
+            {renderValue ? renderValue(selected) : selectedLabel}
           </span>
         </span>
         <ComboboxPrimitive.Icon>
-          <ChevronDownIcon className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+          <ChevronDownIcon
+            className={cn(
+              "pointer-events-none shrink-0 text-muted-foreground",
+              iconClassName
+            )}
+          />
         </ComboboxPrimitive.Icon>
       </ComboboxPrimitive.Trigger>
       <ComboboxPrimitive.Portal>
