@@ -1481,6 +1481,8 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
             }}
           />
 
+          <div className="min-w-0 flex-1" aria-hidden="true" />
+
           {inlineModelSettings ? (
             <ModelSettingsInline
               nav={nav}
@@ -1488,11 +1490,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
               onOpenChange={onModelSettingsOpenChange}
               onError={setSettingsError}
             />
-          ) : null}
-
-          <div className="min-w-0 flex-1" aria-hidden="true" />
-
-          {inlineModelSettings ? null : (
+          ) : (
             <ModelSettingsDrawer nav={nav} open={modelSettingsOpen} onOpenChange={onModelSettingsOpenChange} />
           )}
 
