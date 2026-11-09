@@ -58,15 +58,15 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
   const trigger = questionCount > 0 ? (
     <Button
       variant="outline"
-      className="mx-4 mt-2 h-auto min-h-14 w-[calc(100%-2rem)] justify-between gap-3 whitespace-normal border-primary bg-primary/10 px-4 py-3 text-start text-foreground hover:bg-primary/15"
+      className="mx-4 mt-2 h-auto min-h-14 w-[calc(100%-2rem)] justify-between gap-3 whitespace-normal border-amber-500/70 bg-amber-500/15 px-4 py-3 text-start text-foreground shadow-sm ring-1 ring-amber-500/30 hover:bg-amber-500/20 dark:border-amber-400/70 dark:bg-amber-400/15 dark:ring-amber-400/30 dark:hover:bg-amber-400/20"
     >
       <span className="flex min-w-0 items-center gap-3">
-        <MessageCircleQuestionIcon aria-hidden="true" className="size-5 text-primary" />
+        <MessageCircleQuestionIcon aria-hidden="true" className="size-5 text-amber-600 dark:text-amber-400" />
         <span className="text-sm font-semibold">
           {questionCount === 1 ? "A question needs your answer" : `${questionCount} questions need your answer`}
         </span>
       </span>
-      <span className="shrink-0 text-sm font-semibold text-primary underline underline-offset-4">
+      <span className="shrink-0 text-sm font-semibold text-amber-700 underline underline-offset-4 dark:text-amber-300">
         Review
       </span>
     </Button>
