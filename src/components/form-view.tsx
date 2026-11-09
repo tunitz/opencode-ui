@@ -4,13 +4,7 @@ import { ExternalLinkIcon, LoaderCircleIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { PickerSelect } from "@/components/ui/picker-select"
 import { Textarea } from "@/components/ui/textarea"
 import { safeExternalUrl } from "@/lib/provider-auth"
 import {
@@ -255,55 +249,22 @@ export function FieldRenderer({
           <Title field={field} required={field.required} />
         </label>
         <Description field={field} />
-        <Select
+        <PickerSelect
+          id={id}
+          label={field.title ?? field.key}
           value={stringValue || null}
-          onValueChange={(next) => onChange(next ?? undefined)}
-          modal={false}
-        >
-          <SelectTrigger
-            id={id}
-            aria-label={field.title ?? field.key}
-            aria-describedby={describedBy}
-            aria-invalid={Boolean(error)}
-            className="h-11! w-full min-w-0 justify-between"
-          >
-            <SelectValue className="min-w-0">
-              {() => (
-                <span className="min-w-0 truncate">
-                  {stringValue || "Choose…"}
-                </span>
-              )}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent
-            align="start"
-            alignItemWithTrigger={false}
-            sideOffset={6}
-            className="p-1"
-            style={{
-              width: "max-content",
-              minWidth: "var(--anchor-width)",
-              maxWidth: "min(22rem, calc(100vw - 2rem))",
-            }}
-          >
-            {field.options.map((option) => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                className="min-h-11 py-2 ps-2 [&>span]:items-start [&>span]:whitespace-normal"
-              >
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className="text-[13px] break-words">{option.label}</span>
-                  {option.description ? (
-                    <span dir="ltr" className="font-mono text-[11px] break-all text-muted-foreground">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={field.options.map((option) => ({
+            value: option.value,
+            label: option.label,
+            detail: option.description,
+          }))}
+          placeholder="Choose…"
+          onValueChange={(next) => onChange(next)}
+          triggerProps={{
+            "aria-describedby": describedBy,
+            "aria-invalid": Boolean(error),
+          }}
+        />
         <FieldError id={id} error={error} />
       </div>
     )

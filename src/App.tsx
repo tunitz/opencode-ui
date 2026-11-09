@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
-import { CommandCenter } from "@/components/command-center"
 import { Composer } from "@/components/composer"
 import { ContextStrip } from "@/components/context-strip"
 import { Conversation } from "@/components/conversation"
@@ -25,18 +24,7 @@ export function App() {
 
 function AppShell({ nav }: { nav: OpenCodeController }) {
   const notes = useNotesWorkspace()
-  const { closeNotes } = notes
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
-  const [composerFocusRequest, setComposerFocusRequest] = useState(0)
-  const handledComposerFocus = useRef(0)
-  const focusComposer = useCallback(() => {
-    closeNotes()
-    setComposerFocusRequest((current) => current + 1)
-  }, [closeNotes])
-  const openModelSettings = useCallback(() => {
-    closeNotes()
-    setModelSettingsOpen(true)
-  }, [closeNotes])
   const previousNotesOpen = useRef(notes.open)
   useEffect(() => {
     if (previousNotesOpen.current !== notes.open) {
@@ -44,11 +32,6 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
       document.getElementById("chat-main")?.focus()
     }
   }, [notes.open])
-  useEffect(() => {
-    if (notes.open || composerFocusRequest === handledComposerFocus.current) return
-    handledComposerFocus.current = composerFocusRequest
-    document.querySelector<HTMLElement>("[data-composer-input]")?.focus()
-  }, [composerFocusRequest, notes.open])
 
   return (
     <NotificationsProvider nav={nav}>
@@ -61,10 +44,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
       <div className="app-height app-viewport bg-background md:grid md:h-svh md:grid-cols-[17rem_1fr] md:overflow-hidden">
       <SessionSidebar nav={nav} />
       <div className="app-height flex min-w-0 flex-col md:h-svh">
-        <div className="flex items-center border-b border-border/70">
-          <div className="min-w-0 flex-1 [&>header]:border-b-0"><AppHeader nav={nav} /></div>
-          <CommandCenter nav={nav} closeNotes={notes.closeNotes} focusComposer={focusComposer} openModelSettings={openModelSettings} />
-        </div>
+        <AppHeader nav={nav} />
         <main id="chat-main" tabIndex={-1} className="flex min-h-0 w-full flex-1 flex-col focus:outline-none">
           <div className={notes.open ? "hidden" : "mx-auto flex min-h-0 w-full max-w-[42.5rem] flex-1 flex-col"}>
           {nav.startupNotice ? (

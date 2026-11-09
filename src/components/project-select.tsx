@@ -1,12 +1,6 @@
-import { FolderIcon, LayersIcon, LoaderCircleIcon } from "lucide-react"
+import { FolderIcon, LayersIcon } from "lucide-react"
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { PickerSelect, type PickerOption } from "@/components/ui/picker-select"
 import type { Project } from "@/lib/opencode"
 
 function directoryName(directory: string | undefined): string | null {
@@ -43,116 +37,48 @@ export function ProjectSelect({
   fallbackLabel = null,
   includeAllProjects = false,
 }: ProjectSelectProps) {
-  const selected = projects.find((project) => project.id === value)
   const showAllProjects = includeAllProjects && value === ALL_PROJECTS
+  const selected = projects.find((project) => project.id === value)
   const name = showAllProjects
     ? "All projects"
     : selected
       ? projectName(selected)
       : fallbackLabel
+  const options: PickerOption[] = [
+    ...(includeAllProjects
+      ? [
+          {
+            value: ALL_PROJECTS,
+            label: "All projects",
+            icon: <LayersIcon aria-hidden="true" />,
+          },
+        ]
+      : []),
+    ...projects.map((project) => ({
+      value: project.id,
+      label: projectName(project),
+      detail: project.canonical,
+      icon: <FolderIcon aria-hidden="true" />,
+    })),
+  ]
 
   return (
-    <Select
+    <PickerSelect
+      label="Project"
+      ariaLabel={
+        showAllProjects
+          ? "Project scope: All projects"
+          : name
+            ? `Project: ${name}`
+            : "Project"
+      }
       value={value}
-      onValueChange={(projectID) => {
-        if (projectID) {
-          onValueChange(projectID)
-        }
-      }}
+      options={options}
+      onValueChange={onValueChange}
       disabled={disabled}
-      modal={false}
-    >
-      <SelectTrigger
-        aria-label={
-          showAllProjects
-            ? "Project scope: All projects"
-            : name
-              ? `Project: ${name}`
-              : "Project"
-        }
-        className="h-11! w-full min-w-0 justify-between rounded-lg px-2.5 text-[13px] font-medium"
-      >
-        <SelectValue className="min-w-0">
-          {(selectedID: string | null) => {
-            if (selectedID === ALL_PROJECTS && includeAllProjects) {
-              return (
-                <span className="flex min-w-0 items-center gap-2">
-                  <LayersIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-muted-foreground"
-                  />
-                  <span className="min-w-0 truncate">All projects</span>
-                </span>
-              )
-            }
-
-            const current = projects.find(
-              (project) => project.id === selectedID
-            )
-            const label = current
-              ? projectName(current)
-              : selectedID === value
-                ? fallbackLabel
-                : null
-
-            return (
-              <span className="flex min-w-0 items-center gap-2">
-                {busy ? (
-                  <LoaderCircleIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 animate-spin text-muted-foreground"
-                  />
-                ) : (
-                  <FolderIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-muted-foreground"
-                  />
-                )}
-                <span dir="auto" className="min-w-0 truncate">{label ?? "No project"}</span>
-              </span>
-            )
-          }}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent
-        side="bottom"
-        align="start"
-        alignItemWithTrigger={false}
-        sideOffset={8}
-        className="p-1"
-        style={{ width: "min(20rem, calc(100vw - 2rem))" }}
-      >
-        {includeAllProjects ? (
-          <SelectItem
-            value={ALL_PROJECTS}
-            className="min-h-11 py-2 ps-2"
-          >
-            <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium">
-              <LayersIcon
-                aria-hidden="true"
-                className="size-4 shrink-0 text-muted-foreground"
-              />
-              All projects
-            </span>
-          </SelectItem>
-        ) : null}
-        {projects.map((project) => (
-          <SelectItem
-            key={project.id}
-            value={project.id}
-            className="min-h-11 py-2 ps-2 [&>span]:items-start [&>span]:whitespace-normal"
-          >
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-[13px] font-medium">
-                {projectName(project)}
-              </span>
-              <span dir="ltr" className="font-mono text-[11px] break-all text-muted-foreground">
-                {project.canonical}
-              </span>
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      busy={busy}
+      placeholder={fallbackLabel ?? "No project"}
+      triggerClassName="justify-between rounded-lg px-2.5 text-[13px] font-medium"
+    />
   )
 }

@@ -16,6 +16,8 @@ import {
   type NotesSpace,
 } from "@/components/notes-panel"
 import { projectName } from "@/components/project-select"
+import { Accordion } from "@/components/ui/accordion"
+import { AccordionSection } from "@/components/ui/accordion-section"
 import { Button } from "@/components/ui/button"
 import { openCode } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -375,72 +377,81 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const notes = useNotesWorkspace()
   if (!notes.available && !notes.hasWorkspace) return null
   return (
-    <section
+    <Accordion
+      multiple
+      defaultValue={["notes"]}
       aria-label="Notes and plans"
-      className="mt-4 border-t border-sidebar-border pt-3"
+      className="mt-4"
     >
-      <Button
-        variant="ghost"
-        aria-label="All notes and plans"
-        aria-current={notes.open && !notes.selectedNoteID ? "page" : undefined}
-        className="h-11 w-full justify-start gap-2"
-        onClick={() => {
-          if (notes.openNotes()) onNavigate?.()
-        }}
+      <AccordionSection
+        value="notes"
+        title="Notes & plans"
+        count={notes.available ? notes.pinnedTotal : undefined}
+        contentClassName="space-y-1"
       >
-        <NotebookPenIcon aria-hidden="true" /> All notes &amp; plans
-      </Button>
-      <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
-        Pinned notes
-      </div>
-      {!notes.available ? (
-        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-          Pinned notes unavailable.
-        </p>
-      ) : notes.pinnedLoading ? (
-        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-          Loading pinned notes…
-        </p>
-      ) : notes.pinnedError ? (
-        <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-          Pinned notes unavailable.
-        </p>
-      ) : notes.pinnedNotes.length === 0 ? (
-        <p className="px-2.5 py-2 text-xs text-muted-foreground">
-          No pinned notes yet.
-        </p>
-      ) : (
-        <ul aria-label="Pinned notes" className="mt-1 max-h-52 overflow-y-auto">
-          {notes.pinnedNotes.map((note) => (
-            <li key={note.id}>
-              <Button
-                variant="ghost"
-                aria-current={
-                  notes.open && notes.selectedNoteID === note.id
-                    ? "page"
-                    : undefined
-                }
-                className="h-11 w-full justify-start gap-2"
-                onClick={() => {
-                  if (notes.openNotes(note.id)) onNavigate?.()
-                }}
-              >
-                <PinIcon aria-hidden="true" />
-                <span className="min-w-0 truncate" dir="auto">
-                  {note.title}
-                </span>
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
-        <p className="px-2.5 py-1 text-xs text-muted-foreground">
-          Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open all
-          notes to see the rest.
-        </p>
-      )}
-    </section>
+        <Button
+          variant="ghost"
+          aria-label="All notes and plans"
+          aria-current={notes.open && !notes.selectedNoteID ? "page" : undefined}
+          className="h-11 w-full justify-start gap-2"
+          onClick={() => {
+            if (notes.openNotes()) onNavigate?.()
+          }}
+        >
+          <NotebookPenIcon aria-hidden="true" /> All notes &amp; plans
+        </Button>
+        <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
+          Pinned notes
+        </div>
+        {!notes.available ? (
+          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+            Pinned notes unavailable.
+          </p>
+        ) : notes.pinnedLoading ? (
+          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+            Loading pinned notes…
+          </p>
+        ) : notes.pinnedError ? (
+          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
+            Pinned notes unavailable.
+          </p>
+        ) : notes.pinnedNotes.length === 0 ? (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">
+            No pinned notes yet.
+          </p>
+        ) : (
+          <ul aria-label="Pinned notes" className="mt-1 max-h-52 overflow-y-auto">
+            {notes.pinnedNotes.map((note) => (
+              <li key={note.id}>
+                <Button
+                  variant="ghost"
+                  aria-current={
+                    notes.open && notes.selectedNoteID === note.id
+                      ? "page"
+                      : undefined
+                  }
+                  className="h-11 w-full justify-start gap-2"
+                  onClick={() => {
+                    if (notes.openNotes(note.id)) onNavigate?.()
+                  }}
+                >
+                  <PinIcon aria-hidden="true" />
+                  <span className="min-w-0 truncate" dir="auto">
+                    {note.title}
+                  </span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
+          <p className="px-2.5 py-1 text-xs text-muted-foreground">
+            Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open all
+            notes to see the rest.
+          </p>
+        )}
+      </AccordionSection>
+    </Accordion>
   )
 }
 

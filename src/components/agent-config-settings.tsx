@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -34,18 +34,9 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
-  AccordionTrigger,
 } from "@/components/ui/accordion"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { AccordionSection } from "@/components/ui/accordion-section"
+import { PickerSelect } from "@/components/ui/picker-select"
 import {
   AgentConfigRequestError,
   agentConfigModelFromKey,
@@ -300,66 +291,16 @@ function AgentSettingSelect({
   return (
     <Field>
       <FieldLabel>{label}</FieldLabel>
-      <Select
+      <PickerSelect
+        label={label}
         value={value}
-        onValueChange={(next) => {
-          if (next !== null) onValueChange(next)
-        }}
+        options={options}
         disabled={disabled || busy}
-        modal={false}
-      >
-        <SelectTrigger
-          aria-label={label}
-          className="h-11! w-full min-w-0 px-2.5 text-[14px]"
-        >
-          <SelectValue className="min-w-0">
-            {(selected: string | null) => {
-              const option = options.find((item) => item.value === selected)
-              return (
-                <span className="min-w-0 truncate">
-                  {option?.detail && label === "Model"
-                    ? option.detail
-                    : (option?.label ?? "Unavailable")}
-                </span>
-              )
-            }}
-          </SelectValue>
-          {busy ? (
-            <LoaderCircleIcon
-              aria-hidden="true"
-              className="size-4 shrink-0 animate-spin text-muted-foreground"
-            />
-          ) : null}
-        </SelectTrigger>
-        <SelectContent
-          align="start"
-          sideOffset={6}
-          className="max-w-[min(26rem,calc(100vw-2rem))]"
-        >
-          {options.map((option) => (
-            <SelectItem
-              key={option.value}
-              value={option.value}
-              disabled={option.disabled}
-              className="min-h-11 py-2 ps-2"
-            >
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-[14px] leading-5 whitespace-normal">
-                  {option.label}
-                </span>
-                {option.detail ? (
-                  <span
-                    dir="ltr"
-                    className="text-[11px] break-all text-muted-foreground"
-                  >
-                    {option.detail}
-                  </span>
-                ) : null}
-              </span>
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        busy={busy}
+        showDetail={label === "Model"}
+        onValueChange={onValueChange}
+        triggerClassName="px-2.5 text-[14px]"
+      />
     </Field>
   )
 }
@@ -368,47 +309,6 @@ const GROUP_LABELS: Record<AgentGroup, string> = {
   primary: "Primary agents",
   subagents: "Subagents",
   hidden: "Hidden",
-}
-
-function AccordionSection({
-  value,
-  title,
-  count,
-  children,
-}: {
-  value: string
-  title: string
-  count?: number
-  children: ReactNode
-}) {
-  return (
-    <AccordionItem
-      value={value}
-      className="overflow-hidden rounded-xl border border-foreground/10 bg-card"
-    >
-      <AccordionHeader>
-        <AccordionTrigger className="group/settings-section rounded-none px-3 hover:bg-muted/60">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className="text-[13px] font-medium text-foreground">
-              {title}
-            </span>
-            {typeof count === "number" ? (
-              <span className="text-[11px] font-normal text-muted-foreground">
-                {count}
-              </span>
-            ) : null}
-          </span>
-          <ChevronRightIcon
-            aria-hidden="true"
-            className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/settings-section:rotate-90 motion-reduce:transition-none"
-          />
-        </AccordionTrigger>
-      </AccordionHeader>
-      <AccordionPanel>
-        <div className="border-t border-foreground/10 px-3 py-3">{children}</div>
-      </AccordionPanel>
-    </AccordionItem>
-  )
 }
 
 function AgentList({

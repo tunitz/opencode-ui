@@ -1,5 +1,8 @@
 import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import {
+  memo,
+  useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -16,17 +19,13 @@ import {
   PencilIcon,
   PinIcon,
   RotateCwIcon,
+  SearchIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react"
 
-import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
+import { Accordion } from "@/components/ui/accordion"
+import { AccordionSection } from "@/components/ui/accordion-section"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,7 +89,7 @@ import {
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
-import { groupSessionTreesByStatus, parseSessionShortcuts, SHORTCUT_GROUPS, shortcutStorageKey, updateSessionShortcut, type SessionShortcuts, type SessionShortcut } from "@/lib/session-shortcuts"
+import { parseSessionShortcuts, shortcutStorageKey, updateSessionShortcut, type SessionShortcuts, type SessionShortcut } from "@/lib/session-shortcuts"
 import { worktreeNavigationProject } from "@/lib/worktree-navigation"
 
 export type SessionNavProps = OpenCodeController
@@ -660,6 +659,102 @@ function SessionTreeNode({
   )
 }
 
+type SessionSearchResult = {
+  session: SessionInfo
+  scope: string
+  text: string
+}
+
+const SessionSearchRow = memo(function SessionSearchRow({
+  result,
+  active,
+  running,
+  unread,
+  onSelect,
+}: {
+  result: SessionSearchResult
+  active: boolean
+  running: boolean
+  unread: boolean
+  onSelect: (sessionID: string) => void
+}) {
+  const { session, scope } = result
+  const title = session.title?.trim() || session.id
+
+  return (
+    <button
+      type="button"
+      aria-current={active ? "page" : undefined}
+      title={session.id}
+      onClick={() => onSelect(session.id)}
+      className={cn(
+        "session-nav-item flex min-h-11 w-full min-w-0 flex-col items-start justify-center gap-0.5 rounded-lg px-2.5 py-1.5 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        active &&
+          "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+      )}
+    >
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <span dir="auto" className="min-w-0 flex-1 truncate text-[13px]">
+          {title}
+        </span>
+        {running ? (
+          <LoaderCircleIcon
+            aria-hidden="true"
+            className="size-3.5 shrink-0 animate-spin text-muted-foreground"
+          />
+        ) : null}
+        {unread ? (
+          <span
+            aria-hidden="true"
+            className="size-1.5 shrink-0 rounded-full bg-primary"
+          />
+        ) : null}
+      </span>
+      {running || unread ? (
+        <span className="sr-only">
+          {[running ? "Running" : null, unread ? "New activity" : null]
+            .filter(Boolean)
+            .join(". ")}
+        </span>
+      ) : null}
+      <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
+        <span dir="ltr" className="min-w-0 truncate font-mono">
+          {scope || session.id}
+        </span>
+      </span>
+    </button>
+  )
+})
+
+const SessionSearchResults = memo(function SessionSearchResults({
+  results,
+  activeSessionID,
+  runningSessionIDs,
+  unreadSessionIDs,
+  onSelect,
+}: {
+  results: readonly SessionSearchResult[]
+  activeSessionID: string | null
+  runningSessionIDs: Record<string, true>
+  unreadSessionIDs: Record<string, true>
+  onSelect: (sessionID: string) => void
+}) {
+  return (
+    <div className="space-y-0.5" aria-label="Session search results">
+      {results.map((result) => (
+        <SessionSearchRow
+          key={result.session.id}
+          result={result}
+          active={result.session.id === activeSessionID}
+          running={Boolean(runningSessionIDs[result.session.id])}
+          unread={Boolean(unreadSessionIDs[result.session.id])}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  )
+})
+
 function currentDayStart(): number {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
@@ -694,27 +789,61 @@ function SessionList({
 }) {
   const notes = useNotesWorkspace()
   const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
-  const statusKey = `opencode-ui:session-status-shortcuts:v1:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(nav.serverVersion ?? "unknown")}`
-  const statusMode = useSyncExternalStore(subscribeShortcuts, () => {
-    try { return localStorage.getItem(statusKey) === "true" } catch { return false }
-  }, () => false)
-  const attentionSessionID = nav.activeSessionID && (
-    nav.pendingPermissions.some((request) => request.sessionID === nav.activeSessionID) ||
-    nav.pendingForms.some((form) => form.sessionID === nav.activeSessionID)
-  ) ? nav.activeSessionID : null
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const onSelectRef = useRef(onSelect)
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
+  const handleSelect = useCallback(
+    (sessionID: string) => onSelectRef.current(sessionID),
+    []
+  )
+  const searchQuery = query.trim()
+  const searching = searchQuery.length > 0
+  const deferredQuery = useDeferredValue(searchQuery)
+  const pendingSearch = searching && deferredQuery !== searchQuery
   const dayStart = useSyncExternalStore(
     subscribeToDayStart,
     currentDayStart,
     currentDayStart
   )
-  const groups = groupSessionTreeRows(
-    sessionTreeRows([...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)),
-    dayStart
+  const treeRows = useMemo(
+    () =>
+      sessionTreeRows(
+        [...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)
+      ),
+    [nav.sessions]
   )
-  const statusGroups = groupSessionTreesByStatus(
-    sessionTreeRows([...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)),
-    shortcuts, nav.runningSessionIDs, nav.unreadSessionIDs, attentionSessionID
+  const groups = useMemo(
+    () => groupSessionTreeRows(treeRows, dayStart),
+    [treeRows, dayStart]
   )
+  const searchIndex = useMemo(
+    () =>
+      [...nav.sessions]
+        .sort((a, b) => b.time.updated - a.time.updated)
+        .map((session) => {
+          const scope = sessionProjectLabel(session, nav.projects)
+          const localLabel = shortcuts[session.id]?.label ?? ""
+          return {
+            session,
+            scope,
+            text: [session.title, session.id, scope, localLabel]
+              .filter(Boolean)
+              .join(" ")
+              .toLocaleLowerCase(),
+          }
+        }),
+    [nav.projects, nav.sessions, shortcuts]
+  )
+  const searchResults = useMemo(() => {
+    if (!deferredQuery) return []
+    const words = deferredQuery.toLocaleLowerCase().split(/\s+/)
+    return searchIndex.filter(({ text }) =>
+      words.every((word) => text.includes(word))
+    )
+  }, [deferredQuery, searchIndex])
   const activeAncestors = useMemo(
     () => sessionAncestorIDs(nav.sessions, nav.activeSessionID),
     [nav.sessions, nav.activeSessionID]
@@ -762,106 +891,211 @@ function SessionList({
     })
   }
 
+  function closeSearch() {
+    setSearchOpen(false)
+    setQuery("")
+  }
+
   return (
-    <nav aria-label="Sessions" aria-busy={nav.sessionsStatus === "loading"}>
-      <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-xs" onClick={() => {
-        try { localStorage.setItem(statusKey, String(!statusMode)); window.dispatchEvent(new Event(shortcutsChanged)) } catch { /* Browsing still works without storage. */ }
-      }}>{statusMode ? "Group by date" : "Group by status"}</Button>
-      {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
-      {nav.sessionsStatus === "loading" ? (
-        <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
-          Loading sessions…
-        </p>
-      ) : null}
-      {nav.sessionsStatus === "error" ? (
-        <div role="alert" className="space-y-2 px-2.5 py-1.5">
-          <p className="text-xs break-words text-destructive">
-            {nav.sessionsError ?? "Could not load sessions."}
-          </p>
-          <Button
-            variant="outline"
-            onClick={nav.refreshSessions}
-            className="h-11 w-full text-[13px]"
-          >
-            Retry sessions
-          </Button>
-        </div>
-      ) : null}
-      {nav.sessionsStatus === "ready" && nav.sessions.length === 0 ? (
-        <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
-          No sessions yet.
-        </p>
-      ) : null}
-      {statusMode ? [...SHORTCUT_GROUPS, "Other" as const].map((group) => statusGroups[group].length ? (
-        <section key={group} aria-label={`${group} sessions`} className="py-1">
-          <h3 className="px-2.5 py-1 text-xs font-medium text-muted-foreground">{group}</h3>
-          <SessionTree rows={statusGroups[group]} activeSessionID={notes.open ? null : nav.activeSessionID} runningSessionIDs={nav.runningSessionIDs} unreadSessionIDs={nav.unreadSessionIDs} projects={nav.projects} expandedIDs={expandedIDs} onToggle={toggleSessionTree} onSelect={onSelect} onRename={nav.renameSession} onDelete={nav.deleteSession} shortcuts={shortcuts} onShortcut={updateShortcut} />
-        </section>
-      ) : null) : <Accordion
-        value={openGroup ? [openGroup] : []}
-        onValueChange={(value) => {
-          const next = value[0]
-          setOpenGroup(
-            next && SESSION_GROUPS.includes(next as SessionGroup)
-              ? (next as SessionGroup)
-              : null
-          )
-        }}
-        className="py-1"
-      >
-        {SESSION_GROUPS.map((label) => {
-          const rows = groups[label]
-
-          if (!rows.length) {
-            return null
-          }
-
-          return (
-            <AccordionItem key={label} value={label}>
-              <AccordionHeader>
-                <AccordionTrigger className="group/session-group">
-                  <span>{label}</span>
-                  <ChevronRightIcon
-                    aria-hidden="true"
-                    className="size-3.5 shrink-0 transition-transform group-data-[panel-open]/session-group:rotate-90 motion-reduce:transition-none"
-                  />
-                </AccordionTrigger>
-              </AccordionHeader>
-              <AccordionPanel>
-                <div className="pb-1">
-                  <SessionTree
-                    rows={rows}
+    <>
+      <SessionsHeader
+        count={
+          nav.sessionsStatus === "ready"
+            ? searching
+              ? searchResults.length
+              : nav.sessions.length
+            : null
+        }
+        searchOpen={searchOpen}
+        query={query}
+        onOpenSearch={() => setSearchOpen(true)}
+        onChangeQuery={setQuery}
+        onCloseSearch={closeSearch}
+      />
+      <div className="px-3">
+        <nav aria-label="Sessions" aria-busy={nav.sessionsStatus === "loading"}>
+          {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
+          {nav.sessionsStatus === "loading" ? (
+            <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
+              Loading sessions…
+            </p>
+          ) : null}
+          {nav.sessionsStatus === "error" ? (
+            <div role="alert" className="space-y-2 px-2.5 py-1.5">
+              <p className="text-xs break-words text-destructive">
+                {nav.sessionsError ?? "Could not load sessions."}
+              </p>
+              <Button
+                variant="outline"
+                onClick={nav.refreshSessions}
+                className="h-11 w-full text-[13px]"
+              >
+                Retry sessions
+              </Button>
+            </div>
+          ) : null}
+          {nav.sessionsStatus === "ready" && nav.sessions.length === 0 ? (
+            <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
+              No sessions yet.
+            </p>
+          ) : null}
+          {nav.sessionsStatus === "ready" && searching && nav.sessions.length > 0 ? (
+            <Accordion
+              multiple
+              defaultValue={["search-results"]}
+              className="mt-2 space-y-2 py-1"
+            >
+              <AccordionSection
+                value="search-results"
+                title="Search results"
+                count={searchResults.length}
+                contentClassName="p-1"
+              >
+                {searchResults.length > 0 ? (
+                  <SessionSearchResults
+                    results={searchResults}
                     activeSessionID={notes.open ? null : nav.activeSessionID}
                     runningSessionIDs={nav.runningSessionIDs}
                     unreadSessionIDs={nav.unreadSessionIDs}
-                    projects={nav.projects}
-                    expandedIDs={expandedIDs}
-                    onToggle={toggleSessionTree}
-                    onSelect={onSelect}
-                    onRename={nav.renameSession}
-                    onDelete={nav.deleteSession}
-                    shortcuts={shortcuts}
-                    onShortcut={updateShortcut}
+                    onSelect={handleSelect}
                   />
-                </div>
-              </AccordionPanel>
-            </AccordionItem>
-          )
-        })}
-      </Accordion>}
-    </nav>
+                ) : pendingSearch ? null : (
+                  <p
+                    role="status"
+                    className="px-2.5 py-2 text-[13px] break-words text-muted-foreground"
+                  >
+                    No sessions match “{searchQuery}”.
+                  </p>
+                )}
+              </AccordionSection>
+            </Accordion>
+          ) : null}
+          {!searching ? (
+            <Accordion
+              key="date-groups"
+              value={openGroup ? [openGroup] : []}
+              onValueChange={(value) => {
+                const next = value[0]
+                setOpenGroup(
+                  next && SESSION_GROUPS.includes(next as SessionGroup)
+                    ? (next as SessionGroup)
+                    : null
+                )
+              }}
+              className="space-y-2 py-1"
+            >
+              {SESSION_GROUPS.map((label) => {
+                const rows = groups[label]
+
+                if (!rows.length) {
+                  return null
+                }
+
+                return (
+                  <AccordionSection
+                    key={label}
+                    value={label}
+                    title={label}
+                    count={rows.length}
+                    contentClassName="p-1"
+                  >
+                    <SessionTree
+                      rows={rows}
+                      activeSessionID={notes.open ? null : nav.activeSessionID}
+                      runningSessionIDs={nav.runningSessionIDs}
+                      unreadSessionIDs={nav.unreadSessionIDs}
+                      projects={nav.projects}
+                      expandedIDs={expandedIDs}
+                      onToggle={toggleSessionTree}
+                      onSelect={handleSelect}
+                      onRename={nav.renameSession}
+                      onDelete={nav.deleteSession}
+                      shortcuts={shortcuts}
+                      onShortcut={updateShortcut}
+                    />
+                  </AccordionSection>
+                )
+              })}
+            </Accordion>
+          ) : null}
+        </nav>
+      </div>
+    </>
   )
 }
 
-function SessionsHeader({ nav }: { nav: SessionNavProps }) {
+function SessionsHeader({
+  count,
+  searchOpen,
+  query,
+  onOpenSearch,
+  onChangeQuery,
+  onCloseSearch,
+}: {
+  count: number | null
+  searchOpen: boolean
+  query: string
+  onOpenSearch: () => void
+  onChangeQuery: (value: string) => void
+  onCloseSearch: () => void
+}) {
   return (
-    <div className="mt-5 flex shrink-0 items-center justify-between px-5">
-      <span className="text-xs font-medium text-muted-foreground">
-        Sessions
-      </span>
-      <span className="text-xs tabular-nums text-muted-foreground">
-        {nav.sessionsStatus === "ready" ? nav.sessions.length : "—"}
-      </span>
+    <div className="mt-5 flex shrink-0 items-center justify-between gap-2 px-5">
+      {searchOpen ? (
+        <div className="relative min-w-0 flex-1">
+          <SearchIcon
+            aria-hidden="true"
+            className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            autoFocus
+            aria-label="Search sessions"
+            placeholder="Search sessions"
+            value={query}
+            onChange={(event) => onChangeQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault()
+                event.stopPropagation()
+                event.nativeEvent.stopImmediatePropagation()
+                onCloseSearch()
+              }
+            }}
+            className="h-11 w-full ps-8 pe-11 text-[13px]"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Clear session search"
+            className="absolute end-0 top-1/2 size-11 -translate-y-1/2 rounded-md text-muted-foreground"
+            onClick={onCloseSearch}
+          >
+            <XIcon className="size-4" />
+          </Button>
+        </div>
+      ) : (
+        <>
+          <span className="text-xs font-medium text-muted-foreground">
+            Sessions
+          </span>
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {count ?? "—"}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Search sessions"
+              className="size-11 rounded-md text-muted-foreground"
+              onClick={onOpenSearch}
+            >
+              <SearchIcon className="size-4" />
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -887,8 +1121,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
       <ProjectPanel nav={nav} className="mt-6" />
       <ScrollArea className="mt-2 min-h-0 flex-1">
         <div className="px-3"><NotesSidebar /></div>
-        <SessionsHeader nav={nav} />
-        <div className="px-3"><SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} /></div>
+        <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} />
       </ScrollArea>
       <div className="flex shrink-0 items-center justify-between gap-1 border-t border-sidebar-border p-3">
         <ThemeSelect />
@@ -972,8 +1205,6 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         <ProjectPanel nav={nav} className="mt-5" />
         <ScrollArea className="mt-2 min-h-0 flex-1">
           <div className="px-4"><NotesSidebar onNavigate={() => setOpen(false)} /></div>
-          <SessionsHeader nav={nav} />
-          <div className="px-3">
           <SessionList
             nav={nav}
             onSelect={(sessionID) => {
@@ -982,7 +1213,6 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
               setOpen(false)
             }}
           />
-          </div>
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-between gap-1 border-t border-border p-4">
           <AppearanceTrigger onClick={() => { pendingAppearance.current = true; setOpen(false) }} />

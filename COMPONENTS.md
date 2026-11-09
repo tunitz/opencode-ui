@@ -23,9 +23,9 @@ resolution; they are not a claim that generated-UI features are adopted.
 | Area | Tier | Components / modules | Constraints |
 |---|---|---|---|
 | App shell | shadcn + layout glue | `App`, sidebar, header, main | Permanent desktop sidebar; mobile session Sheet; Light/Dark/System; safe areas and visual-viewport height. |
-| Project/session navigation | shadcn/Base UI | `ProjectSelect`, `SessionNav`, `NewSessionDialog`, responsive dialog/sheet, `AlertDialog`, `Select` | Project or All-projects scope; real native sessions; explicit create/rename/delete; destructive confirmation; mobile drawer closes only after selection/create. |
+| Project/session navigation | shadcn/Base UI | `ProjectSelect`, `SessionNav`, `NewSessionDialog`, responsive dialog/sheet, `AlertDialog`, `PickerSelect` | Project or All-projects scope; real native sessions; date-grouped accordion sessions with full-row search that flattens results; explicit create/rename/delete; destructive confirmation; mobile drawer closes only after selection/create. |
 | Composer | shadcn | `Composer`, `InputGroup`, `ModelSettingsDrawer`, `Button` | One rounded surface: textarea + footer with plus, actual model/Thinking, Stop only while running, blue 44px Send. Touch Enter=newline/Send-only; fine-pointer Enter=send, Shift+Enter=newline; IME guarded. Idle Send omits delivery; active Send uses native steer; Queue is an explicit one-shot plus-menu action. |
-| Model settings | shadcn/Base UI | composer trigger, modal Sheet/Dialog, three native `Select`s | Agent/Model/Thinking Level from the target native catalog; unavailable values stay honest; immediate autosave; no Done; focus returns to the composer trigger. |
+| Model settings | shadcn/Base UI | composer trigger, modal Sheet/Dialog, three searchable `PickerSelect`s | Agent/Model/Thinking Level from the target native catalog; unavailable values stay honest; immediate autosave; no Done; focus returns to the composer trigger. |
 | Conversation | TanStack Virtual + shadcn | `Conversation`, `Message`, `Bubble`, `Trace`, `Collapsible`, `Markdown` | Bounded DOM with cursor-paged older history, stable keys, live-to-durable reconciliation, no duplicate text/tool segments, focus pinning, no false bottom-follow. Tool traces start collapsed and preserve explicit expansion per session. Long structured tool errors have a mobile detail sheet; its source row remains pinned until close, while desktop stays inline. Error text remains bounded and escaped; artifact delivery is unchanged. Reading mode/Activity are not present. |
 | Markdown and code | react-markdown + actual OpenUI | `Markdown`, lazy `CodeBlock` runtime, scoped code CSS, shadcn copy Button | Raw HTML skipped; script/data/remote-image URLs blocked; ordinary links stay ordinary. Fenced code uses actual OpenUI CodeBlock when settled; live growing code stays full-text plaintext to avoid per-token highlighting. Copy is exact; LTR in RTL. |
 | Tables and images | actual OpenUI | `Table` primitives, `Card`, `CardHeader`, `Image` | GFM tables only, React nodes passed through, internal horizontal scroll. Images are safe inline data URLs or verified same-origin artifact routes; no arbitrary remote/SVG fetch. |
@@ -44,13 +44,13 @@ resolution; they are not a claim that generated-UI features are adopted.
 
 ## Native-state modules
 
-Session navigation additionally offers status grouping and local pins/labels;
-direct subagent discovery is bounded to the first page. Project worktrees are
+Session navigation additionally offers local pins/labels and a full-row session
+search that temporarily flattens the date groups; direct subagent discovery is bounded to the first page. Project worktrees are
 available from desktop and mobile navigation, using the selected project in
 project scope or the active session's project in All projects scope. Existing worktrees offer
 session creation in their directory with the normal catalog and project checks. The command center
-opens existing actions, including model settings; Alt+Shift+C focuses the composer
-only outside editable surfaces, terminals, overlays and IME composition. Presets and dictation are explicit; browser speech may
+module is retained but not mounted; when enabled it opens existing actions, including model settings,
+and Alt+Shift+C focuses the composer only outside editable surfaces, terminals, overlays and IME composition. Presets and dictation are explicit; browser speech may
 use a remote service. Cross-device preference snapshots are manual and opt-in,
 not authentication or multi-user isolation; see [UI-SYNC.md](UI-SYNC.md).
 

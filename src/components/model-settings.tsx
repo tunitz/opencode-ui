@@ -1,15 +1,9 @@
 import { useMemo, useState } from "react"
-import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react"
+import { ChevronDownIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { PickerSelect } from "@/components/ui/picker-select"
 import {
   Sheet,
   SheetContent,
@@ -69,66 +63,19 @@ function SettingSelect({
   const ariaValue = triggerLabel
 
   return (
-    <Select
+    <PickerSelect
+      label={name}
+      ariaLabel={`${name}, ${ariaValue}`}
       value={value}
-      onValueChange={(next) => {
-        if (next) {
-          onValueChange(next)
-        }
-      }}
+      options={options}
       disabled={disabled}
-    >
-      <SelectTrigger
-        aria-label={`${name}, ${ariaValue}`}
-        aria-busy={busy}
-        className="h-11! w-full min-w-0 gap-2 overflow-hidden px-3 text-sm"
-      >
-        <SelectValue className="min-w-0">
-          {() => (
-            <span className="flex min-w-0 items-center gap-2">
-              {busy ? (
-                <LoaderCircleIcon
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 animate-spin text-muted-foreground"
-                />
-              ) : null}
-              <span dir="ltr" data-slot="select-label" className="min-w-0 truncate">
-                {triggerLabel}
-              </span>
-            </span>
-          )}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent
-        align="start"
-        alignItemWithTrigger={false}
-        sideOffset={6}
-        className="p-1"
-        style={{
-          width: "max-content",
-          minWidth: "var(--anchor-width)",
-          maxWidth: "min(22rem, calc(100vw - 2rem))",
-        }}
-      >
-        {options.map((option) => (
-          <SelectItem
-            key={option.value}
-            value={option.value}
-            disabled={option.disabled}
-            className="min-h-11 py-2 ps-2 [&>span]:items-start [&>span]:whitespace-normal"
-          >
-            <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-[13px] break-words">{option.label}</span>
-              {option.detail ? (
-                <span dir="ltr" className="font-mono text-[11px] break-all text-muted-foreground">
-                  {option.detail}
-                </span>
-              ) : null}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      busy={busy}
+      showDetail={showDetail}
+      placeholder={value || "Default"}
+      triggerProps={{ "aria-busy": busy }}
+      onValueChange={onValueChange}
+      triggerClassName="h-11! w-full min-w-0 gap-2 overflow-hidden px-3 text-sm"
+    />
   )
 }
 

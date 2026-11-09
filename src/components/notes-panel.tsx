@@ -36,14 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { PickerSelect } from "@/components/ui/picker-select"
 
 export type NoteStatus = "todo" | "in-progress" | "finished"
 export type NotesNote = {
@@ -181,30 +174,14 @@ function Choice({
       >
         {label}
       </label>
-      <Select
+      <PickerSelect
+        id={id}
+        label={label}
+        ariaLabel={label}
         value={value}
-        onValueChange={(next) => {
-          if (next !== null) onChange(next)
-        }}
-        items={options}
-      >
-        <SelectTrigger id={id} className="h-11 w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            {options.map((option) => (
-              <SelectItem
-                className="min-h-11"
-                key={option.value}
-                value={option.value}
-              >
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
+        options={options}
+        onValueChange={onChange}
+      />
     </div>
   )
 }
