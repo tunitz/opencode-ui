@@ -24,6 +24,7 @@ dist-*/
 dist.*/
 dist-bun
 dist-bun-build
+dist-bun-build.backup-*
 dist-bun-dev
 dist-bun-stage-*
 dist-bun-backup-*

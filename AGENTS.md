@@ -21,6 +21,15 @@ Use Bun for dependency management and scripts; do not use npm, npx, pnpm, or yar
   unverified behavior. Real-model tests must use verified free/zero-cost models or explicit
   zero-cost paths; never silently fall back to paid or unknown models.
 
+### Local dev server
+
+- For UI work, run the dev server exposed to the LAN and report the reachable LAN URL (never
+  `0.0.0.0`):
+  `OPENCODE_UI_HOST=0.0.0.0 OPENCODE_UI_PORT=5175 OPENCODE_UI_ALLOWED_HOSTS=<lan-ip>,tun-minipc OPENCODE_UI_ALLOWED_ORIGINS=http://<lan-ip>:5175 bun run dev`
+- The dev server builds and serves `dist-bun-dev/`; leave production `dist-bun-build/` on port 5174
+  alone.
+- After a push or production deploy, confirm with the user before stopping the dev server.
+
 ## Security and live state
 
 - The UI server holds an engine credential; do not expose it to the browser or logs. Keep secrets,
