@@ -280,7 +280,7 @@ export function BtwDialog({
     <Dialog open onOpenChange={(open) => !open && close()}>
       <DialogContent
         showCloseButton={false}
-        className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0"
+        className="flex w-[min(40rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0 sm:max-w-none"
         style={fixedDesktopSettingsStyle()}
       >
         <DialogHeader className="sr-only">

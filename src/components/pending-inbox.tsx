@@ -87,7 +87,7 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
     return (
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger render={trigger} />
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg md:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-base font-semibold tracking-tight">
               Pending requests

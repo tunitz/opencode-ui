@@ -5,6 +5,14 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PickerSelect } from "@/components/ui/picker-select"
 import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -24,7 +32,6 @@ import {
 } from "@/lib/session-selection"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { useIsDesktop } from "@/lib/use-is-desktop"
-import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
 
@@ -196,124 +203,151 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
     ? `${model.providerID}/${model.id} · Thinking Level ${thinkingLabel}`
     : "No model"
 
-  return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger
-        render={
+  const triggerContents = (
+    <>
+      <span dir="ltr" className="min-w-0 truncate">
+        {model ? (
+          <>
+            <span className="text-muted-foreground">{model.providerID}/</span>
+            {model.id}
+          </>
+        ) : (
+          "No model"
+        )}
+      </span>
+      {thinkingLabel ? (
+        <span className="shrink-0 text-[13px] text-muted-foreground">
+          {thinkingLabel}
+        </span>
+      ) : null}
+      <ChevronDownIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+    </>
+  )
+
+  const trigger = (
+    <Button
+      type="button"
+      variant="ghost"
+      aria-label={`Active model, ${triggerLabel}${agentID ? `, agent ${agentID}` : ""}`}
+      className="relative h-11 min-w-11 max-w-full shrink justify-start gap-1 rounded-lg px-1.5 text-[14px] leading-6 font-medium text-foreground hover:bg-muted/60"
+    />
+  )
+
+  const settingsBody = (
+    <div className="grid gap-4">
+      <SettingRow label="Agent">
+        <SettingSelect
+          name="Agent"
+          value={agentID ?? ""}
+          options={agentOptions}
+          disabled={!session || nav.switchingAgent}
+          busy={nav.switchingAgent}
+          onValueChange={(value) => void handleAgentChange(value)}
+        />
+      </SettingRow>
+      <SettingRow label="Model">
+        <SettingSelect
+          name="Model"
+          showDetail
+          value={modelRefKey(model)}
+          options={modelOptions}
+          disabled={!session || nav.switchingModel}
+          busy={nav.switchingModel}
+          onValueChange={(value) => void handleModelChange(value)}
+        />
+      </SettingRow>
+      <SettingRow label="Thinking Level">
+        <SettingSelect
+          name="Thinking Level"
+          value={variantSelectValue}
+          options={variantOptions}
+          disabled={!session || !selectedModelInfo || nav.switchingModel}
+          busy={nav.switchingModel}
+          onValueChange={(value) => void handleVariantChange(value)}
+        />
+      </SettingRow>
+      {model && explicitVariant ? (
+        <p className="px-1 text-[11px] leading-5 text-muted-foreground">
+          Changing Model keeps Thinking Level when the new model supports
+          it; otherwise it uses Default.
+        </p>
+      ) : null}
+      {running ? (
+        <p className="text-xs text-muted-foreground">
+          Changes apply to the next turn; the current run is unaffected.
+        </p>
+      ) : null}
+      {selectorError ? (
+        <p role="alert" className="text-xs break-words text-destructive">
+          {selectorError}
+        </p>
+      ) : null}
+      {catalogError ? (
+        <p role="alert" className="text-xs break-words text-destructive">
+          Agents or models could not be loaded.{" "}
           <Button
             type="button"
-            variant="ghost"
-            aria-label={`Active model, ${triggerLabel}${agentID ? `, agent ${agentID}` : ""}`}
-            className="relative h-11 min-w-11 max-w-full shrink justify-start gap-1 rounded-lg px-1.5 text-[14px] leading-6 font-medium text-foreground hover:bg-muted/60"
-          />
-        }
+            variant="link"
+            onClick={nav.retryCatalogs}
+            className="h-11 min-w-11 px-2 align-middle text-xs underline"
+          >
+            Retry
+          </Button>
+        </p>
+      ) : null}
+    </div>
+  )
+
+  if (!isDesktop) {
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetTrigger render={trigger}>{triggerContents}</SheetTrigger>
+        <SheetContent
+          side="bottom"
+          className="max-h-[85svh] gap-0 rounded-t-xl bg-card p-0"
+          style={{
+            bottom:
+              "calc(100dvh - var(--app-viewport-top, 0px) - var(--app-viewport-height, 100dvh))",
+            maxHeight: "var(--app-viewport-height, 85svh)",
+          }}
+        >
+          <SheetHeader className="px-5 pt-5 pb-3">
+            <SheetTitle className="text-[17px] font-semibold tracking-tight">
+              Model settings
+            </SheetTitle>
+            <SheetDescription className="sr-only">
+              Agent, model, and thinking level for the next turn.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea viewportClassName="max-h-[min(65svh,38rem)]" className="px-4 pb-5">
+            {settingsBody}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={trigger}>{triggerContents}</PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-[min(30rem,calc(100vw-2rem))] gap-0 p-0"
       >
-        <span dir="ltr" className="min-w-0 truncate">
-          {model ? (
-            <>
-              <span className="text-muted-foreground">{model.providerID}/</span>
-              {model.id}
-            </>
-          ) : (
-            "No model"
-          )}
-        </span>
-        {thinkingLabel ? (
-          <span className="shrink-0 text-[13px] text-muted-foreground">
-            {thinkingLabel}
-          </span>
-        ) : null}
-        <ChevronDownIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      </SheetTrigger>
-      <SheetContent
-        side={isDesktop ? "right" : "bottom"}
-        className={cn(
-          "gap-0 bg-card p-0",
-          isDesktop ? "w-[min(26rem,92vw)]" : "max-h-[85svh] rounded-t-xl"
-        )}
-        style={
-          isDesktop
-            ? undefined
-            : {
-                bottom:
-                  "calc(100dvh - var(--app-viewport-top, 0px) - var(--app-viewport-height, 100dvh))",
-                maxHeight: "var(--app-viewport-height, 85svh)",
-              }
-        }
-      >
-        <SheetHeader className="px-5 pt-5 pb-3">
-          <SheetTitle className="text-[17px] font-semibold tracking-tight">
+        <PopoverHeader className="px-5 pt-5 pb-3">
+          <PopoverTitle className="text-[17px] font-semibold tracking-tight">
             Model settings
-          </SheetTitle>
-          <SheetDescription className="sr-only">
+          </PopoverTitle>
+          <PopoverDescription className="sr-only">
             Agent, model, and thinking level for the next turn.
-          </SheetDescription>
-        </SheetHeader>
-        <ScrollArea viewportClassName="max-h-[min(65svh,38rem)]" className="px-4 pb-5">
-          <div className="grid gap-4">
-            <SettingRow label="Agent">
-              <SettingSelect
-                name="Agent"
-                value={agentID ?? ""}
-                options={agentOptions}
-                disabled={!session || nav.switchingAgent}
-                busy={nav.switchingAgent}
-                onValueChange={(value) => void handleAgentChange(value)}
-              />
-            </SettingRow>
-            <SettingRow label="Model">
-              <SettingSelect
-                name="Model"
-                showDetail
-                value={modelRefKey(model)}
-                options={modelOptions}
-                disabled={!session || nav.switchingModel}
-                busy={nav.switchingModel}
-                onValueChange={(value) => void handleModelChange(value)}
-              />
-            </SettingRow>
-            <SettingRow label="Thinking Level">
-              <SettingSelect
-                name="Thinking Level"
-                value={variantSelectValue}
-                options={variantOptions}
-                disabled={!session || !selectedModelInfo || nav.switchingModel}
-                busy={nav.switchingModel}
-                onValueChange={(value) => void handleVariantChange(value)}
-              />
-            </SettingRow>
-            {model && explicitVariant ? (
-              <p className="px-1 text-[11px] leading-5 text-muted-foreground">
-                Changing Model keeps Thinking Level when the new model supports
-                it; otherwise it uses Default.
-              </p>
-            ) : null}
-            {running ? (
-              <p className="text-xs text-muted-foreground">
-                Changes apply to the next turn; the current run is unaffected.
-              </p>
-            ) : null}
-            {selectorError ? (
-              <p role="alert" className="text-xs break-words text-destructive">
-                {selectorError}
-              </p>
-            ) : null}
-            {catalogError ? (
-              <p role="alert" className="text-xs break-words text-destructive">
-                Agents or models could not be loaded.{" "}
-                <Button
-                  type="button"
-                  variant="link"
-                  onClick={nav.retryCatalogs}
-                  className="h-11 min-w-11 px-2 align-middle text-xs underline"
-                >
-                  Retry
-                </Button>
-              </p>
-            ) : null}
-          </div>
+          </PopoverDescription>
+        </PopoverHeader>
+        <ScrollArea viewportClassName="max-h-[min(60svh,32rem)]" className="px-4 pb-5">
+          {settingsBody}
         </ScrollArea>
-      </SheetContent>
-    </Sheet>
+      </PopoverContent>
+    </Popover>
   )
 }

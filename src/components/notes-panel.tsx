@@ -973,7 +973,7 @@ export function NotesPanel({
           if (!open && !busy) setSpaceDraft(null)
         }}
       >
-        <ResponsiveDialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+        <ResponsiveDialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg md:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {spaceDraft?.original ? "Edit space" : "New space"}

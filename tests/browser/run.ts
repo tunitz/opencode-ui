@@ -381,7 +381,7 @@ function mergeDiagnostics(
 // Desktop session navigation
 // ---------------------------------------------------------------------------
 if (browser) {
-  await run("desktop session navigation, tree expansion, status grouping and local labels", async ({ check }) => {
+  await run("desktop session navigation, tree expansion, date grouping and local labels", async ({ check }) => {
     const opened = await openPage({ width: 1280, height: 900 }, "nav")
     const page = opened.page
     try {
@@ -431,18 +431,8 @@ if (browser) {
       await page.locator('button[title="s-alpha"]').click()
       await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
 
-      await page.getByRole("button", { name: "Group by status" }).click()
-      const runningSection = page.locator('section[aria-label="Running sessions"]')
-      await runningSection.waitFor({ state: "visible" })
-      check(
-        "status grouping places the tree with a running child under Running",
-        (await runningSection.locator('button[title="s-alpha"]').count()) === 1
-      )
-
       await page.getByRole("button", { name: "Session actions: Alpha" }).click()
       await page.getByRole("menuitem", { name: "Pin session" }).click()
-      const pinned = page.locator('section[aria-label="Pinned sessions"]')
-      await pinned.waitFor({ state: "visible" })
       const storage = await page.evaluate(() => {
         const key = `opencode-ui:session-shortcuts:v1:${encodeURIComponent(
           window.location.origin
@@ -453,10 +443,6 @@ if (browser) {
         "pinning writes only the browser-local scoped shortcut record",
         Boolean(storage.value && JSON.parse(storage.value)["s-alpha"]?.pinned === true),
         `${storage.key}=${storage.value}`
-      )
-      check(
-        "pinned tree moves to the Pinned status group",
-        (await pinned.locator('button[title="s-alpha"]').count()) === 1
       )
 
       await page.getByRole("button", { name: "Session actions: Alpha" }).click()
@@ -477,13 +463,34 @@ if (browser) {
         JSON.stringify(labelRecord)
       )
 
-      await page.getByRole("button", { name: "Group by date" }).click()
       const yesterday = page.getByRole("button", { name: "Yesterday" })
       await yesterday.waitFor({ state: "visible" })
       await yesterday.click()
       check(
         "date grouping keeps older sessions reachable",
         await page.locator('button[title="s-gamma"]').isVisible()
+      )
+
+      const sidebar = page.locator('[data-sidebar="sessions"]')
+      await page.getByRole("button", { name: "Collapse sidebar" }).click()
+      await page.waitForFunction(() => {
+        const element = document.querySelector('[data-sidebar="sessions"]')
+        return element ? element.getBoundingClientRect().width < 100 : false
+      })
+      const collapsedBox = await sidebar.boundingBox()
+      check(
+        "collapsing the desktop sidebar leaves an icon rail",
+        (collapsedBox?.width ?? Number.POSITIVE_INFINITY) < 100 &&
+          (await page.locator('button[title="s-alpha"]').count()) === 0
+      )
+      await page.getByRole("button", { name: "Expand sidebar" }).click()
+      await page.waitForFunction(() => {
+        const element = document.querySelector('[data-sidebar="sessions"]')
+        return element ? element.getBoundingClientRect().width > 260 : false
+      })
+      check(
+        "expanding the desktop sidebar restores the session list",
+        await page.locator('button[title="s-alpha"]').isVisible()
       )
 
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
@@ -850,6 +857,11 @@ if (browser) {
       const modelSheet = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Model settings" }) })
       await modelSheet.waitFor({ state: "visible" })
       check("command center opens the active session model settings", await modelSheet.isVisible())
+      check(
+        "desktop model settings open as an anchored popover, not a side sheet",
+        (await page.locator('[data-slot="popover-content"]').filter({ has: page.getByRole("heading", { name: "Model settings" }) }).count()) === 1 &&
+          (await page.locator('[data-slot="sheet-content"]').filter({ has: page.getByRole("heading", { name: "Model settings" }) }).count()) === 0
+      )
       await page.keyboard.press("Alt+Shift+c")
       check("composer shortcut does not steal focus from a modal", (await activeElement(page)).ariaLabel !== "Message")
       await page.keyboard.press("Escape")
@@ -985,17 +997,28 @@ if (browser) {
     const page = opened.page
     try {
       await resetQa(page)
-      await page.getByRole("button", { name: "Session inspector: files and working tree" }).click()
-      const drawer = page.locator('[data-fixed-drawer="inspector"]')
+      const drawer = page.locator('[data-desktop-sidebar="inspector"]')
       await drawer.waitFor({ state: "visible" })
       check(
-        "desktop inspector opens a right-side fixed drawer",
-        (await drawer.getAttribute("data-side")) === "right",
+        "desktop inspector is a persistent right sidebar",
+        (await drawer.getAttribute("data-side")) === "right" &&
+          (await drawer.getAttribute("data-inspector-mode")) === "full" &&
+          (await drawer.locator('[data-slot="sheet-content"]').count()) === 0,
         String(await drawer.getAttribute("data-side"))
+      )
+      check(
+        "the working-tree summary lives inside the right sidebar",
+        await drawer.getByRole("button", { name: /Working tree on synthetic-main/ }).isVisible()
+      )
+
+      await page.locator("[data-qa-active]").click()
+      check(
+        "clicking outside the desktop inspector leaves it open",
+        await drawer.isVisible()
       )
 
       await page.getByRole("tab", { name: "Working tree" }).click()
-      await page.getByText("synthetic-main").waitFor({ state: "visible" })
+      await drawer.getByText("synthetic-main").first().waitFor({ state: "visible" })
       await page.getByRole("button", { name: /src\/app\.ts/ }).click()
       await page.getByRole("button", { name: "Open read-only file" }).click()
       const fileSection = page.locator('section[aria-label="File src/app.ts"]')
@@ -1013,6 +1036,26 @@ if (browser) {
         (await page.getByLabel("File content src/app.ts").textContent())?.includes(
           "export const synthetic = true"
         ) === true
+      )
+      await page.getByRole("button", { name: "Collapse session inspector" }).click()
+      await page.waitForFunction(() => {
+        const element = document.querySelector('[data-desktop-sidebar="inspector"]')
+        return element?.getAttribute("data-inspector-mode") === "rail"
+      })
+      const focus = await activeElement(page)
+      check(
+        "collapsing the desktop inspector focuses its rail expand control",
+        focus.ariaLabel === "Expand session inspector",
+        JSON.stringify(focus)
+      )
+      await page.getByRole("button", { name: "Expand session inspector" }).click()
+      await page.waitForFunction(() => {
+        const element = document.querySelector('[data-desktop-sidebar="inspector"]')
+        return element?.getAttribute("data-inspector-mode") === "full"
+      })
+      check(
+        "expanding the desktop inspector restores the panel",
+        await drawer.getByRole("tab", { name: "Files" }).isVisible()
       )
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
       mergeDiagnostics(

@@ -187,7 +187,7 @@ export function ContextStrip({
   return (
     <div className="border-t border-border/60 bg-background px-3 md:px-0">
       <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-start text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        <CollapsibleTrigger className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-start text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 md:text-[13px]">
           <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
             <Metric
               label="in"
@@ -234,7 +234,7 @@ export function ContextStrip({
           />
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="space-y-3 pt-1 pb-3 text-[11px]">
+          <div className="space-y-3 pt-1 pb-3 text-[11px] md:text-[13px]">
             <section>
               <h4 className="mb-1 font-medium text-foreground">Last response</h4>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">

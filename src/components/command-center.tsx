@@ -169,7 +169,7 @@ export function CommandCenter({
         }}
       >
         <ResponsiveDialogContent
-          className="flex max-h-[min(36rem,85vh)] flex-col gap-3 sm:max-w-lg [&>[data-command-results]]:shrink"
+          className="flex max-h-[min(36rem,85vh)] flex-col gap-3 sm:max-w-lg md:max-w-2xl [&>[data-command-results]]:shrink"
           initialFocus={inputRef}
         >
           <DialogTitle>Command center</DialogTitle>

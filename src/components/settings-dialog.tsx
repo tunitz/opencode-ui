@@ -179,7 +179,7 @@ export function SettingsDialog({
         showCloseButton={false}
         aria-labelledby="preferences-title"
         data-fixed-drawer="settings"
-        className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-hidden p-0"
+        className="flex w-[min(48rem,92vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         style={fixedDesktopSettingsStyle()}
       >
         {panel}

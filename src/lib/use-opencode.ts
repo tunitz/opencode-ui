@@ -93,6 +93,37 @@ type SessionQuery = {
 
 const SESSION_LIMIT = 50
 const MESSAGE_LIMIT = 50
+const DESKTOP_VIEWPORT_QUERY = "(min-width: 768px)"
+const DESKTOP_INSPECTOR_COLLAPSED_KEY =
+  "opencode-ui:desktop-inspector-collapsed:v2"
+
+function isDesktopViewport(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia(DESKTOP_VIEWPORT_QUERY).matches
+  )
+}
+
+function readInspectorOpen(): boolean {
+  if (!isDesktopViewport()) return false
+  try {
+    return window.localStorage.getItem(DESKTOP_INSPECTOR_COLLAPSED_KEY) !== "1"
+  } catch {
+    return true
+  }
+}
+
+function persistInspectorOpen(open: boolean) {
+  if (!isDesktopViewport()) return
+  try {
+    window.localStorage.setItem(
+      DESKTOP_INSPECTOR_COLLAPSED_KEY,
+      open ? "0" : "1"
+    )
+  } catch {
+    // A blocked storage API must not affect the inspector state.
+  }
+}
 
 export type OpenCodeState = {
   connection: ConnectionStatus
@@ -321,7 +352,7 @@ export function useOpenCode(): OpenCodeController {
   const [attachmentsBySession, setAttachmentsBySession] = useState<
     Record<string, ComposerAttachment[]>
   >({})
-  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(readInspectorOpen)
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files")
   const [focusMessageID, setFocusMessageID] = useState<string | null>(null)
   const attachmentSequence = useRef(0)
@@ -721,6 +752,7 @@ export function useOpenCode(): OpenCodeController {
   const openInspector = useCallback((tab: InspectorTab | "activity") => {
     setInspectorTab(normalizeInspectorTab(tab))
     setInspectorOpen(true)
+    persistInspectorOpen(true)
   }, [])
 
   const setInspectorTabSafe = useCallback(
@@ -732,6 +764,7 @@ export function useOpenCode(): OpenCodeController {
 
   const closeInspector = useCallback(() => {
     setInspectorOpen(false)
+    persistInspectorOpen(false)
   }, [])
 
   const loadSessions = useCallback(

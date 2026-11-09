@@ -1218,7 +1218,7 @@ export function Composer({ nav, modelSettingsOpen, onModelSettingsOpenChange }: 
       <form className="shrink-0" onSubmit={handleSubmit}>
       {activeSession && preview?.sessionID === draftKey ? (
         <Dialog open onOpenChange={(open) => { if (!open) setPreview(null) }}>
-          <ResponsiveDialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl">
+          <ResponsiveDialogContent className="max-h-[85svh] overflow-auto sm:max-w-2xl md:max-w-3xl">
             <DialogTitle>Project file preview</DialogTitle>
             <FilesPanel key={`${preview.sessionID}:${preview.path}`} nav={nav} session={activeSession} initialPath={preview.path} />
           </ResponsiveDialogContent>

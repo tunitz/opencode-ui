@@ -15,7 +15,7 @@ import { Conversation } from "@/components/conversation"
 import { ChangesPanel } from "@/components/files-panel"
 import { ModelSettingsDrawer } from "@/components/model-settings"
 import { NotesProvider } from "@/components/notes-sidebar"
-import { SessionInspector } from "@/components/session-inspector"
+import { SessionInspector, SessionInspectorPanel } from "@/components/session-inspector"
 import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -426,20 +426,26 @@ function ChangesFixture() {
 }
 
 function InspectorFixture() {
-  const nav = useSyntheticNav()
+  const nav = useSyntheticNav(
+    typeof window !== "undefined" &&
+      window.matchMedia("(min-width: 768px)").matches
+  )
   return (
     <Providers nav={nav}>
-      <div className="flex h-svh flex-col">
-        <header className="flex items-center gap-2 border-b border-border p-2">
-          <span className="text-sm">Synthetic inspector host</span>
-          <SessionInspector nav={nav} />
-        </header>
-        <main className="p-4 text-xs">
-          <p data-qa-active>Active: {nav.activeSessionID}</p>
-          <p data-qa-inspector>
-            Inspector: {nav.inspectorOpen ? nav.inspectorTab : "closed"}
-          </p>
-        </main>
+      <div className="flex h-svh">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center gap-2 border-b border-border p-2">
+            <span className="text-sm">Synthetic inspector host</span>
+            <SessionInspector nav={nav} />
+          </header>
+          <main className="p-4 text-xs">
+            <p data-qa-active>Active: {nav.activeSessionID}</p>
+            <p data-qa-inspector>
+              Inspector: {nav.inspectorOpen ? nav.inspectorTab : "closed"}
+            </p>
+          </main>
+        </div>
+        <SessionInspectorPanel nav={nav} />
       </div>
     </Providers>
   )

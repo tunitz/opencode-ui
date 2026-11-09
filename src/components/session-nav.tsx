@@ -14,8 +14,11 @@ import {
 import {
   ChevronRightIcon,
   EllipsisIcon,
+  GitBranchIcon,
   LoaderCircleIcon,
   MenuIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   PencilIcon,
   PinIcon,
   RotateCwIcon,
@@ -72,6 +75,11 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet"
 import { AppearanceDialog, AppearanceTrigger, ThemeSelect } from "@/components/theme-select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useAppDirection } from "@/components/app-direction"
 import type { Project, SessionInfo } from "@/lib/opencode"
 import {
@@ -88,6 +96,7 @@ import {
 } from "@/lib/session-tree"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
+import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { parseSessionShortcuts, shortcutStorageKey, updateSessionShortcut, type SessionShortcuts, type SessionShortcut } from "@/lib/session-shortcuts"
 import { worktreeNavigationProject } from "@/lib/worktree-navigation"
@@ -95,6 +104,16 @@ import { worktreeNavigationProject } from "@/lib/worktree-navigation"
 export type SessionNavProps = OpenCodeController
 
 const shortcutsChanged = "opencode-ui:session-shortcuts-changed"
+const SIDEBAR_COLLAPSED_KEY = "opencode-ui:desktop-sidebar-collapsed"
+
+function readSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"
+  } catch {
+    return false
+  }
+}
 function subscribeShortcuts(callback: () => void) {
   window.addEventListener("storage", callback)
   window.addEventListener(shortcutsChanged, callback)
@@ -395,7 +414,7 @@ function SessionRow({
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={labelOpen} onOpenChange={setLabelOpen}>
-        <ResponsiveDialogContent showCloseButton={false} className="gap-4 p-5" finalFocus={() => {
+        <ResponsiveDialogContent showCloseButton={false} className="gap-4 p-5 md:max-w-md" finalFocus={() => {
           const actions = actionsRef.current
           if (actions?.isConnected && actions.getClientRects().length) return actions
           const trigger = document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")
@@ -433,7 +452,7 @@ function SessionRow({
       >
         <ResponsiveDialogContent
           showCloseButton={false}
-          className="gap-4 p-5"
+          className="gap-4 p-5 md:max-w-md"
           finalFocus={() => {
             const actions = actionsRef.current
             if (actions?.isConnected && actions.getClientRects().length) return actions
@@ -1103,27 +1122,117 @@ function SessionsHeader({
 export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionSidebar")
   const notes = useNotesWorkspace()
+  const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
+
+  function toggleSidebar() {
+    const next = !collapsed
+    setCollapsed(next)
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0")
+    } catch {
+      // A blocked storage API must not break navigation.
+    }
+  }
+
   return (
-    <aside className="hidden h-svh flex-col border-e border-sidebar-border bg-sidebar md:flex">
-      <div className="flex h-14 shrink-0 items-center gap-2 px-5">
-        <span className="flex size-6 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
-          O
-        </span>
-        <span className="text-sm font-semibold tracking-tight">OpenUI</span>
+    <aside
+      data-sidebar="sessions"
+      style={{ backgroundColor: "var(--sidebar)" }}
+      className={cn(
+        "hidden h-svh shrink-0 flex-col border-e border-sidebar-border bg-sidebar transition-[width] duration-200 motion-reduce:transition-none md:flex",
+        collapsed ? DESKTOP_SIDEBAR_RAIL_WIDTH : DESKTOP_SIDEBAR_WIDTH
+      )}
+    >
+      <div className={cn("flex h-14 shrink-0 items-center", collapsed ? "justify-center px-1" : "gap-2 px-5")}>
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  aria-label="Expand sidebar"
+                  aria-expanded={false}
+                  onClick={toggleSidebar}
+                  className="size-11 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
+                />
+              }
+            >
+              <PanelLeftOpenIcon aria-hidden="true" className="size-5" />
+            </TooltipTrigger>
+            <TooltipContent side="right">Expand sidebar</TooltipContent>
+          </Tooltip>
+        ) : (
+          <>
+            <span
+              aria-hidden="true"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md bg-foreground text-background ring-1 ring-foreground/10"
+            >
+              <svg viewBox="0 0 32 32" className="size-4" fill="none">
+                <path d="M12 10l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <span className="text-sm font-semibold tracking-tight">OpenUI</span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-lg"
+                    aria-label="Collapse sidebar"
+                    aria-expanded={true}
+                    onClick={toggleSidebar}
+                    className="ms-auto size-11 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
+                  />
+                }
+              >
+                <PanelLeftCloseIcon aria-hidden="true" className="size-5" />
+              </TooltipTrigger>
+              <TooltipContent side="right">Collapse sidebar</TooltipContent>
+            </Tooltip>
+          </>
+        )}
       </div>
-      <div className="shrink-0 px-3">
-        <NewSessionButton nav={nav} onCreated={notes.closeNotes} />
-        <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
+      <div className={cn("shrink-0", collapsed ? "flex flex-col items-center gap-1 px-2" : "px-3")}>
+        <NewSessionButton nav={nav} onCreated={notes.closeNotes} compact={collapsed} />
+        {collapsed ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  aria-label="Project worktrees"
+                  disabled={!projectID || nav.projectBusy || nav.connection !== "connected"}
+                  onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}
+                  className="size-11 shrink-0 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
+                />
+              }
+            >
+              <GitBranchIcon aria-hidden="true" className="size-4" />
+            </TooltipTrigger>
+            <TooltipContent side="right">Project worktrees</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
+        )}
       </div>
       <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
-      <ProjectPanel nav={nav} className="mt-6" />
-      <ScrollArea className="mt-2 min-h-0 flex-1">
-        <div className="px-3"><NotesSidebar /></div>
-        <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} />
-      </ScrollArea>
-      <div className="flex shrink-0 items-center justify-between gap-1 border-t border-sidebar-border p-3">
+      {collapsed ? null : (
+        <>
+          <ProjectPanel nav={nav} className="mt-6" />
+          <ScrollArea className="mt-2 min-h-0 flex-1">
+            <div className="px-3"><NotesSidebar /></div>
+            <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} />
+          </ScrollArea>
+        </>
+      )}
+      <div className={cn("flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-between gap-1 p-3")}>
         <ThemeSelect />
         <SettingsButton nav={nav} />
       </div>

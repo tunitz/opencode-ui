@@ -104,7 +104,7 @@ export function CommandDialogShell({
     >
       <DialogContent
         showCloseButton={!pending}
-        className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0"
+        className="flex w-[min(44rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0 sm:max-w-none"
         style={fixedDesktopSettingsStyle()}
       >
         {content}

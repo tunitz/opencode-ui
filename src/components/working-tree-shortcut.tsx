@@ -5,6 +5,7 @@ import { diffTotals, vcsDiffUrl } from "@/lib/files"
 import type { FileDiffInfo } from "@/lib/opencode"
 
 type Snapshot = { key: string; files: FileDiffInfo[] } | null
+type BranchSnapshot = { key: string; branch: string | null } | null
 
 /** A point-in-time VCS HEAD-to-working-copy summary, not session attribution. */
 export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
@@ -14,11 +15,27 @@ export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
 }) {
   const key = JSON.stringify([sessionID, directory])
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
+  const [branchSnapshot, setBranchSnapshot] = useState<BranchSnapshot>(null)
   const [state, setState] = useState<{ key: string; status: "loading" | "ready" | "unavailable" }>({ key, status: "loading" })
 
   useEffect(() => {
     const controller = new AbortController()
     if (!directory) return () => controller.abort()
+
+    const branchQuery = new URLSearchParams({ "location[directory]": directory })
+    void fetch(`/api/vcs?${branchQuery.toString()}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Branch unavailable")
+        const body: unknown = await response.json()
+        const current = (body as { data?: { branch?: { current?: unknown } } } | null)?.data?.branch?.current
+        if (!controller.signal.aborted) {
+          setBranchSnapshot({ key, branch: typeof current === "string" && current ? current : null })
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setBranchSnapshot({ key, branch: null })
+      })
+
     void fetch(vcsDiffUrl(directory), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Diff unavailable")
@@ -38,13 +55,43 @@ export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
 
   const status = !directory ? "unavailable" : state.key === key ? state.status : "loading"
   const files = snapshot?.key === key ? snapshot.files : null
+  const branch = branchSnapshot?.key === key ? branchSnapshot.branch : null
   const totals = files ? diffTotals(files) : null
-  const label = status === "loading" ? "Working tree: loading" : status === "unavailable" ? "Working tree unavailable" : files?.length === 0 ? "Working tree: no changes" : `Working tree: ${files?.length} ${files?.length === 1 ? "file" : "files"}, ${totals?.additions} added, ${totals?.deletions} deleted`
+  const fileCount = files?.length ?? 0
+  const label =
+    status === "loading"
+      ? "Working tree: loading"
+      : status === "unavailable"
+        ? "Working tree unavailable"
+        : files?.length === 0
+          ? `Working tree${branch ? ` on ${branch}` : ""}: clean`
+          : `Working tree${branch ? ` on ${branch}` : ""}: ${files?.length} ${files?.length === 1 ? "file" : "files"}, ${totals?.additions} added, ${totals?.deletions} deleted`
+  const stateText =
+    status === "loading"
+      ? "…"
+      : status === "unavailable"
+        ? "—"
+        : null
 
   return (
-    <Button type="button" variant="ghost" onClick={onOpen} className="hidden h-11 min-w-11 shrink-0 gap-1 px-2 text-xs sm:inline-flex" aria-label={`${label}. Snapshot may be stale; open working tree inspector to refresh.`} title={`${label}. Snapshot may be stale; open working tree inspector to refresh.`}>
+    <Button type="button" variant="ghost" onClick={onOpen} className="hidden h-11 min-w-11 shrink-0 gap-1 px-2 text-xs md:text-[13px] sm:inline-flex" aria-label={`${label}. Open the session inspector to refresh.`} title={`${label}. Open the session inspector to refresh.`}>
       <GitCompareArrowsIcon aria-hidden="true" className="size-4" />
-      <span aria-hidden="true" className="hidden sm:inline">{status === "loading" ? "…" : status === "unavailable" ? "—" : files?.length === 0 ? "Clean · snapshot" : `${files?.length} · +${totals?.additions} −${totals?.deletions} · snapshot`}</span>
+      <span aria-hidden="true" className="hidden max-w-[18rem] truncate sm:inline">
+        {stateText ?? (
+          <>
+            {branch ? <>{branch} · </> : null}
+            {fileCount === 0 ? (
+              "Clean"
+            ) : (
+              <>
+                {fileCount} {fileCount === 1 ? "file" : "files"} ·{" "}
+                <span className="text-diff-added">+{totals?.additions}</span> ·{" "}
+                <span className="text-diff-removed">−{totals?.deletions}</span>
+              </>
+            )}
+          </>
+        )}
+      </span>
     </Button>
   )
 }

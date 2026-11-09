@@ -33,6 +33,7 @@ function sourceLabel(source: string): string {
 export type NewSessionButtonProps = {
   nav: OpenCodeController
   onCreated?: () => void
+  compact?: boolean
 }
 
 export type NewSessionDialogProps = {
@@ -159,7 +160,7 @@ export function NewSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ResponsiveDialogContent forceRenderBackdrop showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5">
+      <ResponsiveDialogContent forceRenderBackdrop showCloseButton={false} className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto p-5 md:max-w-[40rem]">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight">
             New session
@@ -277,7 +278,7 @@ export function NewSessionDialog({
   )
 }
 
-export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
+export function NewSessionButton({ nav, onCreated, compact = false }: NewSessionButtonProps) {
   const [open, setOpen] = useState(false)
   const [sessionKey, setSessionKey] = useState(0)
 
@@ -292,10 +293,15 @@ export function NewSessionButton({ nav, onCreated }: NewSessionButtonProps) {
         variant="ghost"
         onClick={handleOpen}
         disabled={nav.connection !== "connected"}
-        className="h-11 w-full justify-start gap-2 rounded-lg border-0 px-2.5 text-[13px] font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        aria-label={compact ? "New session" : undefined}
+        className={
+          compact
+            ? "size-11 shrink-0 justify-center rounded-lg border-0 p-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            : "h-11 w-full justify-start gap-2 rounded-lg border-0 px-2.5 text-[13px] font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        }
       >
         <PlusIcon aria-hidden="true" className="size-4" />
-        New session
+        {compact ? null : "New session"}
       </Button>
       <NewSessionDialog
         key={sessionKey}

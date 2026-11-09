@@ -93,7 +93,7 @@ export function AppearanceTrigger({ onClick, buttonRef }: { onClick: () => void;
 export function AppearanceDialog({ open, onOpenChange, finalFocus }: { open: boolean; onOpenChange: (open: boolean) => void; finalFocus?: RefObject<HTMLElement | null> | (() => HTMLElement | null) }) {
   const isDesktop = useIsDesktop()
   return isDesktop ? <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent finalFocus={finalFocus} aria-labelledby="appearance-title" aria-describedby={undefined} className="flex w-[min(32rem,92vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none" style={fixedDesktopSettingsStyle()}><AppearancePanel /></DialogContent>
+    <DialogContent finalFocus={finalFocus} aria-labelledby="appearance-title" aria-describedby={undefined} className="flex w-[min(48rem,92vw)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none" style={fixedDesktopSettingsStyle()}><AppearancePanel /></DialogContent>
   </Dialog> : <Sheet open={open} onOpenChange={onOpenChange}>
     <SheetContent finalFocus={finalFocus} side="bottom" aria-labelledby="appearance-title" aria-describedby={undefined} className="gap-0 overflow-hidden rounded-t-xl p-0" style={fixedMobileDrawerStyle()}><AppearancePanel /></SheetContent>
   </Sheet>
