@@ -1,0 +1,443 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-diff-added: var(--diff-added);
+    --color-diff-removed: var(--diff-removed);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    color-scheme: light;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.21 0.004 265);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.004 265);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.004 265);
+    --primary: oklch(0.21 0.004 265);
+    --primary-foreground: oklch(1 0 0);
+    --secondary: oklch(0.965 0.002 270);
+    --secondary-foreground: oklch(0.21 0.004 265);
+    --muted: oklch(0.965 0.002 270);
+    --muted-foreground: oklch(0.5 0.006 270);
+    --accent: oklch(0.96 0.003 270);
+    --accent-foreground: oklch(0.21 0.004 265);
+    --destructive: oklch(0.53 0.2 27);
+    --diff-added: oklch(0.43 0.13 155);
+    --diff-removed: oklch(0.48 0.19 27);
+    --border: oklch(0.925 0.002 270);
+    --input: oklch(0.89 0.003 270);
+    --ring: oklch(0.53 0.21 268);
+    /* Scoped composer Send accent; deliberately not a global theme recolor. */
+    --composer-send: #0b6cf0;
+    --composer-send-hover: #095ac6;
+    --composer-send-foreground: #ffffff;
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.75rem;
+    --sidebar: oklch(0.975 0.001 270);
+    --sidebar-foreground: oklch(0.21 0.004 265);
+    --sidebar-primary: oklch(0.21 0.004 265);
+    --sidebar-primary-foreground: oklch(1 0 0);
+    --sidebar-accent: oklch(0.935 0.003 270);
+    --sidebar-accent-foreground: oklch(0.21 0.004 265);
+    --sidebar-border: oklch(0.925 0.002 270);
+    --sidebar-ring: oklch(0.53 0.21 268);
+}
+
+.dark {
+    color-scheme: dark;
+    --background: oklch(0.17 0.004 265);
+    --foreground: oklch(0.93 0.002 270);
+    --card: oklch(0.21 0.004 265);
+    --card-foreground: oklch(0.93 0.002 270);
+    --popover: oklch(0.29 0.008 270);
+    --popover-foreground: oklch(0.93 0.002 270);
+    --primary: oklch(0.93 0.002 270);
+    --primary-foreground: oklch(0.17 0.004 265);
+    --secondary: oklch(0.24 0.005 265);
+    --secondary-foreground: oklch(0.93 0.002 270);
+    --muted: oklch(0.24 0.005 265);
+    --muted-foreground: oklch(0.73 0.006 270);
+    --accent: oklch(0.39 0.01 270);
+    --accent-foreground: oklch(0.93 0.002 270);
+    --destructive: oklch(0.76 0.17 25);
+    --diff-added: oklch(0.8 0.14 155);
+    --diff-removed: oklch(0.8 0.13 25);
+    --border: oklch(0.28 0.005 270);
+    --input: oklch(0.35 0.008 270);
+    --ring: oklch(0.79 0.09 270);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.2 0.004 265);
+    --sidebar-foreground: oklch(0.93 0.002 270);
+    --sidebar-primary: oklch(0.93 0.002 270);
+    --sidebar-primary-foreground: oklch(0.17 0.004 265);
+    --sidebar-accent: oklch(0.255 0.006 270);
+    --sidebar-accent-foreground: oklch(0.93 0.002 270);
+    --sidebar-border: oklch(0.28 0.005 270);
+    --sidebar-ring: oklch(0.79 0.09 270);
+}
+
+/* Palette changes surfaces only; semantic success and error colors remain stable. */
+:root[data-palette="slate"] {
+    --background: #f6f9fc; --card: #f6f9fc; --popover: #f6f9fc;
+    --secondary: #e9f0f7; --muted: #e9f0f7; --accent: #e2ebf4;
+    --sidebar: #edf3f9; --sidebar-accent: #dce8f2;
+    --border: #d4e0eb; --sidebar-border: #d4e0eb; --input: #c7d5e2;
+}
+:root.dark[data-palette="slate"] {
+    --background: #141d28; --card: #1b2836; --popover: #293b4d;
+    --secondary: #223242; --muted: #223242; --accent: #40566a;
+    --sidebar: #192532; --sidebar-accent: #283c4e;
+    --border: #304253; --sidebar-border: #304253; --input: #40566a;
+}
+:root[data-palette="sand"] {
+    --background: #fcfaf6; --card: #fcfaf6; --popover: #fcfaf6;
+    --secondary: #f2eee6; --muted: #f2eee6; --accent: #ebe5da;
+    --sidebar: #f6f2eb; --sidebar-accent: #eae3d7;
+    --border: #e3dbce; --sidebar-border: #e3dbce; --input: #d4cabb;
+}
+:root.dark[data-palette="sand"] {
+    --background: #211d19; --card: #2c2722; --popover: #403830;
+    --secondary: #342e28; --muted: #342e28; --accent: #594d40;
+    --sidebar: #29231e; --sidebar-accent: #3c332b;
+    --border: #463b31; --sidebar-border: #463b31; --input: #594d40;
+}
+:root[data-palette="forest"] {
+    --background: #f5faf6; --card: #f5faf6; --popover: #f5faf6;
+    --secondary: #e8f1e9; --muted: #e8f1e9; --accent: #dfebe1;
+    --sidebar: #ebf4ed; --sidebar-accent: #dbe9de;
+    --border: #d2e1d5; --sidebar-border: #d2e1d5; --input: #c5d8c9;
+}
+:root.dark[data-palette="forest"] {
+    --background: #19221c; --card: #222d25; --popover: #303d33;
+    --secondary: #29352c; --muted: #29352c; --accent: #435448;
+    --sidebar: #1d2920; --sidebar-accent: #2c3c30;
+    --border: #344639; --sidebar-border: #344639; --input: #435448;
+}
+:root[data-palette="plum"] {
+    --background: #fbf7fb; --card: #fbf7fb; --popover: #fbf7fb;
+    --secondary: #f2ebf3; --muted: #f2ebf3; --accent: #eae0ec;
+    --sidebar: #f5eef6; --sidebar-accent: #eadeec;
+    --border: #e1d4e3; --sidebar-border: #e1d4e3; --input: #d6c7d9;
+}
+:root.dark[data-palette="plum"] {
+    --background: #231c24; --card: #2e2530; --popover: #403442;
+    --secondary: #362b38; --muted: #362b38; --accent: #544458;
+    --sidebar: #2a212c; --sidebar-accent: #3c2e3f;
+    --border: #463649; --sidebar-border: #463649; --input: #544458;
+}
+:root[data-palette="ocean"] {
+    --background: #f3fafb; --card: #f3fafb; --popover: #f3fafb;
+    --secondary: #e4f1f3; --muted: #e4f1f3; --accent: #dbeaed;
+    --sidebar: #eaf4f5; --sidebar-accent: #d8e9eb;
+    --border: #cee1e4; --sidebar-border: #cee1e4; --input: #c1d7da;
+}
+:root.dark[data-palette="ocean"] {
+    --background: #172124; --card: #202d30; --popover: #2e3d40;
+    --secondary: #273639; --muted: #273639; --accent: #405357;
+    --sidebar: #1b292c; --sidebar-accent: #293b3e;
+    --border: #314448; --sidebar-border: #314448; --input: #405357;
+}
+
+/* Accent pairs are deliberately distinct in each scheme for readable text. */
+:root[data-accent="blue"] { --primary: #1754ad; --primary-foreground: #fff; --sidebar-primary: #1754ad; --sidebar-primary-foreground: #fff; --ring: #1754ad; --sidebar-ring: #1754ad; }
+:root[data-accent="violet"] { --primary: #5534a5; --primary-foreground: #fff; --sidebar-primary: #5534a5; --sidebar-primary-foreground: #fff; --ring: #5534a5; --sidebar-ring: #5534a5; }
+:root[data-accent="green"] { --primary: #126039; --primary-foreground: #fff; --sidebar-primary: #126039; --sidebar-primary-foreground: #fff; --ring: #126039; --sidebar-ring: #126039; }
+:root[data-accent="teal"] { --primary: #005e67; --primary-foreground: #fff; --sidebar-primary: #005e67; --sidebar-primary-foreground: #fff; --ring: #005e67; --sidebar-ring: #005e67; }
+:root[data-accent="rose"] { --primary: #9b2350; --primary-foreground: #fff; --sidebar-primary: #9b2350; --sidebar-primary-foreground: #fff; --ring: #9b2350; --sidebar-ring: #9b2350; }
+:root[data-accent="amber"] { --primary: #805000; --primary-foreground: #fff; --sidebar-primary: #805000; --sidebar-primary-foreground: #fff; --ring: #805000; --sidebar-ring: #805000; }
+:root.dark[data-accent="blue"] { --primary: #a9c9ff; --primary-foreground: #101820; --sidebar-primary: #a9c9ff; --sidebar-primary-foreground: #101820; --ring: #a9c9ff; --sidebar-ring: #a9c9ff; }
+:root.dark[data-accent="violet"] { --primary: #d4bfff; --primary-foreground: #101820; --sidebar-primary: #d4bfff; --sidebar-primary-foreground: #101820; --ring: #d4bfff; --sidebar-ring: #d4bfff; }
+:root.dark[data-accent="green"] { --primary: #a5dfb9; --primary-foreground: #101820; --sidebar-primary: #a5dfb9; --sidebar-primary-foreground: #101820; --ring: #a5dfb9; --sidebar-ring: #a5dfb9; }
+:root.dark[data-accent="teal"] { --primary: #9adce1; --primary-foreground: #101820; --sidebar-primary: #9adce1; --sidebar-primary-foreground: #101820; --ring: #9adce1; --sidebar-ring: #9adce1; }
+:root.dark[data-accent="rose"] { --primary: #ffb5c9; --primary-foreground: #101820; --sidebar-primary: #ffb5c9; --sidebar-primary-foreground: #101820; --ring: #ffb5c9; --sidebar-ring: #ffb5c9; }
+:root.dark[data-accent="amber"] { --primary: #f2ce83; --primary-foreground: #101820; --sidebar-primary: #f2ce83; --sidebar-primary-foreground: #101820; --ring: #f2ce83; --sidebar-ring: #f2ce83; }
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground antialiased;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+/* App viewport on mobile: the visualViewport pixel override synced by
+   useAppViewportHeight, with a viewport-unit fallback. Desktop uses
+   the Tailwind md:h-svh (see App.tsx) and is deliberately not covered here. */
+    .app-height {
+        height: var(--app-viewport-height, 100vh);
+    }
+
+    /* Pin the mobile shell to the visual viewport, not just its height. iOS
+       Safari can pan the visual viewport while the keyboard is open; applying
+       only the shrunken height would leave the composer that far above the
+       keyboard. offsetTop is the origin of the visible area in layout-viewport
+       coordinates for this fixed shell. */
+    .app-viewport {
+        position: fixed;
+        top: var(--app-viewport-top, 0px);
+        inset-inline: 0;
+        height: var(--app-viewport-height, 100dvh);
+    }
+}
+
+/* Horizontal safe-area insets for landscape notches; never below 1rem.
+   Mobile only; desktop uses the centered column's own padding. Logical
+   padding keeps the notch inset on the inline-start/end edge in RTL. */
+    .safe-horizontal {
+        padding-inline-start: max(1rem, env(safe-area-inset-left));
+        padding-inline-end: max(1rem, env(safe-area-inset-right));
+    }
+
+    [dir="rtl"] .safe-horizontal {
+        padding-inline-start: max(1rem, env(safe-area-inset-right));
+        padding-inline-end: max(1rem, env(safe-area-inset-left));
+    }
+
+    .safe-inline-start {
+        inset-inline-start: max(0.75rem, env(safe-area-inset-left));
+    }
+
+    [dir="rtl"] .safe-inline-start {
+        inset-inline-start: max(0.75rem, env(safe-area-inset-right));
+    }
+
+    .safe-inline-end {
+        inset-inline-end: max(0.75rem, env(safe-area-inset-right));
+    }
+
+    [dir="rtl"] .safe-inline-end {
+        inset-inline-end: max(0.75rem, env(safe-area-inset-left));
+    }
+}
+
+/* Code, paths, and identifiers are read left-to-right and must not be
+   reordered by an RTL paragraph. `isolate` keeps their punctuation inside
+   the code run instead of mixing with surrounding RTL text. */
+code,
+kbd,
+samp,
+pre {
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+pre {
+    text-align: start;
+}
+
+/* OpenUI CodeBlock is integrated only for fenced code. Its syntax renderer is
+   lazy-loaded; the copy control is composed outside the library button because
+   the stock control is hover-only, 32px, and has no clipboard fallback. The
+   wrapper stays LTR inside RTL pages and preserves the rest of the app theme. */
+/* Code-specific syntax tokens. These are intentionally scoped to the OpenUI
+   CodeBlock and do not recolor the rest of the UI. Light values target the
+   light muted code surface; dark values are the light-on-dark counterparts.
+   All token colors maintain >=4.5:1 against the conservative muted surface. */
+.openui-code-shell {
+    --code-keyword: #0b5bd3;
+    --code-string: #0f6b3c;
+    --code-function: #6a35c9;
+    --code-number: #9a4b00;
+    --code-comment: #596273;
+    --code-operator: var(--foreground);
+    --code-punctuation: var(--foreground);
+}
+
+.dark .openui-code-shell {
+    --code-keyword: #82b8ff;
+    --code-string: #8fe0a7;
+    --code-function: #d0b3ff;
+    --code-number: #ffc46b;
+    --code-comment: #a9b2c0;
+    --code-operator: var(--foreground);
+    --code-punctuation: var(--foreground);
+}
+
+.openui-code-shell .openui-code-block-wrapper {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.openui-code-shell .openui-code-block-syntax-highlighter {
+    max-width: 100%;
+    overflow-x: auto !important;
+    /* Reserve the top-right copy target so it never covers the first line. */
+    padding-top: 3.5rem !important;
+}
+
+.openui-code-shell .openui-code-block-copy-button {
+    display: none !important;
+}
+
+.openui-code-shell .openui-code-copy {
+    direction: ltr;
+}
+
+/* OpenUI Card/CardHeader/Image/Table are used only inside existing structured
+   details. The scoped tokens map the library's spacing/type/color variables to
+   the approved app palette; no OpenUI global reset or theme sheet is loaded. */
+.openui-rich-card {
+    --openui-space-xl: 0.75rem;
+    --openui-space-l: 1rem;
+    --openui-space-xs: 0.25rem;
+    --openui-space-2xs: 0.125rem;
+    --openui-text-neutral-primary: var(--foreground);
+    --openui-text-neutral-secondary: var(--muted-foreground);
+    --openui-text-body-default: 400 14px/20px 'Geist Variable', sans-serif;
+    --openui-text-body-default-letter-spacing: 0;
+    --openui-text-heading-sm: 600 14px/20px 'Geist Variable', sans-serif;
+    --openui-text-heading-sm-letter-spacing: 0;
+    --openui-font-variation-regular: normal;
+    --openui-radius-3xl: 1rem;
+    --openui-radius-m: 0.75rem;
+    --openui-sunk: var(--muted);
+    --openui-border-default: var(--border);
+    --openui-shadow-m: none;
+    --openui-foreground: var(--card);
+}
+
+.openui-table-scope {
+    --openui-text-body-sm: 400 14px/20px 'Geist Variable', sans-serif;
+    --openui-text-body-sm-letter-spacing: 0;
+    --openui-font-variation-regular: normal;
+    --openui-border-default: var(--border);
+    --openui-radius-2xl: 1rem;
+    --openui-space-m: 0.625rem;
+    --openui-space-2xs: 0.25rem;
+    --openui-space-s: 0.5rem;
+    --openui-radius-s: 0.5rem;
+    --openui-radius-xs: 0.25rem;
+    --openui-text-neutral-primary: var(--foreground);
+    --openui-text-neutral-secondary: var(--muted-foreground);
+    --openui-highlight-subtle: color-mix(in oklch, var(--muted) 45%, transparent);
+    --openui-foreground: var(--card);
+}
+
+/* Markdown cells carry inline formatting and links. A fixed minimum width
+   keeps headers and short cells readable while the actual OpenUI Table
+   container owns the bounded horizontal scroll on narrow screens. */
+.openui-table-scope .openui-markdown-table .openui-table {
+    table-layout: fixed;
+}
+
+.openui-table-scope .openui-markdown-table .openui-table-cell {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+/* Reduced motion: no decorative animation, transition, or smooth scrolling.
+   Status is still conveyed by text/ARIA, never by motion alone. */
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* Miniature palette surfaces reflect the resolved scheme, not the host surface. */
+.appearance-preview { background: #fff; border-color: #d6d6da; --preview-side: #f5f5f6; --preview-line: #7c7d83; }
+.appearance-preview[data-preview-palette="slate"] { background: #f6f9fc; border-color: #d4e0eb; --preview-side: #dce8f2; --preview-line: #64778b; }
+.appearance-preview[data-preview-palette="sand"] { background: #fcfaf6; border-color: #e3dbce; --preview-side: #eae3d7; --preview-line: #85796b; }
+.appearance-preview[data-preview-palette="forest"] { background: #f5faf6; border-color: #d2e1d5; --preview-side: #dbe9de; --preview-line: #647b69; }
+.appearance-preview[data-preview-palette="plum"] { background: #fbf7fb; border-color: #e1d4e3; --preview-side: #eadeec; --preview-line: #806e83; }
+.appearance-preview[data-preview-palette="ocean"] { background: #f3fafb; border-color: #cee1e4; --preview-side: #d8e9eb; --preview-line: #617b80; }
+.dark .appearance-preview { background: #19191c; border-color: #45454b; --preview-side: #333338; --preview-line: #aaaab1; }
+.dark .appearance-preview[data-preview-palette="slate"] { background: #141d28; border-color: #40566a; --preview-side: #283c4e; --preview-line: #a2b5c9; }
+.dark .appearance-preview[data-preview-palette="sand"] { background: #211d19; border-color: #594d40; --preview-side: #3c332b; --preview-line: #bfb0a0; }
+.dark .appearance-preview[data-preview-palette="forest"] { background: #19221c; border-color: #435448; --preview-side: #2c3c30; --preview-line: #a5bca9; }
+.dark .appearance-preview[data-preview-palette="plum"] { background: #231c24; border-color: #544458; --preview-side: #3c2e3f; --preview-line: #c0afc3; }
+.dark .appearance-preview[data-preview-palette="ocean"] { background: #172124; border-color: #405357; --preview-side: #293b3e; --preview-line: #a2babe; }
+.appearance-preview-sidebar { background: var(--preview-side); }
+.appearance-preview-line, .appearance-preview-accent { height: 3px; border-radius: 2px; background: var(--preview-line); }
+.appearance-preview-accent { background: var(--primary); }
+.appearance-accent-swatch[data-preview-accent="default"] { background: #73737b; }
+.appearance-accent-swatch[data-preview-accent="blue"] { background: #1754ad; }
+.appearance-accent-swatch[data-preview-accent="violet"] { background: #5534a5; }
+.appearance-accent-swatch[data-preview-accent="green"] { background: #126039; }
+.appearance-accent-swatch[data-preview-accent="teal"] { background: #005e67; }
+.appearance-accent-swatch[data-preview-accent="rose"] { background: #9b2350; }
+.appearance-accent-swatch[data-preview-accent="amber"] { background: #805000; }
+.dark .appearance-accent-swatch[data-preview-accent="blue"] { background: #a9c9ff; }
+.dark .appearance-accent-swatch[data-preview-accent="violet"] { background: #d4bfff; }
+.dark .appearance-accent-swatch[data-preview-accent="green"] { background: #a5dfb9; }
+.dark .appearance-accent-swatch[data-preview-accent="teal"] { background: #9adce1; }
+.dark .appearance-accent-swatch[data-preview-accent="rose"] { background: #ffb5c9; }
+.dark .appearance-accent-swatch[data-preview-accent="amber"] { background: #f2ce83; }
+
+/* Accent the selected session label, while keeping message prose neutral. */
+:root[data-accent]:not([data-accent="default"]) .session-nav-item[aria-current="page"],
+:root[data-accent]:not([data-accent="default"]) .session-nav-item[aria-current="page"]:hover { color: var(--primary); }
+
+/* Only conversation headings take the optional accent; body prose stays neutral. */
+:root[data-accent]:not([data-accent="default"]) .message-markdown > .markdown-content :is(h1, h2, h3, h4, h5, h6) { color: var(--primary); }
+
+/* iOS Safari zooms the page when a focused form control renders below 16px.
+   Keep native text controls at 16px on touch devices so focusing an input
+   never changes the zoom level. Desktop keeps its denser sizes, and page
+   zoom stays available for accessibility (no user-scalable=no). */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+}

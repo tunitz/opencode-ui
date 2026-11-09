@@ -1,0 +1,31 @@
+{
+  "name": "@tunitz/opencode-notes",
+  "version": "0.1.0",
+  "description": "Standalone OpenCode V2 notes plugin with project/global spaces, statuses, pinning, agent tools, RPC, and a direct TUI command surface.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./server": "./server.ts",
+    "./rpc": "./rpc.ts",
+    "./tui": "./tui.ts"
+  },
+  "files": [
+    "index.ts",
+    "server.ts",
+    "rpc.ts",
+    "tui.ts",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.1.4"
+  },
+  "devDependencies": {
+    "effect": "4.0.1"
+  }
+}

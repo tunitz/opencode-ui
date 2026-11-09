@@ -1,0 +1,36 @@
+.app-openui-status.openui-tag {
+  display: inline-flex;
+  height: auto;
+  min-height: 20px;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--muted);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.app-openui-status.openui-tag-success { color: var(--diff-added); }
+.app-openui-status.openui-tag-danger { color: var(--diff-removed); }
+
+.app-openui-metric .openui-metric-indicator__main-value {
+  color: var(--foreground);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-openui-warning.openui-callout {
+  padding: 0;
+  padding-inline-start: 10px;
+  border: 0;
+  border-inline-start: 2px solid var(--border);
+}
+
+.app-openui-warning .openui-callout-description {
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+}
