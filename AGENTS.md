@@ -84,8 +84,8 @@ bun run build:bun
 bun run verify         # typecheck + lint + tests
 ```
 
-CI runs `bun install --frozen-lockfile`, typecheck, lint, `build:bun`, and the main test suite.
-The Notes plugin tests are separate and are not included in `bun run verify`.
+The Notes plugin tests are separate and are not included in `bun run verify`. Run the appropriate
+checks locally before committing.
 
 - Keep loading, empty, unavailable, and error states honest.
 - Real-model tests must use verified free/zero-cost models or explicit zero-cost paths. Never

@@ -9,6 +9,7 @@ All notable changes to this project are documented in this file.
 - The Notes & plans sidebar starts collapsed by default.
 - Documentation refreshed for the Bun server, current installation options, and the unsupported
   terminal surface. Environment-specific instructions were removed.
+- Removed the GitHub Actions CI workflow.
 
 ## 0.1.0 — 2026-11-09
 
