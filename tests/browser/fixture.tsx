@@ -17,11 +17,12 @@ import { Conversation } from "@/components/conversation"
 import { ChangesPanel } from "@/components/files-panel"
 import { ModelSettingsDrawer } from "@/components/model-settings"
 import { NotesProvider, NotesSidebar, NotesWorkspace } from "@/components/notes-sidebar"
+import { PendingInbox } from "@/components/pending-inbox"
 import { SessionInspector, SessionInspectorPanel } from "@/components/session-inspector"
 import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import type { SessionInfo, SessionMessageInfo } from "@/lib/opencode"
+import type { FormInfo, SessionInfo, SessionMessageInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
 
@@ -612,6 +613,52 @@ function NotesFixture({ wide = false }: { wide?: boolean }) {
   )
 }
 
+// Mirrors the reported desktop bug: a question whose description contains a
+// long unbreakable command token must not stretch the dialog's grid track.
+const pendingQuestionForm = {
+  id: "form-qa",
+  sessionID: "s-alpha",
+  title: "Questions",
+  fields: [
+    {
+      key: "login-password-step",
+      title: "Login password step",
+      description:
+        "To finish deployment I need your HealthVault login password hash in ~/.config/healthvault/auth.env. " +
+        "Please run this in your own terminal (it reads the password silently and appends only the hash), then tell me when done: " +
+        "read -rsp \"Password: \" | pw; echo; bun -e 'const c=require(\"node:crypto\");const s=c.randomBytes(16);" +
+        "const h=c.scryptSync(process.argv[1],s,32,{N:16384,r:8,p:1});console.log(`HEALTHVAULT_PASSWORD_HASH=scrypt:16384:8:1:${s.toString(\"hex\")}:${h.toString(\"hex\")}`)' " +
+        "`\"$pw\" >> ~/.config/healthvault/auth.env; unset pw How do you want to handle it?",
+      type: "string",
+      required: true,
+    },
+  ],
+} as unknown as FormInfo
+
+function PendingFixture() {
+  const base = useSyntheticNav()
+  const nav = {
+    ...base,
+    pendingForms: [pendingQuestionForm],
+    formBusy: {},
+    replyForm: async (formID: string) => {
+      log("replyForm", formID)
+      return null
+    },
+    cancelForm: async (formID: string) => {
+      log("cancelForm", formID)
+      return null
+    },
+  } as unknown as OpenCodeController
+  return (
+    <Providers nav={nav}>
+      <div className="flex h-svh min-h-0 flex-col p-4">
+        <PendingInbox nav={nav} />
+      </div>
+    </Providers>
+  )
+}
+
 function Fixture() {
   const fixture = new URLSearchParams(window.location.search).get("fixture")
   switch (fixture) {
@@ -633,6 +680,8 @@ function Fixture() {
       return <ChangesFixture />
     case "inspector":
       return <InspectorFixture />
+    case "pending":
+      return <PendingFixture />
     case "nav":
     default:
       return <NavFixture />

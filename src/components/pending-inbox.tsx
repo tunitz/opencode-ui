@@ -27,7 +27,10 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 
 function PendingList({ nav }: { nav: OpenCodeController }) {
   return (
-    <ScrollArea viewportClassName="max-h-[min(60vh,30rem)]" className="min-h-0 flex-1 pe-1">
+    <ScrollArea
+      viewportClassName="max-h-[min(60vh,30rem)]"
+      className="min-h-0 min-w-0 flex-1 pe-1"
+    >
       <div className="space-y-4">
         {nav.pendingPermissions.map((request) => (
           <PermissionCard key={request.id} nav={nav} request={request} />

@@ -61,7 +61,7 @@ function Title({
   required?: boolean
 }) {
   return (
-    <span className="text-[13px] font-medium">
+    <span className="text-[13px] break-words font-medium">
       {field.title ?? field.key}
       {required ? (
         <span aria-hidden="true" className="text-destructive">
@@ -78,7 +78,11 @@ function Description({ field }: { field: FormField }) {
     return null
   }
 
-  return <p className="text-xs text-muted-foreground">{field.description}</p>
+  return (
+    <p className="text-xs break-words text-muted-foreground">
+      {field.description}
+    </p>
+  )
 }
 
 export function FieldRenderer({
@@ -405,7 +409,9 @@ export function FormView({
       aria-label={form.title}
       className="space-y-3 rounded-xl border border-border/70 p-4"
     >
-      <h3 className="text-sm font-semibold tracking-tight">{form.title}</h3>
+      <h3 className="text-sm break-words font-semibold tracking-tight">
+        {form.title}
+      </h3>
       <div className="space-y-3">
         {visible.map((field) => (
           <FieldRenderer

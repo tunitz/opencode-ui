@@ -2141,6 +2141,66 @@ if (browser) {
 }
 
 // ---------------------------------------------------------------------------
+// Desktop question dialog overflow
+// ---------------------------------------------------------------------------
+if (browser) {
+  await run("desktop question dialog keeps long question text inside the dialog", async ({ check }) => {
+    const opened = await openPage({ width: 1280, height: 900 }, "pending")
+    const page = opened.page
+    try {
+      const trigger = page.getByRole("button", { name: /A question needs your answer/ })
+      await trigger.waitFor({ state: "visible" })
+      await trigger.click()
+
+      const dialog = page.locator('[data-slot="dialog-content"]')
+      await dialog.waitFor({ state: "visible" })
+      const card = dialog.locator("section").first()
+      await card.waitFor({ state: "visible" })
+
+      const dialogBox = await dialog.boundingBox()
+      const cardBox = await card.boundingBox()
+      const controlBox = await dialog.locator("textarea, input").first().boundingBox()
+      const submitBox = await dialog.getByRole("button", { name: "Submit" }).boundingBox()
+      const dialogRight = (dialogBox?.x ?? 0) + (dialogBox?.width ?? 0)
+
+      check(
+        "question card stays inside the dialog",
+        Boolean(cardBox && dialogBox && cardBox.x >= dialogBox.x && cardBox.x + cardBox.width <= dialogRight + 1),
+        `card=${JSON.stringify(cardBox)} dialogRight=${dialogRight}`
+      )
+      check(
+        "answer control stays inside the dialog",
+        Boolean(controlBox && dialogBox && controlBox.x >= dialogBox.x && controlBox.x + controlBox.width <= dialogRight + 1),
+        `control=${JSON.stringify(controlBox)} dialogRight=${dialogRight}`
+      )
+      check(
+        "submit action stays inside the dialog",
+        Boolean(submitBox && dialogBox && submitBox.x + submitBox.width <= dialogRight + 1),
+        `submit=${JSON.stringify(submitBox)} dialogRight=${dialogRight}`
+      )
+      check(
+        "dialog stays inside the viewport",
+        Boolean(dialogBox && dialogBox.x >= 0 && dialogRight <= 1280),
+        JSON.stringify(dialogBox)
+      )
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth
+      )
+      check("question dialog introduces no horizontal page overflow", overflow <= 0, `overflow=${overflow}`)
+
+      await page.screenshot({ path: join(shotDir, "question-dialog-desktop.png") })
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+      mergeDiagnostics(
+        results.find((result) => result.name.startsWith("desktop question dialog"))!,
+        opened
+      )
+    } finally {
+      await opened.context.close()
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
 if (browser) await browser.close()
