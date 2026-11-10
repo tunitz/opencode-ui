@@ -33,6 +33,7 @@ import {
 } from "@/lib/accessibility"
 import { Markdown } from "@/components/markdown"
 import { MessageFiles } from "@/components/message-files"
+import { HealthvaultToolDetails } from "@/components/healthvault-tool-details"
 import { ToolArtifacts } from "@/components/tool-artifacts"
 import { ProjectArtifacts } from "@/components/project-artifacts"
 import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
@@ -98,6 +99,7 @@ import { structuredErrorMessage } from "@/lib/structured-error"
 import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { toolCallSummary, toolInputDetail, toolTextOutput } from "@/lib/tool-details"
+import { isHealthvaultTool } from "@/lib/healthvault-tool-view"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { messageText } from "@/lib/command-search"
 import { useToolVisibility } from "@/lib/use-tool-visibility"
@@ -155,6 +157,8 @@ function toolLabel(tool: ToolLike): string {
     const skill = traceValue(input.id, 60) ?? traceValue(input.name, 60)
     return skill ? `${skill} · ${name}` : name
   }
+  // HealthVault tools already show a parsed result summary; a bare limit is noise.
+  if (isHealthvaultTool(name)) return name
   // Numeric pagination arguments distinguish calls without revealing content.
   for (const key of ["offset", "limit"]) {
     const value = input[key]
@@ -320,7 +324,7 @@ export function ToolTrace({
   const failed = tools.some((tool) => tool.status === "error")
   const status = failed ? "error" : running ? "running" : "completed"
   const name = tools[0] ? toolLabel(tools[0]) : "tool unknown"
-  const summary = tools.length === 1 ? toolCallSummary(tools[0].name, tools[0].input) : undefined
+  const summary = tools.length === 1 ? toolCallSummary(tools[0].name, tools[0].input, tools[0].output, tools[0].status) : undefined
   const title =
     tools.length === 1
       ? `1 tool call: ${name}${summary ? ` · ${summary}` : ""}`
@@ -352,7 +356,14 @@ export function ToolTrace({
         </TraceCollapsibleTrigger>
         <TraceCollapsibleContent>
           <ul className="space-y-1.5">
-            {tools.map((tool) => (
+            {tools.map((tool) => {
+              const summary = toolCallSummary(
+                tool.name,
+                tool.input,
+                tool.output,
+                tool.status
+              )
+              return (
               <li
                 key={tool.id}
                 className="min-w-0 text-[13px]"
@@ -362,7 +373,7 @@ export function ToolTrace({
                     <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 transition-transform group-aria-expanded/tool:rotate-90 motion-reduce:transition-none" />
                     <span className="min-w-0 flex-1">
                       <span dir="auto" className="block truncate font-mono">{tool.name ?? `tool ${tool.id}`}</span>
-                      {toolCallSummary(tool.name, tool.input) ? <span dir="auto" className="block truncate font-mono text-xs">{toolCallSummary(tool.name, tool.input)}</span> : null}
+                      {summary ? <span dir="auto" className="block truncate font-mono text-xs">{summary}</span> : null}
                     </span>
                     <span className={cn("shrink-0 text-xs text-muted-foreground", tool.status === "error" && "text-destructive")}>{tool.status}</span>
                   </CollapsibleTrigger>
@@ -371,7 +382,8 @@ export function ToolTrace({
                   </CollapsibleContent>
                 </Collapsible>
               </li>
-            ))}
+              )
+            })}
           </ul>
         </TraceCollapsibleContent>
       </TraceCollapsible>
@@ -393,7 +405,18 @@ function ToolCallDetails({ tool }: { tool: ToolLike }) {
       : []
   return <>
     {input !== undefined ? <ToolDetail label="Input" text={input} /> : null}
-    {tool.output !== undefined ? <ToolDetail label="Output" text={tool.output} /> : null}
+    {tool.output !== undefined ? (
+      isHealthvaultTool(tool.name) ? (
+        <HealthvaultToolDetails
+          name={tool.name}
+          output={tool.output}
+          status={tool.status}
+          fallback={<ToolDetail label="Output" text={tool.output} />}
+        />
+      ) : (
+        <ToolDetail label="Output" text={tool.output} />
+      )
+    ) : null}
     {tool.status === "completed" && changedFiles.length > 0 ? (
       <Button
         type="button"

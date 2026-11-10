@@ -1,3 +1,8 @@
+import {
+  healthvaultToolSummary,
+  isHealthvaultTool,
+} from "@/lib/healthvault-tool-view"
+
 // Tool data is untrusted. Render it as text, never as markup or a URL.
 const DETAIL_LIMIT = 32_000
 
@@ -28,7 +33,15 @@ export function toolInputDetail(input: Record<string, unknown> | undefined): str
   }
 }
 
-export function toolCallSummary(name: string | null, input: Record<string, unknown> | undefined): string | undefined {
+export function toolCallSummary(
+  name: string | null,
+  input: Record<string, unknown> | undefined,
+  output?: string,
+  status?: "running" | "completed" | "error"
+): string | undefined {
+  if (isHealthvaultTool(name)) {
+    return healthvaultToolSummary(name, output, status)
+  }
   const value = name === "shell" || name === "bash" ? input?.command : name === "skill" ? (input?.id ?? input?.name) : undefined
   if (typeof value !== "string" || !value.trim()) return undefined
   const summary = value.trim().replace(/\s+/g, " ")
