@@ -1296,7 +1296,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
           </ScrollArea>
         </>
       )}
-      <div className={cn("flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-between gap-1 p-3")}>
+      <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-between gap-1 p-3")}>
         <ThemeSelect />
         <SettingsButton nav={nav} />
       </div>
