@@ -21,6 +21,9 @@
   ],
   "type": "module",
   "packageManager": "bun@1.4.4",
+  "workspaces": [
+    "plugins/notes"
+  ],
   "engines": {
     "bun": "1.4.4"
   },
@@ -66,7 +69,7 @@
     "verify": "bun run typecheck && bun run lint && bun run test",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc --noEmit -p plugins/notes/tsconfig.json",
     "preview": "bun server/bun-server.ts",
     "icons:generate": "bun scripts/generate-icons.mjs"
   },
