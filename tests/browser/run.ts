@@ -1264,6 +1264,62 @@ if (browser) {
     }
   })
 
+  await run("inspector tab strip advertises and scrolls hidden tabs", async ({ check }) => {
+    for (const viewport of [
+      { width: 1280, height: 900, mobile: false },
+      { width: 390, height: 844, mobile: true },
+    ]) {
+      const opened = await openPage(viewport, "inspector")
+      const page = opened.page
+      try {
+        const scope = viewport.mobile
+          ? page.locator('[data-fixed-drawer="inspector"]')
+          : page.locator('[data-desktop-sidebar="inspector"]')
+        if (viewport.mobile) {
+          await page.getByRole("button", { name: "Session inspector" }).click()
+        }
+        await scope.waitFor({ state: "visible" })
+
+        const more = scope.getByRole("button", { name: "More inspector tabs" })
+        await more.waitFor({ state: "visible" })
+        check(
+          `${viewport.width}px shows a visible cue for hidden tabs`,
+          await more.isVisible()
+        )
+
+        await more.click()
+        await page.waitForTimeout(300)
+        const sessionTab = scope.getByRole("tab", { name: "Session" })
+        check(
+          `${viewport.width}px scrolls the last tab into view`,
+          await sessionTab.isVisible()
+        )
+        check(
+          `${viewport.width}px exposes the reverse scroll control`,
+          await scope.getByRole("button", { name: "Previous inspector tabs" }).isVisible()
+        )
+
+        await sessionTab.click()
+        await scope.getByText("Context & tokens").waitFor({ state: "visible" })
+        check(
+          `${viewport.width}px Session tab is reachable and renders`,
+          await scope.getByText("Context & tokens").isVisible()
+        )
+        check(
+          `${viewport.width}px tab scrolling reports no page errors`,
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) => result.name.startsWith("inspector tab strip advertises"))!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  })
+
   await run("all five inspector tabs render on desktop and mobile", async ({ check }) => {
     for (const viewport of [
       { width: 1280, height: 900, mobile: false },

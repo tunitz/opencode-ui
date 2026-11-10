@@ -39,7 +39,13 @@ type QAWindow = Window & {
 const qaWindow = window as unknown as QAWindow
 qaWindow.__qa = { calls: [], openedFiles: [], navigations: [] }
 
-const now = Date.now()
+// Anchor relative session times at local noon so date grouping is stable
+// regardless of when the synthetic suite runs.
+const now = (() => {
+  const date = new Date()
+  date.setHours(12, 0, 0, 0)
+  return date.getTime()
+})()
 const directory = "/synthetic/alpha"
 
 function session(
@@ -71,7 +77,7 @@ const sessions: SessionInfo[] = [
     parentID: "s-alpha",
     location: { directory },
   }),
-  session("s-gamma", "Gamma", now - 26 * 60 * 60 * 1000, {
+  session("s-gamma", "Gamma", now - 24 * 60 * 60 * 1000, {
     projectID: "p-gamma",
     location: { directory: "/synthetic/gamma" },
   }),

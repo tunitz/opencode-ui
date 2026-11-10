@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ListTreeIcon,
   LoaderCircleIcon,
   SettingsIcon,
@@ -108,13 +110,70 @@ function TabStrip({
   nav: OpenCodeController
   mode: "sheet" | "sidebar"
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [edges, setEdges] = useState({ start: false, end: false })
+
+  const syncEdges = () => {
+    const element = scrollRef.current
+    if (!element) return
+    const maximum = element.scrollWidth - element.clientWidth
+    const position = Math.abs(element.scrollLeft)
+    setEdges({
+      start: position > 2,
+      end: maximum > 2 && position < maximum - 2,
+    })
+  }
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    syncEdges()
+    const observer = new ResizeObserver(syncEdges)
+    observer.observe(element)
+    element.addEventListener("scroll", syncEdges, { passive: true })
+    window.addEventListener("resize", syncEdges)
+    return () => {
+      observer.disconnect()
+      element.removeEventListener("scroll", syncEdges)
+      window.removeEventListener("resize", syncEdges)
+    }
+  }, [])
+
+  // Keep the selected tab visible after a click, keyboard change, or resize.
+  useEffect(() => {
+    const element = scrollRef.current
+    const active = element?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    if (!element || !active) return
+    const container = element.getBoundingClientRect()
+    const tab = active.getBoundingClientRect()
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const behavior: ScrollBehavior = reduced ? "auto" : "smooth"
+    if (tab.left < container.left + 8) {
+      element.scrollBy({ left: tab.left - container.left - 8, behavior })
+    } else if (tab.right > container.right - 8) {
+      element.scrollBy({ left: tab.right - container.right + 8, behavior })
+    }
+  }, [nav.inspectorTab])
+
+  function scrollTabs(direction: -1 | 1) {
+    const element = scrollRef.current
+    if (!element) return
+    const rtl = document.documentElement.getAttribute("dir") === "rtl"
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    element.scrollBy({
+      left: direction * (rtl ? -1 : 1) * Math.max(120, element.clientWidth * 0.75),
+      behavior: reduced ? "auto" : "smooth",
+    })
+  }
+
   return (
     <div className="relative shrink-0">
       <div
+        ref={scrollRef}
         role="tablist"
         aria-label="Inspector sections"
         data-inspector-tablist
-        className="flex overflow-x-auto scrollbar-none px-2 [scrollbar-width:none]"
+        className="flex overflow-x-auto overscroll-x-contain px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         onKeyDown={(event) => {
           const keys = ["ArrowRight", "ArrowLeft", "Home", "End"]
           if (!keys.includes(event.key)) return
@@ -174,13 +233,51 @@ function TabStrip({
           )
         })}
       </div>
-      <span
-        aria-hidden="true"
-        className={cn(
-          "pointer-events-none absolute inset-y-0 end-0 w-8 bg-linear-to-l from-sidebar to-transparent",
-          mode === "sheet" && "from-card"
-        )}
-      />
+
+      {edges.start ? (
+        <>
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent",
+              mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
+            )}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-lg"
+            aria-label="Previous inspector tabs"
+            className="absolute inset-y-0 start-0 h-11 w-11 rounded-full text-muted-foreground"
+            onClick={() => scrollTabs(-1)}
+          >
+            <ChevronLeftIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
+          </Button>
+        </>
+      ) : null}
+
+      {edges.end ? (
+        <>
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent",
+              mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
+            )}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-lg"
+            aria-label="More inspector tabs"
+            aria-hidden={false}
+            className="absolute inset-y-0 end-0 h-11 w-11 rounded-full text-muted-foreground"
+            onClick={() => scrollTabs(1)}
+          >
+            <ChevronRightIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
+          </Button>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -205,7 +302,6 @@ function InspectorBody({
   const tab = nav.inspectorTab
   const definition = getInspectorTab(tab)
   const Panel = definition.component
-  const sessionTitle = nav.activeSession?.title?.trim() || "Untitled session"
   const context = contextSummary(nav)
 
   useEffect(() => {
@@ -287,7 +383,7 @@ function InspectorBody({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <SheetTitle className="truncate text-[15px] font-semibold tracking-tight">
-                {sessionTitle}
+                Inspector
               </SheetTitle>
               <SheetDescription className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px]">
                 <span>{liveStatus(nav)}</span>
@@ -317,7 +413,7 @@ function InspectorBody({
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <h2 className="truncate text-[15px] font-semibold tracking-tight">
-                {sessionTitle}
+                Inspector
               </h2>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
                 <span>{liveStatus(nav)}</span>
@@ -400,9 +496,9 @@ function InspectorBody({
           <ScrollArea
             viewportClassName="h-full"
             className={cn(
-              "h-full",
+              "h-full px-4",
               mode === "sheet"
-                ? "px-1 pb-[max(1rem,env(safe-area-inset-bottom))]"
+                ? "pb-[max(1rem,env(safe-area-inset-bottom))]"
                 : "pb-4"
             )}
           >

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowUpIcon,
   FileQuestionIcon,
   FileTextIcon,
   FolderIcon,
@@ -989,7 +991,7 @@ export function ChangesPanel({
       ) : null}
 
       <form
-        className="flex items-center gap-1"
+        className="flex w-full items-center gap-1.5"
         onSubmit={(event) => {
           event.preventDefault()
           stepMatch(1)
@@ -1011,16 +1013,18 @@ export function ChangesPanel({
           }}
           placeholder="Find in diff"
           aria-label="Find in diff"
-          className="h-11 min-w-0 flex-1 text-base md:text-sm"
+          className="h-11 w-0 min-w-0 flex-1 text-base md:text-sm"
         />
-        <span className="min-w-12 shrink-0 text-center text-[11px] tabular-nums text-muted-foreground">
-          {find.trim() ? `${matchCount ? activeMatch + 1 : 0}/${matchCount}` : ""}
-        </span>
-        <Button type="button" variant="outline" className="h-11 px-2 text-xs" aria-label="Previous diff match" disabled={matchCount === 0} onClick={() => stepMatch(-1)}>
-          ↑
+        {find.trim() ? (
+          <span className="shrink-0 text-center text-[11px] tabular-nums text-muted-foreground">
+            {matchCount ? activeMatch + 1 : 0}/{matchCount}
+          </span>
+        ) : null}
+        <Button type="button" variant="outline" size="icon-lg" className="size-11 shrink-0 rounded-lg p-0" aria-label="Previous diff match" disabled={matchCount === 0} onClick={() => stepMatch(-1)}>
+          <ArrowUpIcon aria-hidden="true" className="size-5" />
         </Button>
-        <Button type="button" variant="outline" className="h-11 px-2 text-xs" aria-label="Next diff match" disabled={matchCount === 0} onClick={() => stepMatch(1)}>
-          ↓
+        <Button type="button" variant="outline" size="icon-lg" className="size-11 shrink-0 rounded-lg p-0" aria-label="Next diff match" disabled={matchCount === 0} onClick={() => stepMatch(1)}>
+          <ArrowDownIcon aria-hidden="true" className="size-5" />
         </Button>
       </form>
 
