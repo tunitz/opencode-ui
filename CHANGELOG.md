@@ -4,9 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `notes_get` plugin RPC method and agent tool for reading one full note.
+- `includeBodies` on the notes list contract; `false` returns empty bodies for cheap browsing.
+
 ### Changed
 
 - The Notes & plans sidebar starts collapsed by default.
+- Notes follow a `todo` → `in-progress` → `finished` lifecycle, with `finished` only after verified
+  work.
+- Note statuses were reconciled with actual work state.
 - Documentation refreshed for the Bun server, current installation options, and the unsupported
   terminal surface. Environment-specific instructions were removed.
 - Removed the GitHub Actions CI workflow.

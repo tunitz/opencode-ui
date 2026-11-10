@@ -87,6 +87,8 @@ export interface ListInput {
   readonly query?: string
   /** With projectID, also include notes in global spaces. Defaults to true. */
   readonly includeGlobal?: boolean
+  /** false returns empty bodies for cheap browsing; filtering still uses real bodies. */
+  readonly includeBodies?: boolean
   readonly limit?: number
   readonly offset?: number
 }
@@ -94,6 +96,10 @@ export interface ListInput {
 export interface ListOutput {
   readonly notes: readonly Note[]
   readonly total: number
+}
+
+export interface GetNoteInput {
+  readonly noteID: string
 }
 
 export interface CreateNoteInput {

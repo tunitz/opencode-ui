@@ -17,6 +17,7 @@ import {
   type DeleteNoteOutput,
   type DeleteSpaceInput,
   type DeleteSpaceOutput,
+  type GetNoteInput,
   type ListInput,
   type ListOutput,
   type Note,
@@ -346,10 +347,22 @@ export class NotesService {
       return true
     })
     filtered.sort(compareNotes)
+    const page = filtered.slice(offset, offset + limit)
     return {
-      notes: filtered.slice(offset, offset + limit),
+      notes:
+        input.includeBodies === false
+          ? page.map((note) => ({ ...note, body: "" }))
+          : page,
       total: filtered.length,
     }
+  }
+
+  async get(input: GetNoteInput): Promise<Note> {
+    const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    const note = await this.store.getNote(noteID)
+    if (!note)
+      throw new NotesError("note_not_found", "Note not found", { noteID })
+    return note
   }
 
   async create(input: CreateNoteInput): Promise<Note> {

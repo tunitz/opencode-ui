@@ -129,6 +129,14 @@ Do not publish from a dirty tree or include private files, credentials, or local
 - Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal`, for
   example, is reported as unsupported because no terminal UI is mounted.
 
+## Notes workflow
+
+- Check pinned and in-progress notes for this project before substantial work, and mark a note
+  `in-progress` when work starts.
+- Set `finished` only after verification; append the outcome, commands run, and commit reference to
+  the note body. Keep it `in-progress` when work is unverified or uncommitted.
+- Browse with `notes_list({ includeBodies: false })`; read one note's content with `notes_get`.
+
 ## Security and live state
 
 - The UI server holds an engine credential; do not expose it to the browser or logs. Keep secrets,

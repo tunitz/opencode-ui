@@ -239,6 +239,93 @@ describe("NotesService", () => {
     expect(page.notes).toHaveLength(1)
   })
 
+  test("reads one note by ID and rejects unknown IDs", async () => {
+    const { service } = makeService()
+    const note = await service.create({ title: "Note", body: "Body" })
+    expect(await service.get({ noteID: note.id })).toEqual(note)
+
+    await expect(service.get({ noteID: "missing" })).rejects.toMatchObject({
+      type: "note_not_found",
+      data: { noteID: "missing" },
+    })
+    await expect(service.get({ noteID: "   " })).rejects.toMatchObject({
+      type: "invalid",
+      data: { field: "noteID" },
+    })
+  })
+
+  test("omits list bodies on request without changing filtering or totals", async () => {
+    const { service } = makeService()
+    const alpha = await service.createSpace({ name: "Alpha" })
+    const beta = await service.createSpace({ name: "Beta" })
+    const first = await service.create({
+      spaceID: alpha.id,
+      title: "First",
+      body: "needle body",
+    })
+    const second = await service.create({
+      spaceID: beta.id,
+      title: "Second",
+      body: "other body",
+      status: "finished",
+      pinned: true,
+    })
+    const attached = await service.create({
+      title: "Attached",
+      body: "attachment body",
+    })
+    const created = await service.createAttachment({
+      noteID: attached.id,
+      name: "note.txt",
+      mime: "text/plain",
+      data: btoa("text"),
+    })
+
+    const all = await service.list({ includeBodies: false })
+    expect(all.total).toBe(3)
+    expect(all.notes).toHaveLength(3)
+    expect(all.notes.every((note) => note.body === "")).toBe(true)
+    expect(
+      (await service.list()).notes.filter((note) => note.body !== "")
+    ).toHaveLength(3)
+
+    const finished = await service.list({
+      includeBodies: false,
+      status: "finished",
+    })
+    expect(finished.total).toBe(1)
+    expect(finished.notes[0]).toMatchObject({
+      id: second.id,
+      body: "",
+      status: "finished",
+      pinned: true,
+      revision: second.revision,
+    })
+
+    expect(
+      (await service.list({ includeBodies: false, spaceID: alpha.id })).notes.map(
+        (note) => note.id
+      )
+    ).toEqual([first.id])
+    expect(
+      (await service.list({ includeBodies: false, pinned: true })).notes.map(
+        (note) => note.id
+      )
+    ).toEqual([second.id])
+    expect(
+      (await service.list({ includeBodies: false, query: "NEEDLE" })).notes.map(
+        (note) => note.id
+      )
+    ).toEqual([first.id])
+
+    const projected = (
+      await service.list({ includeBodies: false, spaceID: null })
+    ).notes.find((note) => note.id === attached.id)
+    expect(projected?.body).toBe("")
+    expect(projected?.attachments).toEqual([created.attachment])
+    expect(projected?.revision).toBe(created.note.revision)
+  })
+
   test("sorts pinned spaces first and notes by pin then recency", async () => {
     const { service } = makeService()
     const zeta = await service.createSpace({ name: "Zeta", pinned: true })

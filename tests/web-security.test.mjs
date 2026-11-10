@@ -34,13 +34,15 @@ describe("Web gateway security", () => {
       method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}", ...init,
     })
     expect(evaluateWebRequest(request("/api/rpc/opencode-notes/list"), options).allowed).toBe(true)
+    expect(evaluateWebRequest(request("/api/rpc/opencode-notes/get"), options).allowed).toBe(true)
     for (const method of ["createAttachment", "readAttachment", "deleteAttachment"]) {
       expect(evaluateWebRequest(request(`/api/rpc/opencode-notes/${method}`), options).allowed).toBe(true)
     }
     expect(evaluateWebRequest(request("/api/rpc/opencode-notes/list"), { ...options, allowedApiPrefixes: [] }).allowed).toBe(false)
-    for (const path of ["/api/rpc/other/list", "/api/rpc/opencode-notes/other", "/api/rpc/opencode-notes/list/extra", "/api/rpc/opencode-notes/readAttachment/extra"]) {
+    for (const path of ["/api/rpc/other/list", "/api/rpc/opencode-notes/other", "/api/rpc/opencode-notes/list/extra", "/api/rpc/opencode-notes/readAttachment/extra", "/api/rpc/opencode-notes/get/extra", "/api/rpc/opencode-notes/get/", "/api/rpc/opencode-notes/get*", "/api/rpc/opencode-notes/Get"]) {
       expect(evaluateWebRequest(request(path), options).allowed).toBe(false)
     }
+    expect(evaluateWebRequest(request("/api/rpc/opencode-notes/get", { method: "GET", body: undefined }), options).status).toBe(405)
     expect(evaluateWebRequest(request("/api/rpc/opencode-notes/list", { method: "GET", body: undefined }), options).status).toBe(405)
     expect(evaluateWebRequest(request("/api/rpc/opencode-notes/readAttachment", { method: "GET", body: undefined }), options).status).toBe(405)
     expect(evaluateWebRequest(request("/api/rpc/opencode-notes/list", { headers: { host: "example.test", "content-type": "application/json" } }), options).status).toBe(403)

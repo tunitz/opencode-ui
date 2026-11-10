@@ -4,6 +4,7 @@ import { NOTES_RPC } from "../src/rpc.js"
 
 const METHOD_NAMES = [
   "list",
+  "get",
   "create",
   "update",
   "delete",
@@ -34,6 +35,20 @@ describe("notes RPC contract", () => {
     }
   })
 
+  test("declares closed single-note reads and optional body projection", () => {
+    const get = NOTES_RPC.methods.get
+    expect(get.input.required).toEqual(["noteID"])
+    expect(Object.keys(get.input.properties)).toEqual(["noteID"])
+    expect(get.output.required).toEqual(["note"])
+    expect(Object.keys(get.output.properties)).toEqual(["note"])
+    expect(get.errors.note_not_found.required).toEqual(["noteID"])
+
+    expect(NOTES_RPC.methods.list.input.properties.includeBodies).toEqual({
+      type: "boolean",
+    })
+    expect(Object.keys(NOTES_RPC.methods.list.input)).not.toContain("required")
+  })
+
   test("documents the note lifecycle and space kinds", () => {
     const create = NOTES_RPC.methods.create.input
     expect(create.properties.status.enum).toEqual([
@@ -48,6 +63,10 @@ describe("notes RPC contract", () => {
 
   test("declares expected errors", () => {
     expect(Object.keys(NOTES_RPC.methods.list.errors)).toEqual(["invalid"])
+    expect(Object.keys(NOTES_RPC.methods.get.errors).sort()).toEqual([
+      "invalid",
+      "note_not_found",
+    ])
     expect(Object.keys(NOTES_RPC.methods.spaces.errors)).toEqual(["invalid"])
     expect(Object.keys(NOTES_RPC.methods.create.errors).sort()).toEqual([
       "invalid",

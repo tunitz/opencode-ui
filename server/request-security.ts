@@ -59,6 +59,7 @@ const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 const NOTES_RPC_PATHS = new Set(
   [
     "list",
+    "get",
     "create",
     "update",
     "delete",

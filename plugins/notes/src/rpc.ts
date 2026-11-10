@@ -190,6 +190,7 @@ export const NOTES_RPC = {
           pinned: { type: "boolean" },
           query: { type: "string", maxLength: LIMITS.query },
           includeGlobal: { type: "boolean" },
+          includeBodies: { type: "boolean" },
           limit,
           offset,
         },
@@ -204,6 +205,21 @@ export const NOTES_RPC = {
         required: ["notes", "total"],
       },
       errors: { invalid },
+    },
+    get: {
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: { noteID: { type: "string" } },
+        required: ["noteID"],
+      },
+      output: {
+        type: "object",
+        additionalProperties: false,
+        properties: { note },
+        required: ["note"],
+      },
+      errors: { invalid, note_not_found: noteNotFound },
     },
     create: {
       input: {

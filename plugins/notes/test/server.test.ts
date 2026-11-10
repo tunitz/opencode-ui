@@ -108,6 +108,7 @@ describe("notes server adapter", () => {
     expect(state.namespace?.name).toBe("notes")
     expect(state.tools.map((tool) => tool.name)).toEqual([
       "notes_list",
+      "notes_get",
       "notes_create",
       "notes_update",
       "notes_delete",
@@ -213,6 +214,46 @@ describe("notes server adapter", () => {
       deleted: boolean
     }
     expect(deletedSpace.deleted).toBe(true)
+  })
+
+  test("reads one note and projects list bodies through RPC and tools", async () => {
+    const { ctx, state } = fakeContext()
+    await setupNotesServer(ctx)
+    const handlers = state.registered!.handlers
+
+    const created = (await handlers.create(
+      { title: "Note", body: "Body" },
+      call()
+    )) as { note: { id: string } }
+
+    const read = (await handlers.get(
+      { noteID: created.note.id },
+      call()
+    )) as { note: { id: string; body: string } }
+    expect(read.note).toMatchObject({ id: created.note.id, body: "Body" })
+
+    expect(await handlers.get({ noteID: "missing" }, call())).toMatchObject({
+      type: "note_not_found",
+      data: { noteID: "missing" },
+    })
+
+    const getTool = state.tools.find((tool) => tool.name === "notes_get")!
+    const getResult = JSON.parse(
+      (await getTool.execute({ noteID: created.note.id }, {})).content ?? "{}"
+    ) as { id: string; body: string }
+    expect(getResult).toMatchObject({ id: created.note.id, body: "Body" })
+
+    const listTool = state.tools.find((tool) => tool.name === "notes_list")!
+    const projected = JSON.parse(
+      (await listTool.execute({ includeBodies: false }, {})).content ?? "{}"
+    ) as { notes: Array<{ body: string }>; total: number }
+    expect(projected.total).toBe(1)
+    expect(projected.notes[0]?.body).toBe("")
+
+    const full = JSON.parse(
+      (await listTool.execute({}, {})).content ?? "{}"
+    ) as { notes: Array<{ body: string }> }
+    expect(full.notes[0]?.body).toBe("Body")
   })
 
   test("maps service errors to declared RPC errors and supports generated tools", async () => {

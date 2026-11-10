@@ -11,6 +11,7 @@ import {
 import { NotebookPenIcon, PinIcon } from "lucide-react"
 import {
   NotesPanel,
+  pinnedNoteInput,
   type NotesAdapter,
   type NotesAttachment,
   type NotesNote,
@@ -20,6 +21,16 @@ import { NoteStatusLabel } from "@/components/note-status-label"
 import { projectName } from "@/components/project-select"
 import { Accordion } from "@/components/ui/accordion"
 import { AccordionSection } from "@/components/ui/accordion-section"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { openCode } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -518,6 +529,35 @@ export function NotesProvider({
 
 export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const notes = useNotesWorkspace()
+  const sidebarRef = useRef<HTMLDivElement | null>(null)
+  const unpinReturnFocus = useRef<HTMLElement | null>(null)
+  const [unpinTarget, setUnpinTarget] = useState<NotesNote | null>(null)
+  const [unpinning, setUnpinning] = useState(false)
+  const [unpinError, setUnpinError] = useState<string | null>(null)
+
+  const confirmUnpin = useCallback(async () => {
+    const note = unpinTarget
+    if (!note || unpinning) return
+    setUnpinning(true)
+    setUnpinError(null)
+    try {
+      await notes.adapter.updateNote(
+        note.id,
+        pinnedNoteInput(note, false),
+        note.revision
+      )
+      setUnpinTarget(null)
+    } catch (error) {
+      setUnpinError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "The note could not be unpinned."
+      )
+    } finally {
+      setUnpinning(false)
+    }
+  }, [notes.adapter, unpinTarget, unpinning])
+
   if (!notes.available && !notes.hasWorkspace) return null
 
   function pinnedSpaceName(note: NotesNote): string {
@@ -529,90 +569,169 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   return (
-    <Accordion
-      multiple
-      defaultValue={[]}
-      aria-label="Notes"
-      className="mt-4"
-    >
-      <AccordionSection
-        value="notes"
-        title="Notes"
-        count={notes.available ? notes.pinnedTotal : undefined}
-        contentClassName="space-y-1"
+    <>
+      <div ref={sidebarRef}>
+        <Accordion
+          multiple
+          defaultValue={[]}
+          aria-label="Notes"
+          className="mt-4"
+        >
+          <AccordionSection
+            value="notes"
+            title="Notes"
+            count={notes.available ? notes.pinnedTotal : undefined}
+            contentClassName="space-y-1"
+          >
+            <Button
+              variant="ghost"
+              aria-label="All notes"
+              aria-current={
+                notes.open && !notes.selectedNoteID ? "page" : undefined
+              }
+              className="h-11 w-full justify-start gap-2"
+              onClick={() => {
+                if (notes.openNotes()) onNavigate?.()
+              }}
+            >
+              <NotebookPenIcon aria-hidden="true" /> All notes
+            </Button>
+            <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
+              Pinned notes
+            </div>
+            {!notes.available ? (
+              <p
+                role="status"
+                className="px-2.5 py-2 text-xs text-muted-foreground"
+              >
+                Pinned notes unavailable.
+              </p>
+            ) : notes.pinnedLoading ? (
+              <p
+                role="status"
+                className="px-2.5 py-2 text-xs text-muted-foreground"
+              >
+                Loading pinned notes…
+              </p>
+            ) : notes.pinnedError ? (
+              <p
+                role="status"
+                className="px-2.5 py-2 text-xs text-muted-foreground"
+              >
+                Pinned notes unavailable.
+              </p>
+            ) : notes.pinnedNotes.length === 0 ? (
+              <p className="px-2.5 py-2 text-xs text-muted-foreground">
+                No pinned notes yet.
+              </p>
+            ) : (
+              <ul
+                aria-label="Pinned notes"
+                className="mt-1 max-h-52 overflow-y-auto"
+              >
+                {notes.pinnedNotes.map((note) => (
+                  <li key={note.id}>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label={`Unpin “${note.title}”`}
+                        title={`Unpin “${note.title}”`}
+                        className="size-11 shrink-0 text-muted-foreground"
+                        onClick={(event) => {
+                          unpinReturnFocus.current = event.currentTarget
+                          setUnpinError(null)
+                          setUnpinTarget(note)
+                        }}
+                      >
+                        <PinIcon aria-hidden="true" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        aria-current={
+                          notes.open && notes.selectedNoteID === note.id
+                            ? "page"
+                            : undefined
+                        }
+                        className="h-auto min-h-11 min-w-0 flex-1 justify-start py-2"
+                        onClick={() => {
+                          if (notes.openNotes(note.id)) onNavigate?.()
+                        }}
+                      >
+                        <span className="grid min-w-0 flex-1 gap-0.5 text-start">
+                          <span className="min-w-0 truncate" dir="auto">
+                            {note.title}
+                          </span>
+                          <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs font-normal text-muted-foreground">
+                            <NoteStatusLabel status={note.status} />
+                            <span aria-hidden="true">·</span>
+                            <span className="min-w-0 truncate">
+                              {pinnedSpaceName(note)}
+                            </span>
+                          </span>
+                        </span>
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
+              <p className="px-2.5 py-1 text-xs text-muted-foreground">
+                Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open
+                all notes to see the rest.
+              </p>
+            )}
+          </AccordionSection>
+        </Accordion>
+      </div>
+      <AlertDialog
+        open={unpinTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !unpinning) {
+            setUnpinTarget(null)
+            setUnpinError(null)
+          }
+        }}
       >
-        <Button
-          variant="ghost"
-          aria-label="All notes"
-          aria-current={notes.open && !notes.selectedNoteID ? "page" : undefined}
-          className="h-11 w-full justify-start gap-2"
-          onClick={() => {
-            if (notes.openNotes()) onNavigate?.()
+        <AlertDialogContent
+          finalFocus={() => {
+            const trigger = unpinReturnFocus.current
+            if (trigger?.isConnected) return trigger
+            return (
+              sidebarRef.current?.querySelector<HTMLElement>(
+                '[data-slot="accordion-trigger"]'
+              ) ?? null
+            )
           }}
         >
-          <NotebookPenIcon aria-hidden="true" /> All notes
-        </Button>
-        <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
-          Pinned notes
-        </div>
-        {!notes.available ? (
-          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-            Pinned notes unavailable.
-          </p>
-        ) : notes.pinnedLoading ? (
-          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-            Loading pinned notes…
-          </p>
-        ) : notes.pinnedError ? (
-          <p role="status" className="px-2.5 py-2 text-xs text-muted-foreground">
-            Pinned notes unavailable.
-          </p>
-        ) : notes.pinnedNotes.length === 0 ? (
-          <p className="px-2.5 py-2 text-xs text-muted-foreground">
-            No pinned notes yet.
-          </p>
-        ) : (
-          <ul aria-label="Pinned notes" className="mt-1 max-h-52 overflow-y-auto">
-            {notes.pinnedNotes.map((note) => (
-              <li key={note.id}>
-                <Button
-                  variant="ghost"
-                  aria-current={
-                    notes.open && notes.selectedNoteID === note.id
-                      ? "page"
-                      : undefined
-                  }
-                  className="h-auto min-h-11 w-full justify-start gap-2 py-2"
-                  onClick={() => {
-                    if (notes.openNotes(note.id)) onNavigate?.()
-                  }}
-                >
-                  <PinIcon aria-hidden="true" className="shrink-0" />
-                  <span className="grid min-w-0 flex-1 gap-0.5 text-start">
-                    <span className="min-w-0 truncate" dir="auto">
-                      {note.title}
-                    </span>
-                    <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs font-normal text-muted-foreground">
-                      <NoteStatusLabel status={note.status} />
-                      <span aria-hidden="true">·</span>
-                      <span className="min-w-0 truncate">
-                        {pinnedSpaceName(note)}
-                      </span>
-                    </span>
-                  </span>
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
-          <p className="px-2.5 py-1 text-xs text-muted-foreground">
-            Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open all
-            notes to see the rest.
-          </p>
-        )}
-      </AccordionSection>
-    </Accordion>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unpin note?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`“${unpinTarget?.title ?? ""}” will be removed from pinned notes. The note itself is unchanged.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {unpinError && (
+            <p role="alert" className="text-sm text-destructive">
+              Could not unpin the note. {unpinError}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unpinning}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={unpinning}
+              onClick={(event) => {
+                event.preventDefault()
+                void confirmUnpin()
+              }}
+            >
+              {unpinning ? "Unpinning…" : "Unpin note"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 

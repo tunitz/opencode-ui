@@ -5,11 +5,13 @@ import {
   NOTE_ATTACHMENT_LIMITS,
   NotesPanel,
   insertNoteText,
+  isDirtyNoteDraft,
   mergeNoteDraft,
   mergeSpaceDraft,
   noteAttachmentError,
   noteAttachmentMarkdown,
   noteFileReference,
+  notePreviewText,
   pinnedNoteInput,
   removeNoteAttachmentReference,
 } from "../src/components/notes-panel"
@@ -182,6 +184,98 @@ test("new note opens the editor and a created note returns to its preview", asyn
     await act(async () => root.root.findByType("form").props.onSubmit({ preventDefault() {} }))
     expect(root.root.findAllByType("textarea")).toHaveLength(0)
     expect(JSON.stringify(root.toJSON())).toContain("Fresh idea")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("an untouched new note is pristine until something is entered", () => {
+  const pristine = {
+    original: null,
+    value: { title: "", content: "", status: "todo", pinned: false, spaceID: null },
+  }
+  expect(isDirtyNoteDraft(pristine)).toBe(false)
+  expect(isDirtyNoteDraft({ ...pristine, value: { ...pristine.value, title: "Idea" } })).toBe(true)
+  expect(isDirtyNoteDraft({ ...pristine, value: { ...pristine.value, content: "Body" } })).toBe(true)
+  expect(isDirtyNoteDraft({ ...pristine, value: { ...pristine.value, status: "finished" } })).toBe(true)
+  expect(isDirtyNoteDraft({ ...pristine, value: { ...pristine.value, pinned: true } })).toBe(true)
+  expect(isDirtyNoteDraft({ ...pristine, value: { ...pristine.value, spaceID: "s1" } })).toBe(true)
+  const existing = { original: note(), value: { title: "Original", content: "", status: "todo", pinned: false, spaceID: null } }
+  expect(isDirtyNoteDraft(existing)).toBe(false)
+  expect(isDirtyNoteDraft({ ...existing, value: { ...existing.value, content: "Edited" } })).toBe(true)
+})
+
+test("note previews are compact plain text without Markdown syntax", () => {
+  expect(notePreviewText("# Notes audit follow-up\n\n---\n\n**Bold** plan")).toBe("Notes audit follow-up Bold plan")
+  expect(notePreviewText("## Plan\n\n- First step\n- [x] Done step\n\n> quoted")).toBe("Plan First step Done step quoted")
+  expect(notePreviewText("**bold** and [a link](https://example.com) and `code`")).toBe("bold and a link and code")
+  expect(notePreviewText("![shot.png](attachment://a1) report")).toBe("shot.png report")
+  expect(notePreviewText("")).toBe("")
+  expect(notePreviewText("  \n\n  ")).toBe("")
+  expect(notePreviewText("use my_var and 2*3")).toBe("use my_var and 2*3")
+  expect(notePreviewText("_emphasis_ stays readable")).toBe("emphasis stays readable")
+  const long = "word ".repeat(60).trim()
+  const preview = notePreviewText(long)
+  expect(preview.endsWith("…")).toBe(true)
+  expect(preview.length).toBeLessThanOrEqual(160)
+  expect(preview).not.toContain("  ")
+  expect(preview).not.toMatch(/\s…$/)
+  expect(notePreviewText(long, 40).length).toBeLessThanOrEqual(40)
+})
+
+test("list rows show the plain-text preview instead of the note body", async () => {
+  const restore = environment()
+  let root
+  const content = "# Plan\n\n---\n\n**Ship** [it](https://example.com)\n\n" + "detail ".repeat(300) + "UNIQUETAIL"
+  const adapter = { list: async () => snapshot([note({ title: "Long plan", content })]) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Plan Ship it")
+    expect(text).not.toContain("**Ship**")
+    expect(text).not.toContain("---")
+    expect(text).not.toContain("UNIQUETAIL")
+    const preview = root.root.findAllByProps({ id: "note-preview-n1" })[0].children[0]
+    expect(preview.length).toBeLessThanOrEqual(160)
+    expect(preview).not.toContain("\n")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("the notes split layout follows its container, not the viewport", async () => {
+  const restore = environment()
+  let root
+  const adapter = { list: async () => snapshot([note()]) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("@container")
+    expect(text).toContain("@[40rem]:grid-cols-[minmax(17rem,0.85fr)_minmax(0,1.5fr)]")
+    expect(text).toContain("@[40rem]:border-s")
+    expect(text).toContain("flex-wrap")
+    expect(text).not.toContain("md:grid-cols")
+    expect(text).not.toContain("overflow-x-auto")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("a new note does not report unsaved changes before typing", async () => {
+  const restore = environment()
+  let root
+  const adapter = { list: async () => snapshot([]) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const newButton = root.root.findAllByType("button").find((button) => button.children.includes("New note"))
+    await act(async () => newButton.props.onClick())
+    expect(JSON.stringify(root.toJSON())).not.toContain("Unsaved changes")
+    const title = root.root.findAllByType("input").find((input) => input.props.required)
+    await act(async () => title.props.onChange({ target: { value: "Draft" }, currentTarget: { value: "Draft" } }))
+    expect(JSON.stringify(root.toJSON())).toContain("Unsaved changes")
   } finally {
     if (root) await act(async () => root.unmount())
     restore()

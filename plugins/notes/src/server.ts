@@ -10,6 +10,7 @@ import {
   type DeleteAttachmentInput,
   type DeleteNoteInput,
   type DeleteSpaceInput,
+  type GetNoteInput,
   type ListInput,
   type NotesStorage,
   type ReadAttachmentInput,
@@ -138,9 +139,16 @@ const TOOLS: readonly ToolDefinition[] = [
   {
     name: "notes_list",
     description:
-      "List notes. Filter by space, project, status, pinned state, or text. Notes in global spaces are included for a project unless includeGlobal is false.",
+      "List notes. Filter by space, project, status, pinned state, or text. Notes in global spaces are included for a project unless includeGlobal is false. Bodies are included by default; pass includeBodies false for cheap browsing with empty bodies, and use notes_get to read content.",
     input: NOTES_RPC.methods.list.input,
     run: (service, input) => service.list((input ?? {}) as ListInput),
+  },
+  {
+    name: "notes_get",
+    description:
+      "Read one full note: title, Markdown body, status, revision, and attachment metadata. Use this for content reads instead of notes_list.",
+    input: NOTES_RPC.methods.get.input,
+    run: (service, input) => service.get(input as GetNoteInput),
   },
   {
     name: "notes_create",
@@ -221,6 +229,13 @@ export async function setupNotesServer(
     list: async (input, call) => {
       try {
         return await service.list((input ?? {}) as ListInput)
+      } catch (error) {
+        return fail(call.error, error)
+      }
+    },
+    get: async (input, call) => {
+      try {
+        return { note: await service.get(input as GetNoteInput) }
       } catch (error) {
         return fail(call.error, error)
       }

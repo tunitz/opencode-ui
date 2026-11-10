@@ -49,7 +49,7 @@ Do not edit the live config unless the user explicitly asks for it.
 
 ## RPC contract
 
-ID: `opencode-notes`. Methods: `list`, `create`, `update`, `delete`, `createAttachment`,
+ID: `opencode-notes`. Methods: `list`, `get`, `create`, `update`, `delete`, `createAttachment`,
 `readAttachment`, `deleteAttachment`, `spaces`, `createSpace`, `updateSpace`, `deleteSpace`.
 Event: `changed`.
 
@@ -121,9 +121,14 @@ list(input?: {
   pinned?: boolean
   query?: string
   includeGlobal?: boolean   // default true when projectID is set
+  includeBodies?: boolean   // default true; false returns empty bodies
   limit?: number            // 1..1000, default 500
   offset?: number           // default 0
 }): { notes: Note[]; total: number }
+
+get(input: {
+  noteID: string
+}): { note: Note }
 
 create(input: {
   spaceID?: string | null   // omit or null for an unassigned note
@@ -198,6 +203,11 @@ deleteSpace(input: {
 }): { deleted: boolean; deletedNotes: number }
 ```
 
+`list` includes full bodies by default. With `includeBodies: false`, every returned note has an
+empty `body`; filtering, query matching, `total`, `limit`, and `offset` still use the stored
+bodies. Use `includeBodies: false` or `get` for cheap browsing. `get` returns the complete note
+including its Markdown body and attachment metadata.
+
 Notes may be unassigned (`spaceID: null`). Unassigned notes are returned without a `projectID`
 filter and by `spaceID: null`; they do not match a project view.
 
@@ -217,7 +227,7 @@ Errors:
 | `invalid`              | `{ field: string; message: string }`                            | Empty/oversized values, bad enum, bad limit/offset, bad expectedRevision, bad MIME or base64 |
 | `conflict`             | `{ entity; id; expectedRevision; revision }`                    | `expectedRevision` does not match the stored revision                    |
 | `space_not_found`      | `{ spaceID: string }`                                           | Creating a note in, moving to, or updating an unknown space              |
-| `note_not_found`       | `{ noteID: string }`                                            | Updating an unknown note, or an attachment method on an unknown note     |
+| `note_not_found`       | `{ noteID: string }`                                            | Reading an unknown note with `get`, updating an unknown note, or an attachment method on an unknown note |
 | `space_not_empty`      | `{ spaceID: string; noteCount: number }`                        | Deleting a non-empty space, with or without `cascade: true`              |
 | `attachment_not_found` | `{ noteID: string; attachmentID: string }`                      | The note exists but does not own that attachment, or its bytes are missing |
 | `attachment_limit`     | `{ noteID: string; attachmentCount: number; size: number; limit: number }` | Per-file, count, or total-size limit exceeded                  |
@@ -283,14 +293,17 @@ notes are never deleted by a space delete.
 
 Tools are registered in namespace `notes` with Code Mode enabled:
 
-`notes_list`, `notes_create`, `notes_update`, `notes_delete`, `notes_spaces`,
+`notes_list`, `notes_get`, `notes_create`, `notes_update`, `notes_delete`, `notes_spaces`,
 `notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_read`.
 
 Their inputs mirror the RPC methods, including optional `expectedRevision` on update and delete
 tools. Successful results are JSON text in the tool content, including `revision`. Service errors
 become thrown tool errors with a `type: message` prefix. Agents should call `notes_spaces` before
 creating a note when they do not know a space ID, and must delete notes individually before
-`notes_delete_space`.
+`notes_delete_space`. For browsing, pass `includeBodies: false` to `notes_list` and use `notes_get`
+only for notes whose content is needed.
+
+`notes_get` returns one full note: title, Markdown body, status, revision, and attachment metadata.
 
 `notes_attachment_read` returns decoded text only for text-like attachments: `text/*`,
 `application/json`, or `application/xml`, up to 64 KiB. Larger text returns metadata plus a

@@ -172,18 +172,64 @@ export type NotesPanelProps = {
 }
 
 type EditorView = "list" | "preview" | "edit"
-type NoteDraft = { original: NotesNote | null; value: NoteInput }
-function isDirtyNoteDraft(draft: NoteDraft): boolean {
+export type NoteDraft = { original: NotesNote | null; value: NoteInput }
+const emptyNoteDraft: NoteInput = {
+  title: "",
+  content: "",
+  status: "todo",
+  pinned: false,
+  spaceID: null,
+}
+export function isDirtyNoteDraft(draft: NoteDraft): boolean {
   const original = draft.original
   const value = draft.value
+  if (!original) {
+    // A freshly opened note is pristine until something is actually entered.
+    return (
+      value.title !== emptyNoteDraft.title ||
+      value.content !== emptyNoteDraft.content ||
+      value.status !== emptyNoteDraft.status ||
+      value.pinned !== emptyNoteDraft.pinned ||
+      value.spaceID !== emptyNoteDraft.spaceID
+    )
+  }
   return (
-    !original ||
     value.title !== original.title ||
     value.content !== original.content ||
     value.status !== original.status ||
     value.pinned !== original.pinned ||
     value.spaceID !== original.spaceID
   )
+}
+/**
+ * One compact, plain-text line for list rows: Markdown syntax is removed so a
+ * row never shows raw markers or ships the whole body to assistive technology.
+ */
+export function notePreviewText(content: string, maxLength = 160): string {
+  const compact = content
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, " ")
+    .replace(/^ {0,3}>[ \t]?/gm, "")
+    .replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/gm, "")
+    .replace(/^\[[ xX]\][ \t]+/gm, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
+    .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=$|[\s).,;:!?])/g, "$1$3")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (maxLength < 1) return ""
+  if (compact.length <= maxLength) return compact
+  const truncated = compact.slice(0, maxLength - 1)
+  const lastSpace = truncated.lastIndexOf(" ")
+  const cut =
+    lastSpace > (maxLength - 1) * 0.6
+      ? truncated.slice(0, lastSpace)
+      : truncated
+  return `${cut.trimEnd()}…`
 }
 // In-memory only: retain drafts if the workspace is temporarily unmounted.
 const workspaceDrafts = new WeakMap<NotesAdapter, Map<string, NoteDraft>>()
@@ -655,6 +701,10 @@ export function NotesPanel({
     })
     .slice()
     .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+  const noteRows = notes.map((note) => ({
+    note,
+    preview: notePreviewText(note.content),
+  }))
   const spaces = snapshot?.spaces ?? []
   const projects = snapshot?.projects ?? []
   const workspaceDirectory = snapshot?.workspaceDirectory ?? ""
@@ -969,9 +1019,12 @@ export function NotesPanel({
   const newActionsDisabled = busy || !snapshot
 
   return (
-    <section className={className} aria-label="Notes">
+    <section
+      className={`@container ${className ?? ""}`}
+      aria-label="Notes"
+    >
       <div
-        className={`flex items-center justify-between gap-3 border-b pb-4 ${view === "list" ? "" : "hidden md:flex"}`}
+        className={`flex items-center justify-between gap-3 border-b pb-4 ${view === "list" ? "" : "hidden @[40rem]:flex"}`}
       >
         <div>
           <h2 className="text-xl font-semibold tracking-tight">Notes</h2>
@@ -1024,10 +1077,10 @@ export function NotesPanel({
           Loading notes…
         </p>
       )}
-      <div className="grid min-w-0 gap-6 md:grid-cols-[minmax(16rem,0.85fr)_minmax(0,1.5fr)]">
+      <div className="grid min-w-0 gap-6 @[40rem]:grid-cols-[minmax(17rem,0.85fr)_minmax(0,1.5fr)]">
         {snapshot && (
           <div
-            className={`flex min-w-0 flex-col gap-6 py-4 ${view === "list" ? "" : "hidden md:flex"}`}
+            className={`flex min-w-0 flex-col gap-6 py-4 ${view === "list" ? "" : "hidden @[40rem]:flex"}`}
           >
             <div className="flex min-w-0 flex-col gap-3">
               <div className="relative">
@@ -1049,7 +1102,7 @@ export function NotesPanel({
               <div
                 role="group"
                 aria-label="Filter by status"
-                className="-mx-1 flex max-w-full gap-1 overflow-x-auto px-1"
+                className="-mx-1 flex max-w-full flex-wrap gap-1 px-1"
               >
                 {[
                   { value: "all", label: "All" },
@@ -1061,7 +1114,7 @@ export function NotesPanel({
                     key={option.value}
                     type="button"
                     variant={status === option.value ? "secondary" : "ghost"}
-                    className="h-11 rounded-full px-3"
+                    className="h-11 min-w-11 rounded-full px-2"
                     aria-pressed={status === option.value}
                     onClick={() => setStatus(option.value)}
                   >
@@ -1099,7 +1152,7 @@ export function NotesPanel({
                 </p>
               ) : (
                 <ul className="divide-y divide-border">
-                  {notes.map((note) => (
+                  {noteRows.map(({ note, preview }) => (
                     <li
                       key={note.id}
                       className="flex min-w-0 items-start gap-1 py-1"
@@ -1109,7 +1162,7 @@ export function NotesPanel({
                         className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-3 text-start whitespace-normal"
                         aria-label={`Open ${note.title || "untitled note"}`}
                         aria-describedby={
-                          note.content
+                          preview
                             ? `note-preview-${note.id} note-meta-${note.id}`
                             : `note-meta-${note.id}`
                         }
@@ -1126,13 +1179,13 @@ export function NotesPanel({
                               {note.title || "Untitled note"}
                             </span>
                           </span>
-                          {note.content && (
+                          {preview && (
                             <span
                               id={`note-preview-${note.id}`}
-                              className="line-clamp-2 w-full text-sm font-normal break-words whitespace-pre-wrap text-muted-foreground"
+                              className="line-clamp-2 w-full text-sm font-normal break-words text-muted-foreground"
                               dir="auto"
                             >
-                              {note.content}
+                              {preview}
                             </span>
                           )}
                           <span
@@ -1297,7 +1350,7 @@ export function NotesPanel({
           </div>
         )}
         <div
-          className={`min-w-0 py-4 md:border-s md:ps-6 ${view === "list" ? "hidden md:block" : ""}`}
+          className={`min-w-0 py-4 @[40rem]:border-s @[40rem]:ps-6 ${view === "list" ? "hidden @[40rem]:block" : ""}`}
         >
           {view === "preview" &&
             (previewNote ? (
@@ -1589,7 +1642,7 @@ export function NotesPanel({
                     id={noteContentID}
                     ref={noteComposerRef}
                     dir="auto"
-                    className="min-h-56 sm:min-h-64"
+                    className="min-h-56 max-h-[60svh] overflow-y-auto sm:min-h-64"
                     value={noteDraft.value.content}
                     onChange={(e) =>
                       setNoteDraft({
