@@ -207,14 +207,15 @@ test("an untouched new note is pristine until something is entered", () => {
 })
 
 test("note previews are compact plain text without Markdown syntax", () => {
-  expect(notePreviewText("# Notes audit follow-up\n\n---\n\n**Bold** plan")).toBe("Notes audit follow-up Bold plan")
-  expect(notePreviewText("## Plan\n\n- First step\n- [x] Done step\n\n> quoted")).toBe("Plan First step Done step quoted")
+  expect(notePreviewText("# Notes audit follow-up\n\n---\n\n**Bold** plan")).toBe("Notes audit follow-up — Bold plan")
+  expect(notePreviewText("## Plan\n\n- First step\n- [x] Done step\n\n> quoted")).toBe("Plan — First step Done step…")
   expect(notePreviewText("**bold** and [a link](https://example.com) and `code`")).toBe("bold and a link and code")
   expect(notePreviewText("![shot.png](attachment://a1) report")).toBe("shot.png report")
   expect(notePreviewText("")).toBe("")
   expect(notePreviewText("  \n\n  ")).toBe("")
   expect(notePreviewText("use my_var and 2*3")).toBe("use my_var and 2*3")
   expect(notePreviewText("_emphasis_ stays readable")).toBe("emphasis stays readable")
+  expect(notePreviewText("Body only")).toBe("Body only")
   const long = "word ".repeat(60).trim()
   const preview = notePreviewText(long)
   expect(preview.endsWith("…")).toBe(true)
@@ -222,6 +223,20 @@ test("note previews are compact plain text without Markdown syntax", () => {
   expect(preview).not.toContain("  ")
   expect(preview).not.toMatch(/\s…$/)
   expect(notePreviewText(long, 40).length).toBeLessThanOrEqual(40)
+})
+
+test("note previews skip a repeated title and summarize the first section", () => {
+  expect(notePreviewText(
+    "HealthVault enhancement — continuous execution\n\nStatus: implemented and verified",
+    160,
+    "HealthVault enhancement — continuous execution"
+  )).toBe("Status: implemented and verified")
+  expect(notePreviewText(
+    "Implementation prompt\n\nYou are implementing a single, continuous change in opencode-ui at the repository root.",
+    160,
+    "Inspector prompt"
+  )).toBe("Implementation prompt — You are implementing a single, continuous change in opencode-ui at the repository root.")
+  expect(notePreviewText("# Plan\n\n# Plan\n\nSecond", 160, "Plan")).toBe("Plan — Second")
 })
 
 test("list rows show the plain-text preview instead of the note body", async () => {
@@ -232,7 +247,7 @@ test("list rows show the plain-text preview instead of the note body", async () 
   try {
     await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
     const text = JSON.stringify(root.toJSON())
-    expect(text).toContain("Plan Ship it")
+    expect(text).toContain("Plan — Ship it")
     expect(text).not.toContain("**Ship**")
     expect(text).not.toContain("---")
     expect(text).not.toContain("UNIQUETAIL")

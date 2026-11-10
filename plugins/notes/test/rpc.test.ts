@@ -136,8 +136,8 @@ describe("notes RPC contract", () => {
       NOTES_RPC.methods.deleteSpace.input.properties.expectedRevision
     ).toEqual({ type: "integer", minimum: 0 })
     expect(
-      NOTES_RPC.methods.create.input.properties.expectedRevision
-    ).toBeUndefined()
+      "expectedRevision" in NOTES_RPC.methods.create.input.properties
+    ).toBe(false)
 
     const conflict = NOTES_RPC.methods.update.errors.conflict
     expect(conflict.required).toEqual([

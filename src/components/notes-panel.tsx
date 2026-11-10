@@ -204,31 +204,53 @@ export function isDirtyNoteDraft(draft: NoteDraft): boolean {
 /**
  * One compact, plain-text line for list rows: Markdown syntax is removed so a
  * row never shows raw markers or ships the whole body to assistive technology.
+ * The first block is the summary; a heading-like first block is paired with the
+ * next block, and a block that just repeats the note title is skipped.
  */
-export function notePreviewText(content: string, maxLength = 160): string {
-  const compact = content
-    .replace(/```[^\n]*\n?/g, "")
-    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
-    .replace(/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, " ")
-    .replace(/^ {0,3}>[ \t]?/gm, "")
-    .replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/gm, "")
-    .replace(/^\[[ xX]\][ \t]+/gm, "")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
-    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
-    .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=$|[\s).,;:!?])/g, "$1$3")
-    .replace(/\s+/g, " ")
-    .trim()
+export function notePreviewText(
+  content: string,
+  maxLength = 160,
+  title = ""
+): string {
   if (maxLength < 1) return ""
-  if (compact.length <= maxLength) return compact
-  const truncated = compact.slice(0, maxLength - 1)
+  const blocks = content
+    .split(/\n\s*\n/)
+    .map((block) =>
+      block
+        .replace(/```[^\n]*\n?/g, "")
+        .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+        .replace(/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, " ")
+        .replace(/^ {0,3}>[ \t]?/gm, "")
+        .replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/gm, "")
+        .replace(/^\[[ xX]\][ \t]+/gm, "")
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/`([^`]*)`/g, "$1")
+        .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, "$2")
+        .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
+        .replace(/(^|[\s(])([*_])(?=\S)([^*_\n]*?\S)\2(?=$|[\s).,;:!?])/g, "$1$3")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(Boolean)
+  const key = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+  if (title && blocks.length && key(blocks[0]) === key(title)) blocks.shift()
+  let text = blocks.shift() ?? ""
+  if (text.length > 0 && text.length < 40) {
+    const next = blocks.shift()
+    if (next) text = `${text} — ${next}`
+  }
+  const remaining = blocks.length > 0
+  if (text.length <= maxLength && !remaining) return text
+  const limit = Math.max(1, maxLength - 1)
+  const truncated = text.slice(0, limit)
   const lastSpace = truncated.lastIndexOf(" ")
   const cut =
-    lastSpace > (maxLength - 1) * 0.6
-      ? truncated.slice(0, lastSpace)
-      : truncated
+    lastSpace > limit * 0.6 ? truncated.slice(0, lastSpace) : truncated
   return `${cut.trimEnd()}…`
 }
 // In-memory only: retain drafts if the workspace is temporarily unmounted.
@@ -703,7 +725,7 @@ export function NotesPanel({
     .sort((a, b) => Number(b.pinned) - Number(a.pinned))
   const noteRows = notes.map((note) => ({
     note,
-    preview: notePreviewText(note.content),
+    preview: notePreviewText(note.content, 160, note.title),
   }))
   const spaces = snapshot?.spaces ?? []
   const projects = snapshot?.projects ?? []

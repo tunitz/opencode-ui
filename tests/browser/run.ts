@@ -37,6 +37,59 @@ const requests: ApiRequest[] = []
 const notFound: string[] = []
 const results: Result[] = []
 
+const syntheticNotes = [
+  {
+    id: "note-plan",
+    spaceID: "space-work",
+    title: "Release plan",
+    body: `# Release plan
+
+Ship the notes workspace with a container-aware layout, verified previews, and safe attachments.
+
+## Steps
+
+- Land the layout fix
+- Verify on every viewport
+- Deploy
+
+${"Detail line. ".repeat(80)}`,
+    status: "in-progress" as const,
+    pinned: true,
+    attachments: [],
+    revision: 2,
+    createdAt: 1,
+    updatedAt: 2,
+  },
+  {
+    id: "note-bugs",
+    spaceID: "space-work",
+    title: "Bugs",
+    body: "Clicking the chevron twice should not be needed.\n\n**Fixed** in the row controls.",
+    status: "todo" as const,
+    pinned: false,
+    attachments: [],
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    id: "note-shipped",
+    spaceID: null,
+    title: "Shipped",
+    body: "# Shipped\n\nEverything verified end to end.",
+    status: "finished" as const,
+    pinned: false,
+    attachments: [],
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  },
+]
+
+const syntheticSpaces = [
+  { id: "space-work", name: "Work", kind: "planning", project: null, pinned: false, revision: 1, createdAt: 1, updatedAt: 1 },
+]
+
 const syntheticDiff = {
   data: [
     {
@@ -80,7 +133,58 @@ const server = Bun.serve({
     const url = new URL(request.url)
     const pathname = decodeURIComponent(url.pathname)
     if (pathname === "/api/plugin") {
+      if (url.search.includes("synthetic%2Fnotes") || url.search.includes("synthetic/notes"))
+        return json({
+          location: { directory: "/synthetic/notes" },
+          data: [
+            {
+              id: "opencode-notes",
+              source: { type: "local", path: "/synthetic/plugin" },
+              features: { server: true, rpc: true },
+              state: { status: "active" },
+            },
+          ],
+        })
       return json({ location: { directory: "/synthetic/alpha" }, data: [] })
+    }
+    if (pathname === "/api/rpc/opencode-notes/list") {
+      const body = await request.json().catch(() => ({}))
+      const input = (body as { input?: Record<string, unknown> }).input ?? {}
+      const pinned = input.pinned === true
+      const status = typeof input.status === "string" ? input.status : null
+      const filtered = syntheticNotes.filter(
+        (note) => (!pinned || note.pinned) && (!status || note.status === status)
+      )
+      const offset = typeof input.offset === "number" ? input.offset : 0
+      const limit = typeof input.limit === "number" ? input.limit : 500
+      const page = filtered.slice(offset, offset + limit)
+      return json({
+        output: {
+          notes:
+            input.includeBodies === false
+              ? page.map((note) => ({ ...note, body: "" }))
+              : page,
+          total: filtered.length,
+        },
+      })
+    }
+    if (pathname === "/api/rpc/opencode-notes/spaces") {
+      return json({ output: { spaces: syntheticSpaces, total: syntheticSpaces.length } })
+    }
+    if (pathname === "/api/rpc/opencode-notes/update") {
+      const body = await request.json().catch(() => ({}))
+      const input = (body as { input?: Record<string, unknown> }).input ?? {}
+      const existing = syntheticNotes.find((note) => note.id === input.noteID)
+      return json({
+        output: {
+          note: {
+            ...(existing ?? syntheticNotes[0]),
+            ...input,
+            revision: (existing?.revision ?? 1) + 1,
+            updatedAt: (existing?.updatedAt ?? 1) + 1,
+          },
+        },
+      })
     }
     if (pathname === "/api/worktree") {
       requests.push({
@@ -1870,6 +1974,169 @@ if (browser) {
       check("desktop does not introduce the mobile sheet action", await content.getByRole("button", { name: /View full error/ }).count() === 0)
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
     } finally { await opened.context.close() }
+  })
+
+  await run("notes workspace keeps one readable pane in a narrow container", async ({ check }) => {
+    const opened = await openPage({ width: 1024, height: 800 }, "notes")
+    const page = opened.page
+    try {
+      const region = page.getByRole("region", { name: "Notes", exact: true })
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      check("narrow container starts on the list", (await region.getByRole("article").count()) === 0)
+
+      await page.getByRole("button", { name: "Open Release plan" }).click()
+      const article = region.getByRole("article", { name: "Note Release plan" })
+      await article.waitFor({ state: "visible" })
+      const articleBox = await article.boundingBox()
+      check(
+        "detail pane fills the narrow container instead of collapsing",
+        (articleBox?.width ?? 0) >= 300,
+        `width=${articleBox?.width}`
+      )
+      check(
+        "list pane is hidden while the detail is open",
+        (await region.getByRole("button", { name: "Open Bugs" }).count()) === 0
+      )
+      await page.getByRole("button", { name: "Back to Notes" }).click()
+      await page.getByRole("button", { name: "Open Bugs" }).waitFor({ state: "visible" })
+
+      const chips = await page.evaluate(() => {
+        const group = document.querySelector<HTMLElement>(
+          '[role="group"][aria-label="Filter by status"]'
+        )
+        if (!group) return null
+        const rect = group.getBoundingClientRect()
+        return {
+          left: rect.left,
+          right: rect.right,
+          buttons: [...group.querySelectorAll("button")].map((button) => {
+            const box = button.getBoundingClientRect()
+            return {
+              label: button.textContent,
+              left: box.left,
+              right: box.right,
+              height: box.height,
+            }
+          }),
+        }
+      })
+      check("all four status filters render", chips?.buttons.length === 4, JSON.stringify(chips))
+      check(
+        "no status filter is clipped by the column",
+        Boolean(
+          chips &&
+            chips.buttons.every(
+              (button) => button.right <= chips.right + 1 && button.left >= chips.left - 1
+            )
+        ),
+        JSON.stringify(chips)
+      )
+      check(
+        "status filters keep 44px targets",
+        Boolean(chips && chips.buttons.every((button) => button.height >= 44))
+      )
+
+      const preview = await page.locator("#note-preview-note-plan").textContent()
+      check(
+        "row preview is bounded plain text without Markdown markers",
+        Boolean(
+          preview &&
+            preview.length <= 160 &&
+            !preview.includes("#") &&
+            !preview.includes("**") &&
+            !preview.includes("\n")
+        ),
+        preview ?? "missing"
+      )
+      check(
+        "row preview names the summary, not the whole body",
+        Boolean(preview?.startsWith("Ship the notes workspace")),
+        preview ?? "missing"
+      )
+
+      await page.getByRole("button", { name: /^Notes\s*\d/ }).click()
+      const unpin = page.getByRole("button", { name: "Unpin “Release plan”" })
+      await unpin.click()
+      const dialog = page.getByRole("alertdialog")
+      await dialog.waitFor({ state: "visible" })
+      check(
+        "unpin asks for confirmation and names the note",
+        Boolean((await dialog.textContent())?.includes("Release plan"))
+      )
+      await dialog.getByRole("button", { name: "Cancel" }).click()
+      await dialog.waitFor({ state: "detached" })
+      check(
+        "cancelling returns focus to the pin control",
+        await unpin.evaluate((element) => document.activeElement === element)
+      )
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("notes workspace keeps list and detail readable in a wide container", async ({ check }) => {
+    const opened = await openPage({ width: 1440, height: 900 }, "notes-wide")
+    const page = opened.page
+    try {
+      const region = page.getByRole("region", { name: "Notes", exact: true })
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      await page.getByRole("button", { name: "Open Release plan" }).click()
+      const article = region.getByRole("article", { name: "Note Release plan" })
+      await article.waitFor({ state: "visible" })
+      const articleBox = await article.boundingBox()
+      check(
+        "detail pane stays readable beside the list",
+        (articleBox?.width ?? 0) >= 300,
+        `width=${articleBox?.width}`
+      )
+      check(
+        "list remains visible beside the detail",
+        await region.getByRole("button", { name: "Open Bugs" }).isVisible()
+      )
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("notes workspace fits a mobile viewport without horizontal overflow", async ({ check }) => {
+    const opened = await openPage({ width: 390, height: 844 }, "notes")
+    const page = opened.page
+    try {
+      const region = page.getByRole("region", { name: "Notes", exact: true })
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      const overflow = await page.evaluate(() => {
+        const section = document.querySelector<HTMLElement>('section[aria-label="Notes"]')
+        return {
+          document: document.documentElement.scrollWidth - window.innerWidth,
+          section: section ? section.scrollWidth - section.clientWidth : 1,
+        }
+      })
+      check("notes list introduces no horizontal overflow", overflow.document <= 1 && overflow.section <= 1, JSON.stringify(overflow))
+      const listBox = await region.getByRole("button", { name: "Open Release plan" }).boundingBox()
+      check(
+        "list rows stay inside the viewport",
+        Boolean(listBox && listBox.x >= 0 && listBox.x + listBox.width <= 390),
+        JSON.stringify(listBox)
+      )
+
+      await page.getByRole("button", { name: "Open Release plan" }).click()
+      const article = region.getByRole("article", { name: "Note Release plan" })
+      await article.waitFor({ state: "visible" })
+      const articleBox = await article.boundingBox()
+      check(
+        "mobile detail fills the viewport width",
+        Boolean(articleBox && articleBox.width >= 300 && articleBox.x >= 0 && articleBox.x + articleBox.width <= 390),
+        JSON.stringify(articleBox)
+      )
+      await page.getByRole("button", { name: "Back to Notes" }).click()
+      await page.getByRole("button", { name: "Open Bugs" }).waitFor({ state: "visible" })
+      check("Back to Notes returns to the list", true)
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
   })
 }
 

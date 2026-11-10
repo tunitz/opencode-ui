@@ -16,7 +16,7 @@ import { Composer } from "@/components/composer"
 import { Conversation } from "@/components/conversation"
 import { ChangesPanel } from "@/components/files-panel"
 import { ModelSettingsDrawer } from "@/components/model-settings"
-import { NotesProvider } from "@/components/notes-sidebar"
+import { NotesProvider, NotesSidebar, NotesWorkspace } from "@/components/notes-sidebar"
 import { SessionInspector, SessionInspectorPanel } from "@/components/session-inspector"
 import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -585,9 +585,40 @@ function InspectorFixture() {
   )
 }
 
+function NotesFixture({ wide = false }: { wide?: boolean }) {
+  const nav = {
+    directory: "/synthetic/notes",
+    activeSession: null,
+    connection: "connected",
+    streamStatus: "ready",
+    projects: [],
+  } as unknown as OpenCodeController
+  return (
+    <Providers nav={nav}>
+      <div className="flex h-svh min-h-0">
+        <div className="hidden w-[350px] shrink-0 overflow-y-auto border-e px-3 md:block">
+          <NotesSidebar />
+        </div>
+        <div
+          className={`${wide ? "w-[680px]" : "w-full md:w-[360px]"} min-w-0 shrink-0 overflow-y-auto px-4 py-2`}
+        >
+          <NotesWorkspace />
+        </div>
+        <div className="hidden min-w-0 flex-1 px-4 py-2 text-xs text-muted-foreground md:block">
+          Synthetic notes host. No engine is contacted.
+        </div>
+      </div>
+    </Providers>
+  )
+}
+
 function Fixture() {
   const fixture = new URLSearchParams(window.location.search).get("fixture")
   switch (fixture) {
+    case "notes":
+      return <NotesFixture />
+    case "notes-wide":
+      return <NotesFixture wide />
     case "command":
       return <CommandFixture />
     case "composer":

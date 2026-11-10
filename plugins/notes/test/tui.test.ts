@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Context } from "@opencode/plugin/tui"
+import type { Plugin } from "@opencode/plugin/tui"
 import { setupNotesTui } from "../src/tui.js"
 import type { Note, ProjectLink, Space } from "../src/types.js"
 
@@ -177,7 +177,7 @@ function fakeContext(options: FakeOptions = {}) {
     },
   }
   return {
-    ctx: ctx as unknown as Context,
+    ctx: ctx as unknown as Plugin.Context,
     calls,
     toasts,
     alerts,

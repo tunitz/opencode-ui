@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Context } from "@opencode/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { setupNotesServer } from "../src/server.js"
 import { NOTES_RPC } from "../src/rpc.js"
 import {
@@ -83,7 +83,7 @@ function fakeContext() {
       },
     },
   }
-  return { ctx: ctx as unknown as Context, storage, events, state }
+  return { ctx: ctx as unknown as Plugin.Context, storage, events, state }
 }
 
 function call() {

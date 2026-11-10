@@ -12,7 +12,7 @@
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": []
+    "types": ["bun"]
   },
   "include": ["*.ts", "src/**/*.ts", "test/**/*.ts"]
 }
