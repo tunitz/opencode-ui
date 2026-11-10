@@ -4,8 +4,6 @@ import {
   ChevronRightIcon,
   ListTreeIcon,
   LoaderCircleIcon,
-  SettingsIcon,
-  FolderGit2Icon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   RefreshCwIcon,
@@ -571,15 +569,7 @@ export function SessionInspector({
   )
 }
 
-function InspectorRail({
-  nav,
-  onOpenSettings,
-  onOpenWorktrees,
-}: {
-  nav: OpenCodeController
-  onOpenSettings: () => void
-  onOpenWorktrees: () => void
-}) {
+function InspectorRail({ nav }: { nav: OpenCodeController }) {
   return (
     <aside
       data-desktop-sidebar="inspector"
@@ -641,28 +631,6 @@ function InspectorRail({
           )
         })}
       </div>
-      <div className="mt-auto flex flex-col gap-1 p-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-lg"
-          aria-label="Inspector settings"
-          className="size-11 rounded-lg text-muted-foreground"
-          onClick={onOpenSettings}
-        >
-          <SettingsIcon aria-hidden="true" className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-lg"
-          aria-label="Project worktrees"
-          className="size-11 rounded-lg text-muted-foreground"
-          onClick={onOpenWorktrees}
-        >
-          <FolderGit2Icon aria-hidden="true" className="size-4" />
-        </Button>
-      </div>
     </aside>
   )
 }
@@ -686,13 +654,7 @@ export function SessionInspectorPanel({
   if (!isDesktop || !nav.activeSession) return null
 
   if (!nav.inspectorOpen) {
-    return (
-      <InspectorRail
-        nav={nav}
-        onOpenSettings={onOpenSettings}
-        onOpenWorktrees={onOpenWorktrees}
-      />
-    )
+    return <InspectorRail nav={nav} />
   }
 
   return (
