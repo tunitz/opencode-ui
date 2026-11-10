@@ -290,15 +290,14 @@ function SessionRow({
   }
 
   return (
-    <div className="relative flex items-stretch">
+    <div className="flex items-stretch gap-0.5">
       <Button
         variant="ghost"
         aria-current={active ? "page" : undefined}
         title={session.id}
         onClick={() => onSelect(session.id)}
         className={cn(
-          "session-nav-item h-auto min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-lg py-1.5 ps-2.5 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          expandControl ? "pe-24" : "pe-12",
+          "session-nav-item h-auto min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-lg py-1.5 ps-2.5 pe-2 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           active &&
             "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
         )}
@@ -350,7 +349,7 @@ function SessionRow({
               variant="ghost"
               size="icon-lg"
               aria-label={`Session actions: ${title}`}
-              className="absolute top-1/2 end-1 size-11 -translate-y-1/2 rounded-lg text-muted-foreground"
+              className="size-11 shrink-0 self-center rounded-lg text-muted-foreground"
             />
           }
         >
@@ -600,7 +599,7 @@ function SessionTreeNode({
                 descendants === 1 ? "session" : "sessions"
               } for ${title}`}
               onClick={() => onToggle(session.id)}
-              className="absolute top-1/2 end-12 size-11 -translate-y-1/2 rounded-lg text-muted-foreground"
+              className="size-11 shrink-0 self-center rounded-lg text-muted-foreground"
             >
               <ChevronRightIcon
                 aria-hidden="true"
@@ -796,12 +795,20 @@ function SessionList({
     currentDayStart,
     currentDayStart
   )
+  const sortedSessions = useMemo(
+    () => [...nav.sessions].sort((a, b) => b.time.updated - a.time.updated),
+    [nav.sessions]
+  )
   const treeRows = useMemo(
+    () => sessionTreeRows(sortedSessions),
+    [sortedSessions]
+  )
+  const pinnedRows = useMemo(
     () =>
       sessionTreeRows(
-        [...nav.sessions].sort((a, b) => b.time.updated - a.time.updated)
+        sortedSessions.filter((session) => shortcuts[session.id]?.pinned)
       ),
-    [nav.sessions]
+    [sortedSessions, shortcuts]
   )
   const groups = useMemo(
     () => groupSessionTreeRows(treeRows, dayStart),
@@ -955,6 +962,31 @@ function SessionList({
                     No sessions match “{searchQuery}”.
                   </p>
                 )}
+              </AccordionSection>
+            </Accordion>
+          ) : null}
+          {!searching && pinnedRows.length > 0 ? (
+            <Accordion className="space-y-2 py-1">
+              <AccordionSection
+                value="pinned"
+                title="Pinned sessions"
+                count={pinnedRows.length}
+                contentClassName="p-1"
+              >
+                <SessionTree
+                  rows={pinnedRows}
+                  activeSessionID={notes.open ? null : nav.activeSessionID}
+                  runningSessionIDs={nav.runningSessionIDs}
+                  unreadSessionIDs={nav.unreadSessionIDs}
+                  projects={nav.projects}
+                  expandedIDs={expandedIDs}
+                  onToggle={toggleSessionTree}
+                  onSelect={handleSelect}
+                  onRename={nav.renameSession}
+                  onDelete={nav.deleteSession}
+                  shortcuts={shortcuts}
+                  onShortcut={updateShortcut}
+                />
               </AccordionSection>
             </Accordion>
           ) : null}

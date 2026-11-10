@@ -404,6 +404,17 @@ if (browser) {
         name: "Show 1 loaded subagent session for Alpha",
       })
       check("subagent expand control is visible", await expand.isVisible())
+      check(
+        "subagent expand control owns its hit target",
+        await expand.evaluate((node) => {
+          const rect = node.getBoundingClientRect()
+          const hit = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2
+          )
+          return Boolean(hit && (hit === node || node.contains(hit)))
+        })
+      )
       await expand.click()
       check(
         "subagent row is shown after expansion",
@@ -434,6 +445,10 @@ if (browser) {
       )
       await page.locator('button[title="s-alpha"]').click()
       await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
+      check(
+        "pinned group is hidden when no session is pinned",
+        (await page.getByRole("button", { name: /^Pinned sessions/ }).count()) === 0
+      )
 
       await page.getByRole("button", { name: "Session actions: Alpha" }).click()
       await page.getByRole("menuitem", { name: "Pin session" }).click()
@@ -467,6 +482,19 @@ if (browser) {
         JSON.stringify(labelRecord)
       )
 
+      const pinnedGroup = page.getByRole("button", { name: /^Pinned sessions/ })
+      check(
+        "pinned group appears once a session is pinned",
+        await pinnedGroup.isVisible()
+      )
+      await pinnedGroup.click()
+      check(
+        "pinned sessions still show in their date group",
+        (await page.locator('button[title="s-alpha"]').count()) === 2,
+        `rows=${await page.locator('button[title="s-alpha"]').count()}`
+      )
+      await pinnedGroup.click()
+
       const yesterday = page.getByRole("button", { name: "Yesterday" })
       await yesterday.waitFor({ state: "visible" })
       await yesterday.click()
@@ -495,6 +523,14 @@ if (browser) {
       check(
         "expanding the desktop sidebar restores the session list",
         await page.locator('button[title="s-alpha"]').isVisible()
+      )
+
+      await page.getByRole("button", { name: /^Pinned sessions/ }).click()
+      await page.getByRole("button", { name: "Session actions: Alpha" }).first().click()
+      await page.getByRole("menuitem", { name: "Unpin session" }).click()
+      check(
+        "pinned group disappears when the last pinned session is unpinned",
+        (await page.getByRole("button", { name: /^Pinned sessions/ }).count()) === 0
       )
 
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
