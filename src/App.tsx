@@ -160,6 +160,10 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
               <QueueStrip nav={nav} />
               <Composer
                 nav={nav}
+                notes={{
+                  available: notes.available,
+                  load: notes.adapter.list,
+                }}
                 modelSettingsOpen={modelSettingsOpen}
                 onModelSettingsOpenChange={setModelSettingsOpen}
                 onOpenSettings={() => setSettingsOpen(true)}

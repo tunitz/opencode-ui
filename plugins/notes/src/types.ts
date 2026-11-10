@@ -4,6 +4,7 @@ export const TUI_PLUGIN_ID = "opencode-notes.tui"
 export const STORAGE_PREFIX = "opencode-notes/v1/"
 export const NOTE_PREFIX = `${STORAGE_PREFIX}note/`
 export const SPACE_PREFIX = `${STORAGE_PREFIX}space/`
+export const ATTACHMENT_PREFIX = `${STORAGE_PREFIX}attachment/`
 
 export const NOTE_STATUSES = ["todo", "in-progress", "finished"] as const
 export const SPACE_KINDS = ["global", "planning"] as const
@@ -16,6 +17,11 @@ export const LIMITS = {
   projectID: 200,
   path: 4_096,
   list: 1_000,
+  attachmentName: 255,
+  attachmentMime: 200,
+  attachmentFileSize: 4 * 1024 * 1024,
+  attachmentCount: 4,
+  attachmentTotalSize: 8 * 1024 * 1024,
 } as const
 
 export const DEFAULT_LIST_LIMIT = 500
@@ -56,10 +62,20 @@ export interface Note {
   readonly body: string
   readonly status: NoteStatus
   readonly pinned: boolean
+  /** Attachment metadata only. Bytes are stored separately and never listed. */
+  readonly attachments: readonly NoteAttachment[]
   /** Per-item optimistic revision. Starts at 1 for new records; legacy records decode at 0. */
   readonly revision: number
   readonly createdAt: number
   readonly updatedAt: number
+}
+
+export interface NoteAttachment {
+  readonly id: string
+  readonly name: string
+  readonly mime: string
+  readonly size: number
+  readonly createdAt: number
 }
 
 export interface ListInput {
@@ -109,6 +125,38 @@ export interface DeleteNoteInput {
 
 export interface DeleteNoteOutput {
   readonly deleted: boolean
+}
+
+export interface CreateAttachmentInput {
+  readonly noteID: string
+  readonly name: string
+  readonly mime: string
+  /** Base64-encoded bytes. The service enforces decoded size limits. */
+  readonly data: string
+  /** Reject the write if the stored note revision differs. Omit for unconditional writes. */
+  readonly expectedRevision?: number
+}
+
+export interface ReadAttachmentInput {
+  readonly noteID: string
+  readonly attachmentID: string
+}
+
+export interface ReadAttachmentOutput {
+  readonly attachment: NoteAttachment
+  /** Base64-encoded bytes. Only returned by the explicit read method. */
+  readonly data: string
+}
+
+export interface DeleteAttachmentInput {
+  readonly noteID: string
+  readonly attachmentID: string
+  /** Reject the delete if the stored note revision differs. Omit for unconditional writes. */
+  readonly expectedRevision?: number
+}
+
+export interface DeleteAttachmentOutput {
+  readonly note: Note
 }
 
 export interface SpacesInput {
@@ -174,6 +222,8 @@ export type NotesErrorType =
   | "note_not_found"
   | "space_not_found"
   | "space_not_empty"
+  | "attachment_not_found"
+  | "attachment_limit"
 
 export interface NotesErrorData {
   readonly field?: string
@@ -185,6 +235,10 @@ export interface NotesErrorData {
   readonly id?: string
   readonly expectedRevision?: number
   readonly revision?: number
+  readonly attachmentID?: string
+  readonly attachmentCount?: number
+  readonly size?: number
+  readonly limit?: number
 }
 
 export class NotesError extends Error {

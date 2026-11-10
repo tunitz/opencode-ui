@@ -2,8 +2,20 @@ import { describe, expect, test } from "bun:test"
 import type { Context } from "@opencode/plugin"
 import { setupNotesServer } from "../src/server.js"
 import { NOTES_RPC } from "../src/rpc.js"
-import { NOTE_PREFIX, SPACE_PREFIX } from "../src/types.js"
+import {
+  ATTACHMENT_PREFIX,
+  NOTE_PREFIX,
+  SPACE_PREFIX,
+} from "../src/types.js"
 import { MemoryStorage } from "./helpers.js"
+
+/** Build a valid base64 string whose decoded length is exactly `size` bytes. */
+function base64OfSize(size: number): string {
+  if (size <= 0) return ""
+  const padding = (3 - (size % 3)) % 3
+  const length = Math.ceil(size / 3) * 4
+  return "A".repeat(length - padding) + "=".repeat(padding)
+}
 
 interface Handler {
   (
@@ -103,6 +115,7 @@ describe("notes server adapter", () => {
       "notes_create_space",
       "notes_update_space",
       "notes_delete_space",
+      "notes_attachment_read",
     ])
     await cleanup()
   })
@@ -302,4 +315,157 @@ describe("notes server adapter", () => {
       createNote.execute({ spaceID: "missing", title: "Nope" }, {})
     ).rejects.toThrow("space_not_found")
   })
+
+  test("serves attachment RPC and text-only agent reads", async () => {
+    const { ctx, storage, state } = fakeContext()
+    await setupNotesServer(ctx)
+    const handlers = state.registered!.handlers
+
+    const note = (await handlers.create({ title: "Note" }, call())) as {
+      note: { id: string; revision: number }
+    }
+    const text = btoa("hello attachment")
+    const created = (await handlers.createAttachment(
+      {
+        noteID: note.note.id,
+        name: "hello.txt",
+        mime: "text/plain",
+        data: text,
+      },
+      call()
+    )) as {
+      note: { revision: number; attachments: unknown[] }
+      attachment: { id: string; name: string; mime: string; size: number }
+    }
+    expect(created.attachment).toMatchObject({
+      name: "hello.txt",
+      mime: "text/plain",
+      size: 16,
+    })
+    expect(created.note.attachments).toHaveLength(1)
+    expect(
+      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
+    ).toBe(true)
+
+    const read = (await handlers.readAttachment(
+      { noteID: note.note.id, attachmentID: created.attachment.id },
+      call()
+    )) as { attachment: unknown; data: string }
+    expect(read).toEqual({ attachment: created.attachment, data: text })
+
+    const readTool = state.tools.find(
+      (tool) => tool.name === "notes_attachment_read"
+    )!
+    const textResult = JSON.parse(
+      (
+        await readTool.execute(
+          { noteID: note.note.id, attachmentID: created.attachment.id },
+          {}
+        )
+      ).content ?? "{}"
+    ) as { readable: boolean; text: string }
+    expect(textResult).toMatchObject({ readable: true, text: "hello attachment" })
+
+    const imageData = base64OfSize(4)
+    const image = (await handlers.createAttachment(
+      {
+        noteID: note.note.id,
+        name: "pixel.png",
+        mime: "image/png",
+        data: imageData,
+      },
+      call()
+    )) as { attachment: { id: string } }
+    const imageResult = JSON.parse(
+      (
+        await readTool.execute(
+          { noteID: note.note.id, attachmentID: image.attachment.id },
+          {}
+        )
+      ).content ?? "{}"
+    ) as { readable: boolean; reason: string }
+    expect(imageResult.readable).toBe(false)
+    expect(imageResult.reason).toContain("binary")
+    expect(JSON.stringify(imageResult)).not.toContain(imageData)
+
+    const pdf = (await handlers.createAttachment(
+      {
+        noteID: note.note.id,
+        name: "doc.pdf",
+        mime: "application/pdf",
+        data: base64OfSize(4),
+      },
+      call()
+    )) as { attachment: { id: string } }
+    const pdfResult = JSON.parse(
+      (
+        await readTool.execute(
+          { noteID: note.note.id, attachmentID: pdf.attachment.id },
+          {}
+        )
+      ).content ?? "{}"
+    ) as { readable: boolean; reason: string }
+    expect(pdfResult).toMatchObject({ readable: false })
+
+    const bigData = base64OfSize(64 * 1024 + 1)
+    const big = (await handlers.createAttachment(
+      {
+        noteID: note.note.id,
+        name: "big.txt",
+        mime: "text/plain",
+        data: bigData,
+      },
+      call()
+    )) as { note: { revision: number }; attachment: { id: string } }
+    const bigResult = JSON.parse(
+      (
+        await readTool.execute(
+          { noteID: note.note.id, attachmentID: big.attachment.id },
+          {}
+        )
+      ).content ?? "{}"
+    ) as { readable: boolean; reason: string }
+    expect(bigResult.readable).toBe(false)
+    expect(bigResult.reason).toContain("too large")
+    expect(JSON.stringify(bigResult)).not.toContain(bigData)
+
+    const missing = await handlers.readAttachment(
+      { noteID: note.note.id, attachmentID: "missing" },
+      call()
+    )
+    expect(missing).toMatchObject({
+      type: "attachment_not_found",
+      data: { noteID: note.note.id, attachmentID: "missing" },
+    })
+
+    const invalid = await handlers.createAttachment(
+      {
+        noteID: note.note.id,
+        name: "bad.html",
+        mime: "text/html",
+        data: btoa("x"),
+      },
+      call()
+    )
+    expect(invalid).toMatchObject({
+      type: "invalid",
+      data: { field: "mime" },
+    })
+
+    const deleted = (await handlers.deleteAttachment(
+      {
+        noteID: note.note.id,
+        attachmentID: image.attachment.id,
+        expectedRevision: big.note.revision,
+      },
+      call()
+    )) as { note: { attachments: unknown[] } }
+    expect(deleted.note.attachments).toHaveLength(3)
+    expect(
+      storage.values.has(`${ATTACHMENT_PREFIX}${image.attachment.id}`)
+    ).toBe(false)
+    expect(new Set(state.tools.map((tool) => tool.name)).size).toBe(
+      state.tools.length
+    )
+  }, 30_000)
 })

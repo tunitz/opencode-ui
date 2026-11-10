@@ -4,12 +4,15 @@ import { NotesService } from "./service.js"
 import {
   NotesError,
   type ChangeEvent,
+  type CreateAttachmentInput,
   type CreateNoteInput,
   type CreateSpaceInput,
+  type DeleteAttachmentInput,
   type DeleteNoteInput,
   type DeleteSpaceInput,
   type ListInput,
   type NotesStorage,
+  type ReadAttachmentInput,
   type SpacesInput,
   type UpdateNoteInput,
   type UpdateSpaceInput,
@@ -53,6 +56,75 @@ function toolError(error: unknown): Error {
 
 function json(value: unknown): string {
   return JSON.stringify(value, null, 2)
+}
+
+/** Agent-readable text is capped so a tool result cannot balloon unbounded. */
+const ATTACHMENT_TEXT_LIMIT = 64 * 1024
+const TEXT_ATTACHMENT_MIMES = new Set(["application/json", "application/xml"])
+
+function isTextAttachment(mime: string): boolean {
+  const base = (mime.split(";")[0] ?? "").trim().toLowerCase()
+  return base.startsWith("text/") || TEXT_ATTACHMENT_MIMES.has(base)
+}
+
+function base64ByteLength(data: string): number | undefined {
+  if (!data || data.length % 4 !== 0) return undefined
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0
+  return Math.max(0, (data.length / 4) * 3 - padding)
+}
+
+function decodeAttachmentText(data: string): string {
+  const binary = atob(data)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes)
+}
+
+async function readAttachmentAsText(
+  service: NotesService,
+  input: unknown
+): Promise<unknown> {
+  const { attachment, data } = await service.readAttachment(
+    input as ReadAttachmentInput
+  )
+  if (!isTextAttachment(attachment.mime)) {
+    return {
+      attachment,
+      readable: false,
+      reason:
+        "Only text attachments can be read as text. Images, PDFs, and other binary data are metadata-only.",
+    }
+  }
+  const decodedSize = base64ByteLength(data)
+  if (decodedSize === undefined) {
+    return {
+      attachment,
+      readable: false,
+      reason: "Attachment data is malformed.",
+    }
+  }
+  if (decodedSize > ATTACHMENT_TEXT_LIMIT) {
+    return {
+      attachment,
+      readable: false,
+      reason: `Text attachment is too large to read here (limit ${ATTACHMENT_TEXT_LIMIT} bytes).`,
+    }
+  }
+  try {
+    return {
+      attachment,
+      readable: true,
+      text: decodeAttachmentText(data),
+    }
+  } catch {
+    return {
+      attachment,
+      readable: false,
+      reason: "Attachment data is malformed.",
+    }
+  }
 }
 
 interface ToolDefinition {
@@ -119,6 +191,13 @@ const TOOLS: readonly ToolDefinition[] = [
     input: NOTES_RPC.methods.deleteSpace.input,
     run: (service, input) => service.deleteSpace(input as DeleteSpaceInput),
   },
+  {
+    name: "notes_attachment_read",
+    description:
+      "Read a note attachment as text. Only text/*, application/json, and application/xml attachments up to 64 KiB are decoded. Images, PDFs, and other binary attachments return metadata only; bytes are never returned as base64.",
+    input: NOTES_RPC.methods.readAttachment.input,
+    run: readAttachmentAsText,
+  },
 ]
 
 export async function setupNotesServer(
@@ -163,6 +242,27 @@ export async function setupNotesServer(
     delete: async (input, call) => {
       try {
         return await service.delete(input as DeleteNoteInput)
+      } catch (error) {
+        return fail(call.error, error)
+      }
+    },
+    createAttachment: async (input, call) => {
+      try {
+        return await service.createAttachment(input as CreateAttachmentInput)
+      } catch (error) {
+        return fail(call.error, error)
+      }
+    },
+    readAttachment: async (input, call) => {
+      try {
+        return await service.readAttachment(input as ReadAttachmentInput)
+      } catch (error) {
+        return fail(call.error, error)
+      }
+    },
+    deleteAttachment: async (input, call) => {
+      try {
+        return await service.deleteAttachment(input as DeleteAttachmentInput)
       } catch (error) {
         return fail(call.error, error)
       }

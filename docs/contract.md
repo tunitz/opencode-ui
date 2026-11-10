@@ -52,6 +52,10 @@ are intentional; do not weaken them when simplifying UI code.
   boundary. Any non-loopback exposure needs its own authenticated access boundary and secure
   transport. Allowlists are not authentication or multi-tenant isolation; any client that can
   reach the UI has full app/engine access.
+- Plugin RPC is not a general browser proxy: only the explicit `opencode-notes` methods (`list`,
+  `create`, `update`, `delete`, `spaces`, `createSpace`, `updateSpace`, `deleteSpace`,
+  `createAttachment`, `readAttachment`, `deleteAttachment`) are allowed under
+  `/api/rpc/opencode-notes/`; other plugins and methods remain unreachable.
 - The gateway is not network isolation. The engine endpoint is separate and must be protected
   independently.
 - `/connect` supports native key/OAuth methods with ephemeral key state, bounded polling, and

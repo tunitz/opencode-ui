@@ -7,6 +7,9 @@ const METHOD_NAMES = [
   "create",
   "update",
   "delete",
+  "createAttachment",
+  "readAttachment",
+  "deleteAttachment",
   "spaces",
   "createSpace",
   "updateSpace",
@@ -60,6 +63,25 @@ describe("notes RPC contract", () => {
       "conflict",
       "invalid",
     ])
+    expect(
+      Object.keys(NOTES_RPC.methods.createAttachment.errors).sort()
+    ).toEqual([
+      "attachment_limit",
+      "conflict",
+      "invalid",
+      "note_not_found",
+    ])
+    expect(
+      Object.keys(NOTES_RPC.methods.readAttachment.errors).sort()
+    ).toEqual(["attachment_not_found", "invalid", "note_not_found"])
+    expect(
+      Object.keys(NOTES_RPC.methods.deleteAttachment.errors).sort()
+    ).toEqual([
+      "attachment_not_found",
+      "conflict",
+      "invalid",
+      "note_not_found",
+    ])
     expect(Object.keys(NOTES_RPC.methods.updateSpace.errors).sort()).toEqual([
       "conflict",
       "invalid",
@@ -109,6 +131,43 @@ describe("notes RPC contract", () => {
     expect(NOTES_RPC.methods.deleteSpace.input.properties.cascade).toEqual({
       type: "boolean",
     })
+  })
+
+  test("declares metadata-only attachments and attachment methods", () => {
+    const note = NOTES_RPC.methods.create.output.properties.note
+    expect(note.required).toContain("attachments")
+    const attachment = note.properties.attachments.items
+    expect(attachment.additionalProperties).toBe(false)
+    expect(attachment.required).toEqual([
+      "id",
+      "name",
+      "mime",
+      "size",
+      "createdAt",
+    ])
+    expect(attachment.properties.size).toEqual({ type: "integer", minimum: 0 })
+
+    const createAttachment = NOTES_RPC.methods.createAttachment
+    expect(createAttachment.input.required).toEqual([
+      "noteID",
+      "name",
+      "mime",
+      "data",
+    ])
+    expect(createAttachment.output.required).toEqual(["note", "attachment"])
+    expect(createAttachment.errors.attachment_limit.required).toEqual([
+      "noteID",
+      "attachmentCount",
+      "size",
+      "limit",
+    ])
+    expect(NOTES_RPC.methods.readAttachment.output.required).toEqual([
+      "attachment",
+      "data",
+    ])
+    expect(NOTES_RPC.methods.deleteAttachment.output.required).toEqual(["note"])
+    expect(NOTES_RPC.methods.deleteAttachment.input.properties.expectedRevision)
+      .toEqual({ type: "integer", minimum: 0 })
   })
 
   test("every schema converts as draft 2020-12 JSON Schema", () => {

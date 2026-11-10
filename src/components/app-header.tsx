@@ -21,7 +21,7 @@ export function AppHeader({
 }) {
   recordPerfRender("AppHeader")
   const notes = useNotesWorkspace()
-  const title = notes.open ? "Notes & plans" : nav.activeSession
+  const title = notes.open ? "Notes" : nav.activeSession
     ? nav.activeSession.title?.trim() || "Untitled session"
     : "New session"
 

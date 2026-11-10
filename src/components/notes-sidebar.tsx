@@ -12,9 +12,11 @@ import { NotebookPenIcon, PinIcon } from "lucide-react"
 import {
   NotesPanel,
   type NotesAdapter,
+  type NotesAttachment,
   type NotesNote,
   type NotesSpace,
 } from "@/components/notes-panel"
+import { NoteStatusLabel } from "@/components/note-status-label"
 import { projectName } from "@/components/project-select"
 import { Accordion } from "@/components/ui/accordion"
 import { AccordionSection } from "@/components/ui/accordion-section"
@@ -22,6 +24,13 @@ import { Button } from "@/components/ui/button"
 import { openCode } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
+type PluginAttachment = {
+  id: string
+  name: string
+  mime: string
+  size: number
+  createdAt?: number
+}
 type PluginNote = {
   id: string
   title: string
@@ -30,6 +39,7 @@ type PluginNote = {
   pinned: boolean
   spaceID: string | null
   revision?: number
+  attachments?: PluginAttachment[]
 }
 type PluginSpace = {
   id: string
@@ -38,7 +48,45 @@ type PluginSpace = {
   revision?: number
 }
 
-type NotesContextValue = {
+function pluginAttachmentToNotes(
+  attachment: PluginAttachment
+): NotesAttachment {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    mime: attachment.mime,
+    size: attachment.size,
+    ...(typeof attachment.createdAt === "number"
+      ? { createdAt: attachment.createdAt }
+      : {}),
+  }
+}
+
+function pluginNoteToNotes(note: PluginNote): NotesNote {
+  return {
+    id: note.id,
+    title: note.title,
+    content: note.body,
+    status: note.status,
+    pinned: note.pinned,
+    spaceID: note.spaceID,
+    ...(typeof note.revision === "number"
+      ? { revision: note.revision }
+      : {}),
+    attachments: (note.attachments ?? []).map(pluginAttachmentToNotes),
+  }
+}
+
+function pluginSpaceToNotes(space: PluginSpace): NotesSpace {
+  return {
+    id: space.id,
+    name: space.name,
+    projectID: space.project?.id ?? null,
+    revision: space.revision,
+  }
+}
+
+export type NotesContextValue = {
   available: boolean
   open: boolean
   hasWorkspace: boolean
@@ -50,6 +98,8 @@ type NotesContextValue = {
   closeNotes: () => void
   adapter: NotesAdapter
   pinnedNotes: NotesNote[]
+  pinnedSpaces: NotesSpace[]
+  pinnedSpacesError: boolean
   pinnedTotal: number
   pinnedError: boolean
   pinnedLoading: boolean
@@ -64,6 +114,12 @@ export function useNotesWorkspace() {
   if (!context) throw new Error("NotesProvider is required")
   return context
 }
+
+/** Optional client for surfaces that also render without a NotesProvider. */
+export function useOptionalNotesWorkspace(): NotesContextValue | null {
+  return useContext(NotesContext)
+}
+
 
 /** Optional client: the plugin remains the only source of notes data. */
 export function NotesProvider({
@@ -84,6 +140,8 @@ export function NotesProvider({
   const [pinnedSnapshot, setPinnedSnapshot] = useState<{
     directory: string
     notes: NotesNote[]
+    spaces: NotesSpace[]
+    spacesError: boolean
     total: number
     error: boolean
   } | null>(null)
@@ -114,6 +172,7 @@ export function NotesProvider({
     }
   }, [directory, nav.connection, nav.streamStatus])
 
+  const navProjects = nav.projects
   const adapter = useMemo<NotesAdapter>(() => {
     const location = { directory: editingDirectory ?? directory }
     const spaceProjects = new Map<string, string | null>()
@@ -129,6 +188,17 @@ export function NotesProvider({
         location,
       })
       return result.output
+    }
+    const toAttachment = pluginAttachmentToNotes
+    const toNote = pluginNoteToNotes
+    const projectDirectory = (
+      project: (typeof navProjects)[number]
+    ): string | null => {
+      const record = project as unknown as {
+        location?: { directory?: string | null } | null
+        canonical?: string | null
+      }
+      return record.location?.directory ?? record.canonical ?? null
     }
     return {
       async list() {
@@ -171,17 +241,14 @@ export function NotesProvider({
         for (const space of spacesResult.spaces)
           spaceProjects.set(space.id, space.project?.id ?? null)
         return {
-          notes: notes.map((note) => ({ ...note, content: note.body })),
-          spaces: spacesResult.spaces.map((space): NotesSpace => ({
-            id: space.id,
-            name: space.name,
-            projectID: space.project?.id ?? null,
-            revision: space.revision,
-          })),
-          projects: nav.projects.map((project) => ({
+          notes: notes.map(toNote),
+          spaces: spacesResult.spaces.map(pluginSpaceToNotes),
+          projects: navProjects.map((project) => ({
             id: project.id,
             name: projectName(project),
+            directory: projectDirectory(project),
           })),
+          workspaceDirectory: editingDirectory ?? directory ?? "",
         }
       },
       createNote: (input) =>
@@ -240,6 +307,46 @@ export function NotesProvider({
             ? { expectedRevision: revision }
             : {}),
         }),
+      async createAttachment(noteID, input, revision) {
+        const output = (await call("createAttachment", {
+          noteID,
+          name: input.name,
+          mime: input.mime,
+          data: input.data,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })) as { note?: PluginNote; attachment?: PluginAttachment }
+        if (!output?.note || !output.attachment)
+          throw new Error("Invalid attachment response")
+        return {
+          note: toNote(output.note),
+          attachment: toAttachment(output.attachment),
+        }
+      },
+      async readAttachment(noteID, attachmentID) {
+        const output = (await call("readAttachment", {
+          noteID,
+          attachmentID,
+        })) as { attachment?: PluginAttachment; data?: string }
+        if (!output?.attachment || typeof output.data !== "string")
+          throw new Error("Invalid attachment response")
+        return {
+          attachment: toAttachment(output.attachment),
+          data: output.data,
+        }
+      },
+      async deleteAttachment(noteID, attachmentID, revision) {
+        const output = (await call("deleteAttachment", {
+          noteID,
+          attachmentID,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })) as { note?: PluginNote }
+        if (!output?.note) throw new Error("Invalid attachment response")
+        return { note: toNote(output.note) }
+      },
       subscribe(onChange) {
         const controller = new AbortController()
         void (async () => {
@@ -262,7 +369,7 @@ export function NotesProvider({
         return () => controller.abort()
       },
     }
-  }, [directory, editingDirectory, nav.projects])
+  }, [directory, editingDirectory, navProjects])
 
   const available = Boolean(
     directory &&
@@ -302,25 +409,55 @@ export function NotesProvider({
     const refresh = async () => {
       const token = ++currentRequest.current
       try {
-        const result = await openCode.rpc.call({
-          rpcID: "opencode-notes",
-          method: "list",
-          input: { pinned: true, limit: 5 },
-          location: { directory },
-        })
+        const [listResult, spacesResult] = await Promise.allSettled([
+          openCode.rpc.call({
+            rpcID: "opencode-notes",
+            method: "list",
+            input: { pinned: true, limit: 5 },
+            location: { directory },
+          }),
+          openCode.rpc.call({
+            rpcID: "opencode-notes",
+            method: "spaces",
+            input: {},
+            location: { directory },
+          }),
+        ])
+        if (listResult.status === "rejected") throw listResult.reason
         if (!active || token !== currentRequest.current) return
-        const output = result.output as { notes?: PluginNote[]; total?: number }
+        const output = listResult.value.output as {
+          notes?: PluginNote[]
+          total?: number
+        }
         if (!Array.isArray(output?.notes) || typeof output.total !== "number")
           throw new Error("Invalid notes response")
+        const spacesOutput =
+          spacesResult.status === "fulfilled"
+            ? (spacesResult.value.output as { spaces?: PluginSpace[] })
+            : null
+        const spaces = Array.isArray(spacesOutput?.spaces)
+          ? spacesOutput.spaces.map(pluginSpaceToNotes)
+          : []
         setPinnedSnapshot({
           directory,
-          notes: output.notes.map((note) => ({ ...note, content: note.body })),
+          notes: output.notes.map(pluginNoteToNotes),
+          spaces,
+          spacesError:
+            spacesResult.status !== "fulfilled" ||
+            !Array.isArray(spacesOutput?.spaces),
           total: output.total,
           error: false,
         })
       } catch {
         if (active && token === currentRequest.current)
-          setPinnedSnapshot({ directory, notes: [], total: 0, error: true })
+          setPinnedSnapshot({
+            directory,
+            notes: [],
+            spaces: [],
+            spacesError: true,
+            total: 0,
+            error: true,
+          })
       }
     }
     void refresh()
@@ -359,6 +496,12 @@ export function NotesProvider({
     adapter,
     pinnedNotes:
       pinnedSnapshot?.directory === directory ? pinnedSnapshot.notes : [],
+    pinnedSpaces:
+      pinnedSnapshot?.directory === directory ? pinnedSnapshot.spaces : [],
+    pinnedSpacesError:
+      pinnedSnapshot?.directory === directory
+        ? pinnedSnapshot.spacesError
+        : false,
     pinnedTotal:
       pinnedSnapshot?.directory === directory ? pinnedSnapshot.total : 0,
     pinnedError:
@@ -376,29 +519,38 @@ export function NotesProvider({
 export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const notes = useNotesWorkspace()
   if (!notes.available && !notes.hasWorkspace) return null
+
+  function pinnedSpaceName(note: NotesNote): string {
+    if (note.spaceID === null) return "No space"
+    return (
+      notes.pinnedSpaces.find((space) => space.id === note.spaceID)?.name ??
+      "Space unavailable"
+    )
+  }
+
   return (
     <Accordion
       multiple
       defaultValue={[]}
-      aria-label="Notes and plans"
+      aria-label="Notes"
       className="mt-4"
     >
       <AccordionSection
         value="notes"
-        title="Notes & plans"
+        title="Notes"
         count={notes.available ? notes.pinnedTotal : undefined}
         contentClassName="space-y-1"
       >
         <Button
           variant="ghost"
-          aria-label="All notes and plans"
+          aria-label="All notes"
           aria-current={notes.open && !notes.selectedNoteID ? "page" : undefined}
           className="h-11 w-full justify-start gap-2"
           onClick={() => {
             if (notes.openNotes()) onNavigate?.()
           }}
         >
-          <NotebookPenIcon aria-hidden="true" /> All notes &amp; plans
+          <NotebookPenIcon aria-hidden="true" /> All notes
         </Button>
         <div className="px-2.5 pt-2 text-xs font-medium text-muted-foreground">
           Pinned notes
@@ -430,14 +582,23 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       ? "page"
                       : undefined
                   }
-                  className="h-11 w-full justify-start gap-2"
+                  className="h-auto min-h-11 w-full justify-start gap-2 py-2"
                   onClick={() => {
                     if (notes.openNotes(note.id)) onNavigate?.()
                   }}
                 >
-                  <PinIcon aria-hidden="true" />
-                  <span className="min-w-0 truncate" dir="auto">
-                    {note.title}
+                  <PinIcon aria-hidden="true" className="shrink-0" />
+                  <span className="grid min-w-0 flex-1 gap-0.5 text-start">
+                    <span className="min-w-0 truncate" dir="auto">
+                      {note.title}
+                    </span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs font-normal text-muted-foreground">
+                      <NoteStatusLabel status={note.status} />
+                      <span aria-hidden="true">·</span>
+                      <span className="min-w-0 truncate">
+                        {pinnedSpaceName(note)}
+                      </span>
+                    </span>
                   </span>
                 </Button>
               </li>

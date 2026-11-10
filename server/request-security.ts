@@ -57,8 +57,19 @@ const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 // Plugin RPC is not a general-purpose browser proxy. Only these notes methods
 // are exposed; other plugins and future methods remain inaccessible by default.
 const NOTES_RPC_PATHS = new Set(
-  ["list", "create", "update", "delete", "spaces", "createSpace", "updateSpace", "deleteSpace"]
-    .map((method) => `/api/rpc/opencode-notes/${method}`)
+  [
+    "list",
+    "create",
+    "update",
+    "delete",
+    "createAttachment",
+    "readAttachment",
+    "deleteAttachment",
+    "spaces",
+    "createSpace",
+    "updateSpace",
+    "deleteSpace",
+  ].map((method) => `/api/rpc/opencode-notes/${method}`)
 )
 
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {

@@ -48,6 +48,19 @@ const space = {
   ],
 } as const
 
+const attachment = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    mime: { type: "string" },
+    size: { type: "integer", minimum: 0 },
+    createdAt: { type: "number" },
+  },
+  required: ["id", "name", "mime", "size", "createdAt"],
+} as const
+
 const note = {
   type: "object",
   additionalProperties: false,
@@ -58,6 +71,7 @@ const note = {
     body: { type: "string" },
     status: { type: "string", enum: NOTE_STATUSES },
     pinned: { type: "boolean" },
+    attachments: { type: "array", items: attachment },
     revision: { type: "integer", minimum: 0 },
     createdAt: { type: "number" },
     updatedAt: { type: "number" },
@@ -69,6 +83,7 @@ const note = {
     "body",
     "status",
     "pinned",
+    "attachments",
     "revision",
     "createdAt",
     "updatedAt",
@@ -122,6 +137,28 @@ const conflict = {
     revision: { type: "integer", minimum: 0 },
   },
   required: ["entity", "id", "expectedRevision", "revision"],
+} as const
+
+const attachmentNotFound = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    noteID: { type: "string" },
+    attachmentID: { type: "string" },
+  },
+  required: ["noteID", "attachmentID"],
+} as const
+
+const attachmentLimit = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    noteID: { type: "string" },
+    attachmentCount: { type: "integer", minimum: 0 },
+    size: { type: "integer", minimum: 0 },
+    limit: { type: "integer", minimum: 1 },
+  },
+  required: ["noteID", "attachmentCount", "size", "limit"],
 } as const
 
 const changed = {
@@ -234,6 +271,90 @@ export const NOTES_RPC = {
         required: ["deleted"],
       },
       errors: { invalid, conflict },
+    },
+    createAttachment: {
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          noteID: { type: "string" },
+          name: {
+            type: "string",
+            minLength: 1,
+            maxLength: LIMITS.attachmentName,
+          },
+          mime: {
+            type: "string",
+            minLength: 1,
+            maxLength: LIMITS.attachmentMime,
+          },
+          // Base64 text. The service enforces the decoded byte limits.
+          data: { type: "string", minLength: 4, maxLength: 5_600_000 },
+          expectedRevision: { type: "integer", minimum: 0 },
+        },
+        required: ["noteID", "name", "mime", "data"],
+      },
+      output: {
+        type: "object",
+        additionalProperties: false,
+        properties: { note, attachment },
+        required: ["note", "attachment"],
+      },
+      errors: {
+        invalid,
+        conflict,
+        note_not_found: noteNotFound,
+        attachment_limit: attachmentLimit,
+      },
+    },
+    readAttachment: {
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          noteID: { type: "string" },
+          attachmentID: { type: "string" },
+        },
+        required: ["noteID", "attachmentID"],
+      },
+      output: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          attachment,
+          data: { type: "string" },
+        },
+        required: ["attachment", "data"],
+      },
+      errors: {
+        invalid,
+        note_not_found: noteNotFound,
+        attachment_not_found: attachmentNotFound,
+      },
+    },
+    deleteAttachment: {
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          noteID: { type: "string" },
+          attachmentID: { type: "string" },
+          expectedRevision: { type: "integer", minimum: 0 },
+        },
+        required: ["noteID", "attachmentID"],
+      },
+      output: {
+        type: "object",
+        additionalProperties: false,
+        properties: { note },
+        required: ["note"],
+      },
+      errors: {
+        invalid,
+        conflict,
+        note_not_found: noteNotFound,
+        attachment_not_found: attachmentNotFound,
+      },
     },
     spaces: {
       input: {

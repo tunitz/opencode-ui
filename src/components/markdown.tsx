@@ -10,6 +10,7 @@ import {
 } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { PaperclipIcon } from "lucide-react"
 import {
   Table,
   TableBody,
@@ -20,6 +21,7 @@ import {
 } from "@openuidev/react-ui/Table"
 import "@openuidev/react-ui/styles/table.css"
 
+import type { NoteAttachmentReference } from "@/components/note-attachment-dialog"
 import { OpenUICodeBlock } from "@/components/openui-code-block"
 import {
   ArtifactDialog,
@@ -29,6 +31,12 @@ import {
   artifactLinkCandidates,
   resolveArtifactLink,
 } from "@/lib/artifact-links"
+import {
+  fsReadUrl,
+  inferMime,
+  isSafeImageMime,
+  normalizeRelativePath,
+} from "@/lib/files"
 import { artifactSignature, type ToolArtifact } from "@/lib/tool-artifacts"
 import { recordPerfRender } from "@/lib/perf-probe"
 
@@ -78,6 +86,177 @@ function extractFencedCode(children: ReactNode) {
   }
 }
 
+export type MarkdownNotes = {
+  directory: string
+  readAttachment: (id: string) => Promise<{
+    attachment: {
+      id: string
+      name: string
+      mime: string
+      size: number
+      createdAt?: number
+    }
+    data: string
+  }>
+  onOpenAttachment: (attachment: NoteAttachmentReference) => void
+}
+
+function plainText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(plainText).join("")
+  if (isValidElement(node)) {
+    return plainText((node.props as { children?: ReactNode }).children)
+  }
+  return ""
+}
+
+/**
+ * Notes may only load project files that stay inside the linked project:
+ * no schemes, protocol-relative URLs, absolute paths, or traversal.
+ */
+function noteProjectPath(url: string): string | null {
+  if (!url || url.startsWith("#") || url.startsWith("//")) return null
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return null
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(url)
+  } catch {
+    return null
+  }
+  const normalized = normalizeRelativePath(decoded)
+  return normalized && normalized === decoded ? normalized : null
+}
+
+function notesUrlTransform(url: string): string {
+  if (url.startsWith("attachment://")) return url
+  return defaultUrlTransform(url)
+}
+
+function attachmentID(url: string | undefined): string | null {
+  if (!url || !url.startsWith("attachment://")) return null
+  const id = url.slice("attachment://".length)
+  return /^[A-Za-z0-9._~-]+$/.test(id) ? id : null
+}
+
+function ProjectImage({
+  directory,
+  path,
+  alt,
+}: {
+  directory: string
+  path: string
+  alt: string | undefined
+}) {
+  const normalized = noteProjectPath(path)
+  if (
+    !directory ||
+    !normalized ||
+    !isSafeImageMime(inferMime(normalized))
+  ) {
+    return (
+      <span className="text-sm text-muted-foreground">
+        {alt || "Image unavailable"}
+      </span>
+    )
+  }
+  return (
+    <img
+      src={fsReadUrl(directory, normalized)}
+      alt={alt ?? ""}
+      loading="lazy"
+      className="my-1 max-h-96 max-w-full rounded-lg border object-contain"
+    />
+  )
+}
+
+type AttachmentImageState =
+  | { status: "loading" }
+  | { status: "ready"; url: string }
+  | { status: "fallback"; attachment?: NoteAttachmentReference }
+
+function NoteAttachmentImage({
+  id,
+  alt,
+  notes,
+}: {
+  id: string
+  alt: string | undefined
+  notes: MarkdownNotes
+}) {
+  const [state, setState] = useState<AttachmentImageState>({
+    status: "loading",
+  })
+  const { readAttachment } = notes
+
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => {
+      if (active) setState({ status: "loading" })
+    })
+    readAttachment(id).then(
+      (result) => {
+        if (!active) return
+        if (
+          result &&
+          result.attachment &&
+          isSafeImageMime(result.attachment.mime) &&
+          typeof result.data === "string" &&
+          /^[A-Za-z0-9+/]*={0,2}$/.test(result.data)
+        ) {
+          setState({
+            status: "ready",
+            url: `data:${result.attachment.mime};base64,${result.data}`,
+          })
+        } else {
+          setState({
+            status: "fallback",
+            attachment: result?.attachment,
+          })
+        }
+      },
+      () => {
+        if (active) setState({ status: "fallback" })
+      }
+    )
+    return () => {
+      active = false
+    }
+  }, [id, readAttachment])
+
+  if (state.status === "ready") {
+    return (
+      <img
+        src={state.url}
+        alt={alt ?? ""}
+        loading="lazy"
+        className="my-1 max-h-96 max-w-full rounded-lg border object-contain"
+      />
+    )
+  }
+  if (state.status === "fallback" && state.attachment) {
+    const attachment = state.attachment
+    return (
+      <button
+        type="button"
+        className="inline-flex min-h-11 items-center gap-1 font-medium text-primary underline underline-offset-2"
+        onClick={() => notes.onOpenAttachment(attachment)}
+      >
+        <PaperclipIcon aria-hidden="true" className="size-4" />
+        {alt || attachment.name}
+      </button>
+    )
+  }
+  return (
+    <span className="text-sm text-muted-foreground">
+      {state.status === "loading"
+        ? alt
+          ? `Loading ${alt}…`
+          : "Loading image…"
+        : alt || "Image unavailable"}
+    </span>
+  )
+}
+
 /**
  * Durable messages keep the same text while a different message streams, so
  * memoizing avoids re-parsing their Markdown on every live token.
@@ -87,11 +266,14 @@ export const Markdown = memo(function Markdown({
   artifactSessionID = null,
   artifactExcludeSignatures = [],
   streaming = false,
+  notes,
 }: {
   children: string
   artifactSessionID?: string | null
   artifactExcludeSignatures?: readonly string[]
   streaming?: boolean
+  /** Notes-only rendering: project files and plugin attachments. Chat omits it. */
+  notes?: MarkdownNotes
 }) {
   recordPerfRender("Markdown")
   const links = useMemo(() => artifactLinkCandidates(children), [children])
@@ -154,8 +336,8 @@ export const Markdown = memo(function Markdown({
     >
       <ReactMarkdown
         skipHtml
-        disallowedElements={["img"]}
-        urlTransform={defaultUrlTransform}
+        disallowedElements={notes ? [] : ["img"]}
+        urlTransform={notes ? notesUrlTransform : defaultUrlTransform}
         remarkPlugins={[remarkGfm]}
         components={{
           a: ({ href, children }) => {
@@ -180,12 +362,65 @@ export const Markdown = memo(function Markdown({
                 </a>
               )
             }
+            if (notes) {
+              if (href?.startsWith("#"))
+                return <a href={href}>{children}</a>
+              const id = attachmentID(href)
+              if (id) {
+                const name = plainText(children) || "Attachment"
+                return (
+                  <button
+                    type="button"
+                    className="inline-flex min-h-11 items-center gap-1 font-medium text-primary underline underline-offset-2"
+                    onClick={() =>
+                      notes.onOpenAttachment({ id, name })
+                    }
+                  >
+                    <PaperclipIcon aria-hidden="true" className="size-4" />
+                    {children}
+                  </button>
+                )
+              }
+              const path = href ? noteProjectPath(href) : null
+              if (path && notes.directory) {
+                return (
+                  <a
+                    href={fsReadUrl(notes.directory, path)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {children}
+                  </a>
+                )
+              }
+              return <span>{children}</span>
+            }
             return (
               <a href={href} target="_blank" rel="noopener noreferrer">
                 {children}
               </a>
             )
           },
+          img: notes
+            ? ({ src, alt }) => {
+                const id = attachmentID(src)
+                if (id)
+                  return <NoteAttachmentImage id={id} alt={alt} notes={notes} />
+                if (src)
+                  return (
+                    <ProjectImage
+                      directory={notes.directory}
+                      path={src}
+                      alt={alt}
+                    />
+                  )
+                return (
+                  <span className="text-sm text-muted-foreground">
+                    {alt || "Image unavailable"}
+                  </span>
+                )
+              }
+            : undefined,
           pre: ({ children }) => {
             const fenced = extractFencedCode(children)
             if (!fenced) {

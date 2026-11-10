@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { NotesStore, parseNote, parseSpace } from "../src/store.js"
-import { NOTE_PREFIX, SPACE_PREFIX } from "../src/types.js"
+import { ATTACHMENT_PREFIX, NOTE_PREFIX, SPACE_PREFIX } from "../src/types.js"
 import { MemoryStorage, seededClock, seededIDs } from "./helpers.js"
 
 function makeStore() {
@@ -33,6 +33,7 @@ describe("NotesStore", () => {
       body: "",
       status: "todo" as const,
       pinned: false,
+      attachments: [],
       revision: 1,
       createdAt: now,
       updatedAt: now,
@@ -58,6 +59,7 @@ describe("NotesStore", () => {
         body: "",
         status: "todo",
         pinned: false,
+        attachments: [],
         revision: 1,
         createdAt: now,
         updatedAt: now,
@@ -115,6 +117,7 @@ describe("NotesStore", () => {
       body: "",
       status: "todo",
       pinned: false,
+      attachments: [],
       revision: 0,
       createdAt: 1,
       updatedAt: 1,
@@ -143,5 +146,76 @@ describe("NotesStore", () => {
         updatedAt: 1,
       })
     ).toBeUndefined()
+  })
+
+  test("decodes legacy notes without attachments as an empty list", () => {
+    const note = parseNote({
+      id: "legacy",
+      spaceID: null,
+      title: "Legacy",
+      body: "",
+      status: "todo",
+      pinned: false,
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    expect(note?.attachments).toEqual([])
+  })
+
+  test("keeps well-formed attachment metadata and drops malformed entries", () => {
+    const note = parseNote({
+      id: "note",
+      spaceID: null,
+      title: "Note",
+      body: "",
+      status: "todo",
+      pinned: false,
+      attachments: [
+        {
+          id: "attachment_1",
+          name: "photo.png",
+          mime: "image/png",
+          size: 12,
+          createdAt: 5,
+        },
+        { id: "", name: "bad.png", mime: "image/png", size: 1, createdAt: 1 },
+        { id: "attachment_2", name: "bad.png", mime: "image/png", size: -1, createdAt: 1 },
+        { id: "attachment_3", name: "bad.png", mime: 4, size: 1, createdAt: 1 },
+        "nope",
+      ],
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    expect(note?.attachments).toEqual([
+      {
+        id: "attachment_1",
+        name: "photo.png",
+        mime: "image/png",
+        size: 12,
+        createdAt: 5,
+      },
+    ])
+  })
+
+  test("stores attachment bytes under id-only keys", async () => {
+    const { storage, store } = makeStore()
+    await store.putAttachment("attachment_1", "aGVsbG8=")
+    expect(storage.values.has(`${ATTACHMENT_PREFIX}attachment_1`)).toBe(true)
+    expect(storage.values.get(`${ATTACHMENT_PREFIX}attachment_1`)).toEqual({
+      data: "aGVsbG8=",
+    })
+    expect(await store.getAttachment("attachment_1")).toBe("aGVsbG8=")
+    await store.removeAttachment("attachment_1")
+    expect(await store.getAttachment("attachment_1")).toBeUndefined()
+  })
+
+  test("ignores malformed stored attachment values", async () => {
+    const { storage, store } = makeStore()
+    await storage.set(`${ATTACHMENT_PREFIX}raw`, "aGVsbG8=")
+    await storage.set(`${ATTACHMENT_PREFIX}wrong`, { data: 4 })
+    expect(await store.getAttachment("raw")).toBeUndefined()
+    expect(await store.getAttachment("wrong")).toBeUndefined()
   })
 })

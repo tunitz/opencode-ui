@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { NotesService } from "../src/service.js"
-import { NOTE_PREFIX } from "../src/types.js"
+import { ATTACHMENT_PREFIX, LIMITS, NOTE_PREFIX } from "../src/types.js"
 import { MemoryStorage, seededClock, seededIDs } from "./helpers.js"
+
+/** Build a valid base64 string whose decoded length is exactly `size` bytes. */
+function base64OfSize(size: number): string {
+  if (size <= 0) return ""
+  const padding = (3 - (size % 3)) % 3
+  const length = Math.ceil(size / 3) * 4
+  return "A".repeat(length - padding) + "=".repeat(padding)
+}
 
 function makeService(
   options: {
@@ -463,5 +471,322 @@ describe("NotesService", () => {
       { entity: "note", action: "updated", id: note.id },
       { entity: "note", action: "deleted", id: note.id },
     ])
+  })
+
+  test("starts notes with no attachments and preserves them across updates", async () => {
+    const { service, storage } = makeService()
+    const note = await service.create({ title: "Note" })
+    expect(note.attachments).toEqual([])
+
+    const data = btoa("hello attachment")
+    const created = await service.createAttachment({
+      noteID: note.id,
+      name: "  notes.txt  ",
+      mime: "text/plain; charset=utf-8",
+      data,
+    })
+    expect(created.attachment.name).toBe("notes.txt")
+    expect(created.attachment.mime).toBe("text/plain")
+    expect(created.attachment.size).toBe(16)
+    expect(created.note.revision).toBe(note.revision + 1)
+    expect(created.note.attachments).toEqual([created.attachment])
+    expect(
+      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
+    ).toBe(true)
+
+    const updated = await service.update({ noteID: note.id, title: "Renamed" })
+    expect(updated.attachments).toEqual([created.attachment])
+    expect(updated.revision).toBe(created.note.revision + 1)
+  })
+
+  test("reads and deletes attachment bytes while lists expose metadata only", async () => {
+    const { service, storage } = makeService()
+    const note = await service.create({ title: "Note" })
+    const data = btoa("hello")
+    const created = await service.createAttachment({
+      noteID: note.id,
+      name: "hello.txt",
+      mime: "text/plain",
+      data,
+    })
+
+    const read = await service.readAttachment({
+      noteID: note.id,
+      attachmentID: created.attachment.id,
+    })
+    expect(read).toEqual({ attachment: created.attachment, data })
+
+    const listed = await service.list()
+    expect(listed.notes[0]?.attachments).toEqual([created.attachment])
+    expect(JSON.stringify(listed)).not.toContain(data)
+    expect(storage.values.get(`${NOTE_PREFIX}${note.id}`)).toMatchObject({
+      attachments: [created.attachment],
+    })
+
+    const deleted = await service.deleteAttachment({
+      noteID: note.id,
+      attachmentID: created.attachment.id,
+      expectedRevision: created.note.revision,
+    })
+    expect(deleted.note.attachments).toEqual([])
+    expect(deleted.note.revision).toBe(created.note.revision + 1)
+    expect(
+      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
+    ).toBe(false)
+    await expect(
+      service.readAttachment({
+        noteID: note.id,
+        attachmentID: created.attachment.id,
+      })
+    ).rejects.toMatchObject({ type: "attachment_not_found" })
+  })
+
+  test("checks expectedRevision on attachment writes and emits note updates", async () => {
+    const { service, events } = makeService()
+    const note = await service.create({ title: "Note" })
+    const created = await service.createAttachment({
+      noteID: note.id,
+      name: "note.txt",
+      mime: "text/plain",
+      data: btoa("text"),
+    })
+
+    await expect(
+      service.createAttachment({
+        noteID: note.id,
+        name: "second.txt",
+        mime: "text/plain",
+        data: btoa("text"),
+        expectedRevision: note.revision,
+      })
+    ).rejects.toMatchObject({
+      type: "conflict",
+      data: { entity: "note", id: note.id, revision: created.note.revision },
+    })
+    await expect(
+      service.deleteAttachment({
+        noteID: note.id,
+        attachmentID: created.attachment.id,
+        expectedRevision: note.revision,
+      })
+    ).rejects.toMatchObject({ type: "conflict" })
+
+    expect(events).toEqual([
+      { entity: "note", action: "created", id: note.id },
+      { entity: "note", action: "updated", id: note.id },
+    ])
+  })
+
+  test("enforces attachment count, per-file, and total size limits", async () => {
+    const { service } = makeService()
+    const note = await service.create({ title: "Note" })
+    for (let index = 0; index < LIMITS.attachmentCount; index++) {
+      await service.createAttachment({
+        noteID: note.id,
+        name: `file-${index}.bin`,
+        mime: "application/octet-stream",
+        data: base64OfSize(1),
+      })
+    }
+    await expect(
+      service.createAttachment({
+        noteID: note.id,
+        name: "extra.bin",
+        mime: "application/octet-stream",
+        data: base64OfSize(1),
+      })
+    ).rejects.toMatchObject({
+      type: "attachment_limit",
+      data: {
+        noteID: note.id,
+        attachmentCount: LIMITS.attachmentCount,
+        limit: LIMITS.attachmentCount,
+      },
+    })
+
+    const oversized = await service.create({ title: "Oversized" })
+    await expect(
+      service.createAttachment({
+        noteID: oversized.id,
+        name: "too-big.bin",
+        mime: "application/octet-stream",
+        data: base64OfSize(LIMITS.attachmentFileSize + 1),
+      })
+    ).rejects.toMatchObject({
+      type: "attachment_limit",
+      data: {
+        noteID: oversized.id,
+        size: LIMITS.attachmentFileSize + 1,
+        limit: LIMITS.attachmentFileSize,
+      },
+    })
+
+    const total = await service.create({ title: "Total" })
+    const full = base64OfSize(LIMITS.attachmentFileSize)
+    await service.createAttachment({
+      noteID: total.id,
+      name: "one.bin",
+      mime: "application/octet-stream",
+      data: full,
+    })
+    await service.createAttachment({
+      noteID: total.id,
+      name: "two.bin",
+      mime: "application/octet-stream",
+      data: full,
+    })
+    await expect(
+      service.createAttachment({
+        noteID: total.id,
+        name: "three.bin",
+        mime: "application/octet-stream",
+        data: base64OfSize(1),
+      })
+    ).rejects.toMatchObject({
+      type: "attachment_limit",
+      data: {
+        noteID: total.id,
+        attachmentCount: 3,
+        size: LIMITS.attachmentTotalSize + 1,
+        limit: LIMITS.attachmentTotalSize,
+      },
+    })
+  }, 30_000)
+
+  test("rejects active MIME types, malformed names, and invalid base64", async () => {
+    const { service } = makeService()
+    const note = await service.create({ title: "Note" })
+    const base = { noteID: note.id, name: "file", data: btoa("data") }
+
+    for (const mime of [
+      "image/svg+xml",
+      "image/svg+xml; charset=utf-8",
+      "text/html",
+      "application/xhtml+xml",
+      "application/javascript",
+      "text/javascript",
+      "application/ecmascript",
+      "text/ecmascript",
+      "image/javascript",
+    ]) {
+      await expect(
+        service.createAttachment({ ...base, mime })
+      ).rejects.toMatchObject({ type: "invalid", data: { field: "mime" } })
+    }
+
+    await expect(
+      service.createAttachment({ ...base, mime: "not-a-mime" })
+    ).rejects.toMatchObject({ type: "invalid", data: { field: "mime" } })
+    await expect(
+      service.createAttachment({
+        noteID: note.id,
+        name: "   ",
+        mime: "text/plain",
+        data: btoa("data"),
+      })
+    ).rejects.toMatchObject({ type: "invalid", data: { field: "name" } })
+    await expect(
+      service.createAttachment({
+        noteID: note.id,
+        name: "bad\u0000name",
+        mime: "text/plain",
+        data: btoa("data"),
+      })
+    ).rejects.toMatchObject({ type: "invalid", data: { field: "name" } })
+    await expect(
+      service.createAttachment({
+        noteID: note.id,
+        name: "x".repeat(LIMITS.attachmentName + 1),
+        mime: "text/plain",
+        data: btoa("data"),
+      })
+    ).rejects.toMatchObject({ type: "invalid", data: { field: "name" } })
+
+    for (const data of ["not base64!", "abc", "aGVs bG8=", ""]) {
+      await expect(
+        service.createAttachment({
+          noteID: note.id,
+          name: "file.txt",
+          mime: "text/plain",
+          data,
+        })
+      ).rejects.toMatchObject({ type: "invalid", data: { field: "data" } })
+    }
+  })
+
+  test("rejects cross-note attachment access", async () => {
+    const { service } = makeService()
+    const first = await service.create({ title: "First" })
+    const second = await service.create({ title: "Second" })
+    const created = await service.createAttachment({
+      noteID: first.id,
+      name: "secret.txt",
+      mime: "text/plain",
+      data: btoa("secret"),
+    })
+
+    await expect(
+      service.readAttachment({
+        noteID: second.id,
+        attachmentID: created.attachment.id,
+      })
+    ).rejects.toMatchObject({
+      type: "attachment_not_found",
+      data: { noteID: second.id, attachmentID: created.attachment.id },
+    })
+    await expect(
+      service.deleteAttachment({
+        noteID: second.id,
+        attachmentID: created.attachment.id,
+      })
+    ).rejects.toMatchObject({ type: "attachment_not_found" })
+    expect((await service.list()).notes.find((note) => note.id === first.id))
+      .toMatchObject({ attachments: [created.attachment] })
+  })
+
+  test("best-effort removes attachment keys when deleting a note", async () => {
+    const { service, storage } = makeService()
+    const note = await service.create({ title: "Note" })
+    const first = await service.createAttachment({
+      noteID: note.id,
+      name: "one.txt",
+      mime: "text/plain",
+      data: btoa("one"),
+    })
+    const second = await service.createAttachment({
+      noteID: note.id,
+      name: "two.txt",
+      mime: "text/plain",
+      data: btoa("two"),
+    })
+
+    expect(await service.delete({ noteID: note.id })).toEqual({ deleted: true })
+    for (const attachment of [first.attachment, second.attachment]) {
+      expect(
+        storage.values.has(`${ATTACHMENT_PREFIX}${attachment.id}`)
+      ).toBe(false)
+    }
+  })
+
+  test("deletes the note even when attachment cleanup fails", async () => {
+    const { service, storage } = makeService()
+    const note = await service.create({ title: "Note" })
+    const created = await service.createAttachment({
+      noteID: note.id,
+      name: "one.txt",
+      mime: "text/plain",
+      data: btoa("one"),
+    })
+    const remove = storage.remove.bind(storage)
+    storage.remove = async (key: string) => {
+      if (key.startsWith(ATTACHMENT_PREFIX)) throw new Error("cleanup failed")
+      await remove(key)
+    }
+
+    expect(await service.delete({ noteID: note.id })).toEqual({ deleted: true })
+    expect(await service.list()).toEqual({ notes: [], total: 0 })
+    expect(
+      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
+    ).toBe(true)
   })
 })

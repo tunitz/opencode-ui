@@ -1,10 +1,13 @@
 import {
+  ATTACHMENT_PREFIX,
   NOTE_PREFIX,
+  NotesError,
   SPACE_PREFIX,
   isNoteStatus,
   isRecord,
   isSpaceKind,
   type Note,
+  type NoteAttachment,
   type NotesStorage,
   type ProjectLink,
   type Space,
@@ -50,6 +53,30 @@ export function parseSpace(value: unknown): Space | undefined {
   }
 }
 
+export function parseAttachment(value: unknown): NoteAttachment | undefined {
+  if (!isRecord(value)) return undefined
+  if (typeof value.id !== "string" || !value.id) return undefined
+  if (typeof value.name !== "string" || !value.name) return undefined
+  if (typeof value.mime !== "string") return undefined
+  if (!Number.isFinite(value.size) || (value.size as number) < 0)
+    return undefined
+  if (!Number.isFinite(value.createdAt)) return undefined
+  return {
+    id: value.id,
+    name: value.name,
+    mime: value.mime,
+    size: value.size as number,
+    createdAt: value.createdAt as number,
+  }
+}
+
+function parseAttachments(value: unknown): NoteAttachment[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(parseAttachment)
+    .filter((attachment): attachment is NoteAttachment => attachment !== undefined)
+}
+
 export function parseNote(value: unknown): Note | undefined {
   if (!isRecord(value)) return undefined
   if (typeof value.id !== "string" || !value.id) return undefined
@@ -74,6 +101,7 @@ export function parseNote(value: unknown): Note | undefined {
     body: value.body,
     status: value.status,
     pinned: value.pinned,
+    attachments: parseAttachments(value.attachments),
     revision: revision as number,
     createdAt: value.createdAt as number,
     updatedAt: value.updatedAt as number,
@@ -145,5 +173,24 @@ export class NotesStore {
     return values
       .map(parseNote)
       .filter((note): note is Note => note !== undefined)
+  }
+
+  async getAttachment(attachmentID: string): Promise<string | undefined> {
+    const value = await this.storage.get(`${ATTACHMENT_PREFIX}${attachmentID}`)
+    if (!isRecord(value) || typeof value.data !== "string") return undefined
+    return value.data
+  }
+
+  async putAttachment(attachmentID: string, data: string): Promise<void> {
+    if (typeof data !== "string") {
+      throw new NotesError("invalid", "Attachment data must be a string", {
+        field: "data",
+      })
+    }
+    await this.storage.set(`${ATTACHMENT_PREFIX}${attachmentID}`, { data })
+  }
+
+  async removeAttachment(attachmentID: string): Promise<void> {
+    await this.storage.remove(`${ATTACHMENT_PREFIX}${attachmentID}`)
   }
 }

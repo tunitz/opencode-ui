@@ -109,8 +109,14 @@ The separately packaged [Notes plugin](plugins/notes/README.md) adds notes, plan
 tools, and a TUI interface. When its server part is active for the selected location, the sidebar
 offers notes and planning spaces; without it the UI works as before.
 
-Notes are plaintext in OpenCode plugin storage, not browser-local drafts. They are not encrypted and
-do not provide multi-user isolation. Do not store secrets in notes.
+Notes open in a read-only Markdown preview; editing is explicit. A note body can reference
+project-relative files (safe raster images render, other files link through the same-origin file
+route), and notes can store uploaded attachments in plugin storage. Attachments are limited to 4
+files per note, 4 MiB per file, and 8 MiB per note; SVG, HTML, and JavaScript types are rejected.
+The composer can attach a note as a Markdown file, including its attachment manifest.
+
+Notes, spaces, and attachments are plaintext in OpenCode plugin storage, not browser-local drafts.
+They are not encrypted and do not provide multi-user isolation. Do not store secrets in notes.
 
 ## Documentation
 

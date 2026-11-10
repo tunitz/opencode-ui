@@ -8,8 +8,11 @@ import {
   isSpaceKind,
   type ChangeEntity,
   type ChangeEvent,
+  type CreateAttachmentInput,
   type CreateNoteInput,
   type CreateSpaceInput,
+  type DeleteAttachmentInput,
+  type DeleteAttachmentOutput,
   type DeleteNoteInput,
   type DeleteNoteOutput,
   type DeleteSpaceInput,
@@ -17,9 +20,12 @@ import {
   type ListInput,
   type ListOutput,
   type Note,
+  type NoteAttachment,
   type ProjectInput,
   type ProjectLink,
   type ProjectLocation,
+  type ReadAttachmentInput,
+  type ReadAttachmentOutput,
   type Space,
   type SpaceKind,
   type SpacesInput,
@@ -81,6 +87,84 @@ function optionalRevision(value: unknown): number | undefined {
     )
   }
   return value as number
+}
+
+const MIME_SHAPE =
+  /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i
+
+const BASE64_SHAPE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
+/** Inline-active types are refused; attachments are downloadable data, not a document surface. */
+const ACTIVE_MIME_TYPES = new Set([
+  "image/svg+xml",
+  "text/html",
+  "application/xhtml+xml",
+  "application/javascript",
+  "text/javascript",
+  "application/ecmascript",
+  "text/ecmascript",
+])
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+function attachmentName(value: unknown): string {
+  if (typeof value !== "string")
+    invalid("name", "name must be a string")
+  const name = value.trim()
+  if (!name) invalid("name", "name must not be empty")
+  if (name.length > LIMITS.attachmentName)
+    invalid(
+      "name",
+      `name must be at most ${LIMITS.attachmentName} characters`
+    )
+  if (hasControlCharacters(name))
+    invalid("name", "name must not contain control characters")
+  return name
+}
+
+function attachmentMime(value: unknown): string {
+  if (typeof value !== "string") invalid("mime", "mime must be a string")
+  const mime = (value.split(";")[0] ?? "").trim().toLowerCase()
+  if (!mime) invalid("mime", "mime must not be empty")
+  if (mime.length > LIMITS.attachmentMime)
+    invalid(
+      "mime",
+      `mime must be at most ${LIMITS.attachmentMime} characters`
+    )
+  if (!MIME_SHAPE.test(mime))
+    invalid("mime", "mime must be a type/subtype such as image/png")
+  if (ACTIVE_MIME_TYPES.has(mime) || mime.endsWith("/javascript"))
+    invalid("mime", "active content types are not allowed")
+  return mime
+}
+
+function attachmentData(
+  value: unknown,
+  noteID: string,
+  attachmentCount: number
+): { data: string; size: number } {
+  if (typeof value !== "string" || !value)
+    invalid("data", "data must be a non-empty base64 string")
+  if (value.length % 4 !== 0 || !BASE64_SHAPE.test(value))
+    invalid("data", "data must be valid base64")
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0
+  const size = (value.length / 4) * 3 - padding
+  if (size <= 0) invalid("data", "data must not be empty")
+  if (size > LIMITS.attachmentFileSize) {
+    throw new NotesError(
+      "attachment_limit",
+      `Attachments must be at most ${LIMITS.attachmentFileSize} bytes`,
+      { noteID, attachmentCount, size, limit: LIMITS.attachmentFileSize }
+    )
+  }
+  return { data: value, size }
 }
 
 /** Best-effort check; it runs inside the in-process mutation queue, not a CAS. */
@@ -287,6 +371,7 @@ export class NotesService {
         body,
         status,
         pinned,
+        attachments: [],
         revision: 1,
         createdAt: now,
         updatedAt: now,
@@ -334,6 +419,8 @@ export class NotesService {
         body: body ?? existing.body,
         status: status ?? existing.status,
         pinned: pinned ?? existing.pinned,
+        // Attachments change only through createAttachment/deleteAttachment.
+        attachments: existing.attachments,
         revision: existing.revision + 1,
         updatedAt: this.store.now(),
       }
@@ -351,8 +438,171 @@ export class NotesService {
       if (!existing) return { deleted: false }
       checkRevision("note", noteID, expectedRevision, existing.revision)
       await this.store.removeNote(noteID)
+      // Best-effort: a failed cleanup can leave orphaned attachment keys, but
+      // it must never resurrect or block the note deletion.
+      for (const attachment of existing.attachments) {
+        try {
+          await this.store.removeAttachment(attachment.id)
+        } catch {
+          // Ignored: orphan cleanup is not part of the delete contract.
+        }
+      }
       this.emit({ entity: "note", action: "deleted", id: noteID })
       return { deleted: true }
+    })
+  }
+
+  async createAttachment(
+    input: CreateAttachmentInput
+  ): Promise<{ note: Note; attachment: NoteAttachment }> {
+    const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    const expectedRevision = optionalRevision(input.expectedRevision)
+    return this.mutate(async () => {
+      const existing = await this.store.getNote(noteID)
+      if (!existing)
+        throw new NotesError("note_not_found", "Note not found", { noteID })
+      checkRevision("note", noteID, expectedRevision, existing.revision)
+
+      const name = attachmentName(input.name)
+      const mime = attachmentMime(input.mime)
+      const { data, size } = attachmentData(
+        input.data,
+        noteID,
+        existing.attachments.length + 1
+      )
+
+      if (existing.attachments.length >= LIMITS.attachmentCount) {
+        throw new NotesError(
+          "attachment_limit",
+          `A note can have at most ${LIMITS.attachmentCount} attachments`,
+          {
+            noteID,
+            attachmentCount: existing.attachments.length,
+            size,
+            limit: LIMITS.attachmentCount,
+          }
+        )
+      }
+
+      const total =
+        existing.attachments.reduce(
+          (sum, attachment) => sum + attachment.size,
+          0
+        ) + size
+      if (total > LIMITS.attachmentTotalSize) {
+        throw new NotesError(
+          "attachment_limit",
+          `A note's attachments must total at most ${LIMITS.attachmentTotalSize} bytes`,
+          {
+            noteID,
+            attachmentCount: existing.attachments.length + 1,
+            size: total,
+            limit: LIMITS.attachmentTotalSize,
+          }
+        )
+      }
+
+      const now = this.store.now()
+      const attachment: NoteAttachment = {
+        id: this.store.createID("attachment"),
+        name,
+        mime,
+        size,
+        createdAt: now,
+      }
+      await this.store.putAttachment(attachment.id, data)
+      const note: Note = {
+        ...existing,
+        attachments: [...existing.attachments, attachment],
+        revision: existing.revision + 1,
+        updatedAt: now,
+      }
+      try {
+        await this.store.putNote(note)
+      } catch (error) {
+        try {
+          await this.store.removeAttachment(attachment.id)
+        } catch {
+          // Ignored: the original write error is the useful one.
+        }
+        throw error
+      }
+      this.emit({ entity: "note", action: "updated", id: note.id })
+      return { note, attachment }
+    })
+  }
+
+  async readAttachment(
+    input: ReadAttachmentInput
+  ): Promise<ReadAttachmentOutput> {
+    const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    const attachmentID = requiredText(
+      input.attachmentID,
+      "attachmentID",
+      LIMITS.projectID
+    )
+    const note = await this.store.getNote(noteID)
+    if (!note)
+      throw new NotesError("note_not_found", "Note not found", { noteID })
+    const attachment = note.attachments.find(
+      (candidate) => candidate.id === attachmentID
+    )
+    if (!attachment) {
+      throw new NotesError("attachment_not_found", "Attachment not found", {
+        noteID,
+        attachmentID,
+      })
+    }
+    const data = await this.store.getAttachment(attachmentID)
+    if (data === undefined) {
+      throw new NotesError("attachment_not_found", "Attachment data not found", {
+        noteID,
+        attachmentID,
+      })
+    }
+    return { attachment, data }
+  }
+
+  async deleteAttachment(
+    input: DeleteAttachmentInput
+  ): Promise<DeleteAttachmentOutput> {
+    const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    const attachmentID = requiredText(
+      input.attachmentID,
+      "attachmentID",
+      LIMITS.projectID
+    )
+    const expectedRevision = optionalRevision(input.expectedRevision)
+    return this.mutate(async () => {
+      const existing = await this.store.getNote(noteID)
+      if (!existing)
+        throw new NotesError("note_not_found", "Note not found", { noteID })
+      checkRevision("note", noteID, expectedRevision, existing.revision)
+      const attachment = existing.attachments.find(
+        (candidate) => candidate.id === attachmentID
+      )
+      if (!attachment) {
+        throw new NotesError("attachment_not_found", "Attachment not found", {
+          noteID,
+          attachmentID,
+        })
+      }
+      const note: Note = {
+        ...existing,
+        attachments: existing.attachments.filter(
+          (candidate) => candidate.id !== attachmentID
+        ),
+        revision: existing.revision + 1,
+        updatedAt: this.store.now(),
+      }
+      await this.store.putNote(note)
+      this.emit({ entity: "note", action: "updated", id: note.id })
+      try {
+        await this.store.removeAttachment(attachmentID)
+      } catch {
+        // Ignored: the note no longer references the bytes; an orphan may remain.
+      }
+      return { note }
     })
   }
 

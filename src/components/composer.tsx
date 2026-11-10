@@ -94,6 +94,9 @@ import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
 import { Markdown } from "@/components/markdown"
+import { NoteReferencePicker } from "@/components/note-reference-picker"
+import type { NotesSnapshot } from "@/components/notes-panel"
+import { noteReferenceAttachment } from "@/lib/note-reference"
 import { fileQueryRange, fileReference } from "@/lib/file-references"
 import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer-editor"
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
@@ -258,11 +261,13 @@ export function Composer({
   modelSettingsOpen,
   onModelSettingsOpenChange,
   onOpenSettings,
+  notes,
 }: {
   nav: OpenCodeController
   modelSettingsOpen?: boolean
   onModelSettingsOpenChange?: (open: boolean) => void
   onOpenSettings?: () => void
+  notes?: { available: boolean; load: () => Promise<NotesSnapshot> } | null
 }) {
   recordPerfRender("Composer")
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
@@ -348,6 +353,7 @@ export function Composer({
   >({})
   const citationSequence = useRef(0)
   const [stashMenuOpen, setStashMenuOpen] = useState(false)
+  const [notePickerOpen, setNotePickerOpen] = useState(false)
   const [stashVersion, setStashVersion] = useState(0)
   const [feedbackSession, setFeedbackSession] = useState(draftKey)
   if (feedbackSession !== draftKey) {
@@ -1907,6 +1913,16 @@ export function Composer({
                 <FolderOpenIcon aria-hidden="true" className="size-4" />
                 Project files
               </DropdownMenuItem>
+              {notes?.available ? (
+                <DropdownMenuItem
+                  className="min-h-11"
+                  disabled={!activeSession}
+                  onClick={() => setNotePickerOpen(true)}
+                >
+                  <FileTextIcon aria-hidden="true" className="size-4" />
+                  Reference note
+                </DropdownMenuItem>
+              ) : null}
               {responding ? (
                 <DropdownMenuItem
                   className="min-h-11"
@@ -2190,6 +2206,32 @@ export function Composer({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {notes?.available ? (
+        <NoteReferencePicker
+          open={notePickerOpen}
+          onOpenChange={setNotePickerOpen}
+          load={notes.load}
+          onSelect={(note, spaceName) => {
+            attachmentSequenceRef.current += 1
+            const attachment = noteReferenceAttachment(
+              note,
+              spaceName,
+              `note-${attachmentSequenceRef.current}`
+            )
+            // An unchanged note produces the same URI; skip the duplicate.
+            if (nav.attachments.some((item) => item.uri === attachment.uri)) {
+              setAttachmentError(null)
+              return
+            }
+            const failure = nav.addAttachment(
+              attachment,
+              nav.activeSessionID ?? undefined
+            )
+            setAttachmentError(failure)
+            if (!failure) focusComposer()
+          }}
+        />
+      ) : null}
       <SessionCommandDialogs
         kind={sessionDialog}
         nav={nav}
