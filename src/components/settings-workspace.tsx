@@ -107,6 +107,29 @@ export function SettingsWorkspace({ nav }: { nav: OpenCodeController }) {
     }
   }, [updateEdges])
 
+  // Desktop mouse wheels (and shift+wheel) scroll the overflowing tab strip.
+  // Trackpad horizontal gestures and rows with nothing to scroll stay native.
+  // A native listener is required: React's delegated wheel handler is passive.
+  useEffect(() => {
+    const element = tabListRef.current
+    if (!element) return
+    const strip: HTMLDivElement = element
+    function handleWheel(event: WheelEvent) {
+      // Ctrl+wheel is zoom, never scroll.
+      if (event.ctrlKey) return
+      if (strip.scrollWidth - strip.clientWidth <= 1) return
+      // A horizontal gesture belongs to the trackpad; leave it to the browser.
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return
+      event.preventDefault()
+      const unit =
+        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? strip.clientWidth : 1
+      const delta = (event.deltaX + event.deltaY) * unit
+      strip.scrollLeft += delta * (documentDirection() === "rtl" ? -1 : 1)
+    }
+    strip.addEventListener("wheel", handleWheel, { passive: false })
+    return () => strip.removeEventListener("wheel", handleWheel)
+  }, [])
+
   // Move focus into the workspace on open; the shell restores it on close.
   useEffect(() => {
     if (settings.open) rootRef.current?.focus?.()

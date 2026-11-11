@@ -6,31 +6,41 @@ import { createWorktreeSession } from "../src/lib/worktree-session.ts"
 const dialogs = await readFile("src/components/integration-command-dialogs.tsx", "utf8")
 const dialog = await readFile("src/components/new-session-dialog.tsx", "utf8")
 
-test("each saved worktree can start a session in that worktree", () => {
-  expect(dialogs).toContain("onClick={() => void startSession(entry)}")
-  expect(dialogs).toContain('aria-label={`New session in ${entry.directory}`}')
+test("the worktree browser starts a session in the resolved project or worktree path", () => {
+  expect(dialogs).toContain("const target = useMemo(")
+  expect(dialogs).toContain('const result = await createWorktreeSession(\n        target.directory,\n        target.projectID,')
+  expect(dialogs).toContain("onClick={() => void startSession()}")
+  expect(dialogs).toContain("New session here")
   expect(dialogs).toContain("sessionPending.current = true")
   expect(dialogs).toContain("sessionPending.current || nav.creating")
   expect(dialogs).not.toContain("<NewSessionDialog")
   expect(dialogs).toMatch(/onSessionCreated\?\.\(\)\s*onResult\("Session created in the worktree\."\)/)
 })
 
-test("worktree session creation closes Notes from navigation and command center", async () => {
+test("worktree session creation closes Notes and Settings from navigation", async () => {
   const navigation = await readFile("src/components/session-nav.tsx", "utf8")
   const commandCenter = await readFile("src/components/command-center.tsx", "utf8")
-  expect(navigation.match(/onSessionCreated=\{notes\.closeNotes\}/g)).toHaveLength(2)
+  expect(
+    navigation.match(
+      /onSessionCreated=\{\(\) => \{ notes\.closeNotes\(\); settings\?\.requestClose\(\) \}\}/g
+    )
+  ).toHaveLength(2)
   expect(commandCenter).toContain("onSessionCreated={closeNotes}")
 })
 
-test("worktree rows show a derived name, the full path, and an icon-only 44px action", () => {
-  expect(dialogs).toContain("{worktreeDisplayName(entry.directory)}")
+test("worktree rows show a derived name, the full path, and an icon-only 44px remove action", () => {
+  expect(dialogs).toContain("name: worktreeDisplayName(entry.directory)")
+  expect(dialogs).toContain("{row.name}")
   expect(dialogs).toMatch(
-    /<p dir="ltr" className="[^"]*break-all[^"]*">\{entry\.directory\}/
+    /<span className="truncate text-xs text-muted-foreground" dir="auto" title=\{row\.directory\}>\s*\{row\.directory\}/
   )
   expect(dialogs).toMatch(
-    /size="icon-lg"\s*className="size-11"\s*aria-label=\{`New session in \$\{entry\.directory\}`\}/
+    /size="icon-lg"\s*className="size-11 shrink-0"\s*aria-label=\{`Remove \$\{row\.directory\}`\}/
   )
-  expect(dialogs).not.toMatch(/<PlusIcon[^>]*\/>\s*New session/)
+  expect(dialogs).toContain("data-worktree-worktree={row.directory}")
+  expect(dialogs).toContain("data-worktree-project={project.directory}")
+  expect(dialogs).toContain("data-worktree-base={browsedProject.directory}")
+  expect(dialogs).toContain('data-worktree-back=""')
 })
 
 function fixture(

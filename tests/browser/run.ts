@@ -34,6 +34,7 @@ type Result = {
 }
 
 const requests: ApiRequest[] = []
+const fsListRequests: string[] = []
 const notFound: string[] = []
 const results: Result[] = []
 
@@ -360,8 +361,31 @@ const server = Bun.serve({
       return json({ data: { branch: { current: "synthetic-main" } } })
     }
     if (pathname === "/api/fs/list") {
+      const location = url.searchParams.get("location[directory]") ?? ""
+      fsListRequests.push(location)
+      // One synthetic level per directory, so the space editor's drill-down has
+      // real children to walk into and files plus dot-directories to ignore.
+      const levels: Record<string, { path: string; type: string }[]> = {
+        "/": [
+          { path: "home", type: "directory" },
+          { path: "synthetic", type: "directory" },
+          { path: ".cache", type: "directory" },
+          { path: "notes.txt", type: "file" },
+        ],
+        "/synthetic": [
+          { path: "alpha", type: "directory" },
+          { path: "notes", type: "directory" },
+          { path: "secret", type: "directory" },
+          { path: ".git", type: "directory" },
+          { path: "README.md", type: "file" },
+        ],
+        "/synthetic/alpha": [
+          { path: "src", type: "directory" },
+          { path: "README.md", type: "file" },
+        ],
+      }
       return json({
-        data: [
+        data: levels[location] ?? [
           { path: "src", type: "directory" },
           { path: "README.md", type: "file" },
         ],
@@ -384,6 +408,7 @@ const server = Bun.serve({
       return json([
         { id: "p-alpha", canonical: "/synthetic/alpha" },
         { id: "p-notes", canonical: "/synthetic/notes" },
+        { id: "p-location", canonical: "/synthetic/location" },
       ])
     }
     if (pathname.startsWith("/api/")) {
@@ -715,6 +740,7 @@ if (browser) {
 
       await page.getByRole("button", { name: "Session actions: Alpha" }).click()
       await page.getByRole("menuitem", { name: "Pin session" }).click()
+      await page.getByRole("menuitem", { name: "Pin session" }).waitFor({ state: "detached" })
       const storage = await page.evaluate(() => {
         const key = `opencode-ui:session-shortcuts:v1:${encodeURIComponent(
           window.location.origin
@@ -727,12 +753,12 @@ if (browser) {
         `${storage.key}=${storage.value}`
       )
 
-      await page.getByRole("button", { name: "Session actions: Alpha" }).click()
+      await page.getByRole("region", { name: "Pinned sessions" }).getByRole("button", { name: "Session actions: Alpha" }).click()
       await page.getByRole("menuitem", { name: "Edit local label" }).click()
       await page.getByRole("heading", { name: "Edit local label" }).waitFor()
       await page.getByLabel("Local session label").fill("Synthetic label")
       await page.getByRole("button", { name: "Save label" }).click()
-      await page.getByText("Synthetic label", { exact: true }).waitFor({ state: "visible" })
+      await page.getByText("Synthetic label", { exact: true }).first().waitFor({ state: "visible" })
       const labelRecord = await page.evaluate(() => {
         const key = `opencode-ui:session-shortcuts:v1:${encodeURIComponent(
           window.location.origin
@@ -750,10 +776,15 @@ if (browser) {
         "pinned group appears once a session is pinned",
         await pinnedGroup.isVisible()
       )
+      check(
+        "pinned sessions default expanded and still show in their date group",
+        (await page.locator('button[title="s-alpha"]').count()) === 2,
+        `rows=${await page.locator('button[title="s-alpha"]').count()}`
+      )
       await pinnedGroup.click()
       check(
-        "pinned sessions still show in their date group",
-        (await page.locator('button[title="s-alpha"]').count()) === 2,
+        "collapsing the pinned group hides only its rows",
+        (await page.locator('button[title="s-alpha"]').count()) === 1,
         `rows=${await page.locator('button[title="s-alpha"]').count()}`
       )
       await pinnedGroup.click()
@@ -785,7 +816,7 @@ if (browser) {
       })
       check(
         "expanding the desktop sidebar restores the session list",
-        await page.locator('button[title="s-alpha"]').isVisible()
+        await page.locator('button[title="s-alpha"]').first().isVisible()
       )
 
       await page.getByRole("button", { name: /^Pinned sessions/ }).click()
@@ -841,6 +872,10 @@ if (browser) {
         requests.every((entryRequest) => entryRequest.method === "GET"),
         JSON.stringify(requests)
       )
+      await page.getByLabel("Project or worktree directory").click()
+      if ((await page.getByRole("button", { name: "Back to projects" }).count()) === 0) {
+        await page.getByText("/synthetic/alpha", { exact: true }).first().click()
+      }
       await page.getByText("/synthetic/worktrees/alpha").waitFor({ state: "visible" })
 
       await page.getByRole("button", { name: "Close", exact: true }).first().click()
@@ -2359,6 +2394,8 @@ if (browser) {
           name: row.querySelector("p")?.textContent?.trim() ?? "",
           scope: row.querySelector<HTMLElement>("[data-space-scope]")?.dataset.spaceScope ?? "",
           badge: row.querySelector("[data-space-scope]")?.textContent?.trim() ?? "",
+          path: row.querySelector<HTMLElement>("[data-space-path]")?.dataset.spacePath ?? "",
+          pathTitle: row.querySelector<HTMLElement>("[data-space-path]")?.getAttribute("title") ?? "",
         }))
       )
       check("each space is listed exactly once", rows.length === 2 && new Set(rows.map((row) => row.id)).size === 2, JSON.stringify(rows))
@@ -2369,6 +2406,16 @@ if (browser) {
         "the project space carries its directory basename",
         work?.scope === "project" && work.badge === "notes",
         JSON.stringify(work)
+      )
+      check(
+        "the project space shows its absolute path",
+        work?.path === "/synthetic/notes" && work.pathTitle === "/synthetic/notes",
+        JSON.stringify(work)
+      )
+      check(
+        "a Global space shows only the Global badge",
+        ideas?.path === "" && ideas.pathTitle === "",
+        JSON.stringify(ideas)
       )
 
       const trigger = page.getByRole("button", {
@@ -2463,9 +2510,16 @@ if (browser) {
       const directory = page.getByRole("textbox", { name: "Project directory" })
       await directory.waitFor({ state: "visible" })
       check("a new space starts empty, meaning Global", (await directory.inputValue()) === "")
-      await page.locator('[data-space-directory="/synthetic/alpha"]').waitFor({ state: "visible" })
+      check(
+        "the directory options stay hidden until the field is used",
+        (await page.locator("[data-space-directory-options]").count()) === 0
+      )
 
-      const rows = await page.locator("[data-space-directory]").evaluateAll((nodes) =>
+      await directory.click()
+      await page.locator("[data-space-directory-options]").waitFor({ state: "visible" })
+      await page.locator('[data-space-directory="/synthetic"]').waitFor({ state: "visible" })
+
+      const rootRows = await page.locator("[data-space-directory]").evaluateAll((nodes) =>
         nodes.map((node) => ({
           path: node.getAttribute("data-space-directory") ?? "",
           text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
@@ -2473,21 +2527,73 @@ if (browser) {
       )
       check(
         "the option list starts with Global",
-        rows[0]?.path === "" && rows[0].text.includes("Visible in every project"),
-        JSON.stringify(rows)
+        rootRows[0]?.path === "" && rootRows[0].text.includes("Visible in every project"),
+        JSON.stringify(rootRows)
       )
       check(
-        "engine projects and the workspace directory are offered",
-        rows.some((row) => row.path === "/synthetic/alpha") &&
-          rows.some((row) => row.path === "/synthetic/notes"),
-        JSON.stringify(rows)
+        "the root level lists only its subdirectories",
+        JSON.stringify(rootRows.map((row) => row.path)) === JSON.stringify(["", "/home", "/synthetic"]),
+        JSON.stringify(rootRows)
+      )
+      check(
+        "files and hidden dot-directories are not listed",
+        !rootRows.some((row) => row.path === "/notes.txt" || row.path === "/.cache"),
+        JSON.stringify(rootRows)
       )
       check(
         "each directory row names its basename and full path",
-        rows.some(
-          (row) => row.path === "/synthetic/alpha" && row.text.includes("alpha") && row.text.includes("/synthetic/alpha")
+        rootRows.some(
+          (row) =>
+            row.path === "/synthetic" &&
+            row.text.includes("synthetic") &&
+            row.text.includes("/synthetic")
         ),
-        JSON.stringify(rows)
+        JSON.stringify(rootRows)
+      )
+
+      await page.locator('[data-space-directory="/synthetic"]').click()
+      check(
+        "drilling into a row fills the input with its path",
+        (await directory.inputValue()) === "/synthetic"
+      )
+      await page.locator('[data-space-directory="/synthetic/alpha"]').waitFor({ state: "visible" })
+      const childRows = await page
+        .locator("[data-space-directory]")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-space-directory") ?? ""))
+      check(
+        "the browser lists the drilled directory's children",
+        ["/synthetic/alpha", "/synthetic/notes", "/synthetic/secret"].every((path) =>
+          childRows.includes(path)
+        ) && !childRows.includes("/synthetic/.git"),
+        JSON.stringify(childRows)
+      )
+      check(
+        "the drill-down lists levels through /api/fs/list",
+        fsListRequests.includes("/") && fsListRequests.includes("/synthetic"),
+        JSON.stringify(fsListRequests)
+      )
+
+      await page.locator('[data-space-directory-parent="/"]').click()
+      check(
+        "the up row fills the input with the parent path",
+        (await directory.inputValue()) === "/"
+      )
+      check(
+        "the up row disappears at the filesystem root",
+        (await page.locator("[data-space-directory-parent]").count()) === 0
+      )
+      await page.locator('[data-space-directory="/synthetic"]').waitFor({ state: "visible" })
+
+      await page.locator('[data-space-directory="/synthetic"]').click()
+      await page.locator('[data-space-directory="/synthetic/alpha"]').click()
+      check(
+        "drilling again follows the second level",
+        (await directory.inputValue()) === "/synthetic/alpha"
+      )
+      await page.locator('[data-space-directory-parent="/synthetic"]').click()
+      check(
+        "the up row returns to the previous level",
+        (await directory.inputValue()) === "/synthetic"
       )
 
       await directory.fill("/synthetic/newproj")
@@ -2500,6 +2606,12 @@ if (browser) {
       check(
         "the custom row fills the input",
         (await directory.inputValue()) === "/synthetic/newproj"
+      )
+
+      await page.getByRole("textbox", { name: "Name", exact: true }).click()
+      check(
+        "leaving the field hides the directory options",
+        (await page.locator("[data-space-directory-options]").count()) === 0
       )
 
       await page.getByRole("button", { name: "Save space" }).click()
@@ -2561,6 +2673,97 @@ if (browser) {
       await page.getByRole("button", { name: "Back to Notes" }).click()
       await page.getByRole("button", { name: "Open Bugs" }).waitFor({ state: "visible" })
       check("Back to Notes returns to the list", true)
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("notes filter pills scroll sideways with a mouse wheel", async ({ check }) => {
+    const opened = await openPage({ width: 390, height: 844 }, "notes")
+    const page = opened.page
+    try {
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      const wheel = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-notes-status-filters]")
+        if (!row) return null
+        const before = row.scrollLeft
+        const event = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true })
+        const dispatched = row.dispatchEvent(event)
+        return {
+          overflow: row.scrollWidth - row.clientWidth,
+          before,
+          after: row.scrollLeft,
+          prevented: event.defaultPrevented,
+          canceled: !dispatched,
+        }
+      })
+      check("the status filter row overflows horizontally", Boolean(wheel && wheel.overflow > 0), JSON.stringify(wheel))
+      check(
+        "a vertical wheel scrolls the pill row sideways",
+        Boolean(wheel && wheel.after > wheel.before),
+        JSON.stringify(wheel)
+      )
+      check(
+        "the translated wheel prevents the page scroll instead",
+        Boolean(wheel && wheel.prevented && wheel.canceled),
+        JSON.stringify(wheel)
+      )
+
+      const horizontal = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-notes-status-filters]")
+        if (!row) return null
+        row.scrollLeft = 0
+        const event = new WheelEvent("wheel", { deltaX: 120, deltaY: 0, bubbles: true, cancelable: true })
+        const dispatched = row.dispatchEvent(event)
+        return { after: row.scrollLeft, prevented: event.defaultPrevented, canceled: !dispatched }
+      })
+      check(
+        "a trackpad horizontal gesture keeps its native behaviour",
+        Boolean(horizontal && !horizontal.prevented && !horizontal.canceled && horizontal.after === 0),
+        JSON.stringify(horizontal)
+      )
+
+      const rtl = await openPage({ width: 390, height: 844 }, "notes", undefined, { dir: "rtl" })
+      try {
+        await rtl.page
+          .getByRole("button", { name: "Open Release plan" })
+          .waitFor({ state: "visible" })
+        await rtl.page.evaluate(() =>
+          document.documentElement.setAttribute("dir", "rtl")
+        )
+        await rtl.page.waitForFunction(() => {
+          const row = document.querySelector("[data-notes-status-filters]")
+          return Boolean(row && getComputedStyle(row).direction === "rtl")
+        })
+        const reversed = await rtl.page.evaluate(() => {
+          const row = document.querySelector<HTMLElement>("[data-notes-status-filters]")
+          if (!row) return null
+          const before = row.scrollLeft
+          const event = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true })
+          const dispatched = row.dispatchEvent(event)
+          return {
+            direction: getComputedStyle(row).direction,
+            before,
+            after: row.scrollLeft,
+            prevented: event.defaultPrevented,
+            canceled: !dispatched,
+          }
+        })
+        check(
+          "the RTL pill row scrolls forward with a vertical wheel",
+          Boolean(
+            reversed &&
+              reversed.direction === "rtl" &&
+              reversed.prevented &&
+              reversed.canceled &&
+              Math.abs(reversed.after) > Math.abs(reversed.before)
+          ),
+          JSON.stringify(reversed)
+        )
+      } finally {
+        await rtl.context.close()
+      }
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
     } finally {
       await opened.context.close()

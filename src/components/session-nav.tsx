@@ -965,7 +965,7 @@ function SessionList({
             </Accordion>
           ) : null}
           {!searching && pinnedRows.length > 0 ? (
-            <Accordion className="space-y-2 py-1">
+            <Accordion defaultValue={["pinned"]} className="space-y-2 py-1">
               <AccordionSection
                 value="pinned"
                 title="Pinned sessions"
@@ -1185,6 +1185,7 @@ function SessionsHeader({
 export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionSidebar")
   const notes = useNotesWorkspace()
+  const settings = useOptionalSettingsWorkspace()
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
@@ -1285,13 +1286,13 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
           <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
         )}
       </div>
-      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
+      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => { notes.closeNotes(); settings?.requestClose() }} />
       {collapsed ? null : (
         <>
           <ProjectPanel nav={nav} className="mt-6" />
           <ScrollArea className="mt-2 min-h-0 flex-1">
             <div className="px-3"><NotesSidebar /></div>
-            <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); nav.selectSession(sessionID) }} />
+            <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); settings?.requestClose(); nav.selectSession(sessionID) }} />
           </ScrollArea>
         </>
       )}
@@ -1380,6 +1381,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
             nav={nav}
             onSelect={(sessionID) => {
               notes.closeNotes()
+              settings?.requestClose()
               nav.selectSession(sessionID)
               setOpen(false)
             }}
@@ -1395,7 +1397,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         </SheetFooter>
       </SheetContent>
     </Sheet>
-    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
+    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => { notes.closeNotes(); settings?.requestClose() }} />
     </>
   )
 }

@@ -19,10 +19,12 @@ import {
 } from "../src/components/notes-panel"
 import {
   SpaceDirectoryField,
-  projectDirectoriesFrom,
+  browseDirectory,
+  canonicalDirectory,
+  parentDirectory,
   spaceDirectoryError,
   spaceDirectoryValue,
-  uniqueDirectories,
+  subdirectoryPaths,
 } from "../src/components/notes-space-editor"
 import { NoteStatusLabel } from "../src/components/note-status-label"
 import {
@@ -603,7 +605,6 @@ async function renderDirectoryField(props) {
       React.createElement(SpaceDirectoryField, {
         id: "space-directory",
         value: "",
-        directories: [],
         onChange() {},
         ...props,
       })
@@ -617,88 +618,265 @@ const directoryRows = (root) =>
     .findAllByType("button")
     .filter((node) => typeof node.props["data-space-directory"] === "string")
 
-test("the space editor lists Global first, then known directories, and prefills edits", async () => {
+const directoryPaths = (root) =>
+  directoryRows(root).map((row) => row.props["data-space-directory"])
+
+const optionsOpen = (root) =>
+  root.root.findAllByProps({ "data-space-directory-options": true }).length > 0
+
+/** The drill-down fetches one level behind a small debounce. */
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  })
+
+const treeFetch = (trees) => {
+  const requests = []
+  const fetch = async (url) => {
+    const parsed = new URL(String(url), "http://localhost")
+    const location = parsed.searchParams.get("location[directory]") ?? "/"
+    requests.push({ url: parsed.pathname, location })
+    return new Response(JSON.stringify({ data: trees[location] ?? [] }), {
+      headers: { "content-type": "application/json" },
+    })
+  }
+  return { requests, fetch }
+}
+
+test("the space editor hides options until used and browses one level at a time", async () => {
   const restore = environment()
+  const previousFetch = globalThis.fetch
+  const { requests, fetch } = treeFetch({
+    "/": [
+      { path: "home", type: "directory" },
+      { path: "synthetic", type: "directory" },
+      { path: "notes.txt", type: "file" },
+    ],
+    "/synthetic": [
+      { path: "alpha", type: "directory" },
+      { path: "notes", type: "directory" },
+      { path: ".git", type: "directory" },
+    ],
+    "/synthetic/alpha": [{ path: "src", type: "directory" }],
+  })
+  globalThis.fetch = fetch
+  const changes = []
   let root
   try {
-    root = await renderDirectoryField({
-      value: "/synthetic/work",
-      directories: ["/synthetic/work", "/synthetic/alpha"],
-    })
+    root = await renderDirectoryField({ onChange: (next) => changes.push(next) })
+    expect(optionsOpen(root)).toBe(false)
     const input = root.root.findByType("input")
-    expect(input.props.value).toBe("/synthetic/work")
+    expect(input.props.value).toBe("")
     expect(input.props.placeholder).toBe("Empty = Global (every project)")
     expect(input.props.dir).toBe("ltr")
-    const label = root.root.findAllByType("label")[0]
-    expect(label.children).toContain("Project directory")
+    expect(root.root.findAllByType("label")[0].children).toContain("Project directory")
+    expect(requests).toHaveLength(0)
 
-    const rows = directoryRows(root)
-    expect(rows.map((row) => row.props["data-space-directory"])).toEqual([
-      "",
-      "/synthetic/work",
-      "/synthetic/alpha",
-    ])
-    expect(rows[0].props["aria-pressed"]).toBe(false)
-    expect(rows[1].props["aria-pressed"]).toBe(true)
+    await act(async () => input.props.onFocus())
+    expect(optionsOpen(root)).toBe(true)
+    await settle()
+    expect(requests.at(-1)).toEqual({ url: "/api/fs/list", location: "/" })
+    expect(directoryPaths(root)).toEqual(["", "/home", "/synthetic"])
+
+    await act(async () =>
+      directoryRows(root)
+        .find((row) => row.props["data-space-directory"] === "/synthetic")
+        .props.onClick()
+    )
+    expect(changes.at(-1)).toBe("/synthetic")
+    await settle()
+    expect(requests.at(-1).location).toBe("/synthetic")
+    expect(directoryPaths(root)).toEqual(["", "/synthetic/alpha", "/synthetic/notes"])
+    const up = root.root
+      .findAllByType("button")
+      .find((node) => node.props["data-space-directory-parent"] === "/")
+    expect(up).toBeDefined()
+
+    await act(async () => up.props.onClick())
+    expect(changes.at(-1)).toBe("/")
+    await settle()
+    expect(requests.at(-1).location).toBe("/")
+    expect(directoryPaths(root)).toEqual(["", "/home", "/synthetic"])
+    expect(
+      root.root.findAllByType("button").some(
+        (node) => node.props["data-space-directory-parent"] !== undefined
+      )
+    ).toBe(false)
+
     const text = JSON.stringify(root.toJSON())
-    expect(text).toContain("Global")
     expect(text).toContain("Visible in every project")
-    expect(text).toContain("/synthetic/alpha")
     expect(text).toContain("Any absolute path works, even before the folder exists.")
   } finally {
     if (root) await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
     restore()
   }
 })
 
-test("typing filters directories and offers an exact custom path", async () => {
+test("editing a space starts browsing its parent and keeps siblings visible", async () => {
   const restore = environment()
+  const previousFetch = globalThis.fetch
+  const { requests, fetch } = treeFetch({
+    "/synthetic": [
+      { path: "alpha", type: "directory" },
+      { path: "notes", type: "directory" },
+    ],
+  })
+  globalThis.fetch = fetch
   let root
-  const directories = ["/synthetic/alpha", "/synthetic/work"]
   try {
-    root = await renderDirectoryField({ value: "/ALPHA", directories })
-    expect(directoryRows(root).map((row) => row.props["data-space-directory"])).toEqual([
+    root = await renderDirectoryField({ value: "/synthetic/notes" })
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    expect(requests.at(-1).location).toBe("/synthetic")
+    expect(directoryPaths(root)).toEqual([
       "",
       "/synthetic/alpha",
+      "/synthetic/notes",
     ])
+    const notes = directoryRows(root).find(
+      (row) => row.props["data-space-directory"] === "/synthetic/notes"
+    )
+    expect(notes.props["aria-pressed"]).toBe(true)
+    expect(
+      root.root.findAllByType("button").filter(
+        (node) => node.props["data-space-directory-custom"] !== undefined
+      )
+    ).toHaveLength(0)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    restore()
+  }
+})
+
+test("typing filters the current level and offers an exact custom path", async () => {
+  const restore = environment()
+  const previousFetch = globalThis.fetch
+  const { fetch } = treeFetch({
+    "/synthetic": [
+      { path: "alpha", type: "directory" },
+      { path: "notes", type: "directory" },
+      { path: "work", type: "directory" },
+      { path: "worktrees", type: "directory" },
+    ],
+  })
+  globalThis.fetch = fetch
+  let root
+  try {
+    root = await renderDirectoryField({ value: "/synthetic/alp" })
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    expect(directoryPaths(root)).toEqual(["", "/synthetic/alpha"])
+    expect(
+      root.root.findAllByType("button").some(
+        (node) => node.props["data-space-directory-custom"] === "/synthetic/alp"
+      )
+    ).toBe(true)
     await act(async () => root.unmount())
     root = undefined
 
     const changes = []
     root = await renderDirectoryField({
       value: "/synthetic/work",
-      directories,
       onChange: (next) => changes.push(next),
     })
-    // An exact match needs no custom row.
-    expect(
-      root.root
-        .findAllByType("button")
-        .filter((node) => node.props["data-space-directory-custom"] !== undefined)
-    ).toHaveLength(0)
-    await act(async () => directoryRows(root)[1].props.onClick())
-    expect(changes.at(-1)).toBe("/synthetic/alpha")
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    // An exact match is the current selection, so every sibling stays in reach.
+    expect(directoryPaths(root)).toEqual([
+      "",
+      "/synthetic/alpha",
+      "/synthetic/notes",
+      "/synthetic/work",
+      "/synthetic/worktrees",
+    ])
+    await act(async () => directoryRows(root)[2].props.onClick())
+    expect(changes.at(-1)).toBe("/synthetic/notes")
     await act(async () => directoryRows(root)[0].props.onClick())
     expect(changes.at(-1)).toBe("")
     await act(async () => root.unmount())
     root = undefined
 
     root = await renderDirectoryField({
-      value: "/not/created/yet",
-      directories,
+      value: "/synthetic/not-built-yet",
       onChange: (next) => changes.push(next),
     })
-    expect(JSON.stringify(root.toJSON())).toContain("Use custom path: ")
-    const custom = root.root.findAllByType("button").find((node) => node.props["data-space-directory-custom"] === "/not/created/yet")
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    expect(
+      root.root.findAllByType("button").some(
+        (node) => node.props["data-space-directory-custom"] === "/synthetic/not-built-yet"
+      )
+    ).toBe(true)
+    const custom = root.root
+      .findAllByType("button")
+      .find(
+        (node) =>
+          node.props["data-space-directory-custom"] === "/synthetic/not-built-yet"
+      )
     await act(async () => custom.props.onClick())
-    expect(changes.at(-1)).toBe("/not/created/yet")
+    expect(changes.at(-1)).toBe("/synthetic/not-built-yet")
   } finally {
     if (root) await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
     restore()
   }
 })
 
-test("space directories must be absolute but need not exist yet", async () => {
+test("a failed directory listing keeps Global and custom paths usable", async () => {
+  const restore = environment()
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response("unavailable", { status: 503 })
+  const changes = []
+  let root
+  try {
+    root = await renderDirectoryField({
+      value: "/synthetic/new-space",
+      onChange: (next) => changes.push(next),
+    })
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    expect(optionsOpen(root)).toBe(true)
+    expect(JSON.stringify(root.toJSON())).toContain("Could not list this directory.")
+    expect(directoryPaths(root)).toContain("")
+    const custom = root.root
+      .findAllByType("button")
+      .find(
+        (node) => node.props["data-space-directory-custom"] === "/synthetic/new-space"
+      )
+    await act(async () => custom.props.onClick())
+    expect(changes.at(-1)).toBe("/synthetic/new-space")
+    await act(async () => directoryRows(root)[0].props.onClick())
+    expect(changes.at(-1)).toBe("")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    restore()
+  }
+})
+
+test("the space editor hides its options when focus leaves the field", async () => {
+  const restore = environment()
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  let root
+  try {
+    root = await renderDirectoryField({})
+    await act(async () => root.root.findByType("input").props.onFocus())
+    await settle()
+    expect(optionsOpen(root)).toBe(true)
+    const field = root.root.findByProps({ className: "grid min-w-0 gap-1.5" })
+    await act(async () => field.props.onBlur({ relatedTarget: null }))
+    expect(optionsOpen(root)).toBe(false)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    restore()
+  }
+})
+
+test("space directories must be absolute but need not exist yet", () => {
   expect(spaceDirectoryError(null)).toBeNull()
   expect(spaceDirectoryError("   ")).toBeNull()
   expect(spaceDirectoryError("/synthetic/new")).toBeNull()
@@ -707,32 +885,48 @@ test("space directories must be absolute but need not exist yet", async () => {
   expect(spaceDirectoryValue("  /synthetic/new  ")).toBe("/synthetic/new")
   expect(spaceDirectoryValue("   ")).toBeNull()
   expect(spaceDirectoryValue(null)).toBeNull()
+})
 
+test("relative paths show the validation error while options stay closed", async () => {
   const restore = environment()
   let root
   try {
-    root = await renderDirectoryField({ value: "relative/path", directories: [] })
+    root = await renderDirectoryField({ value: "relative/path" })
     const alert = root.root.findAllByProps({ role: "alert" })[0]
     expect(alert.children).toContain("Use an absolute path starting with /")
     expect(root.root.findByType("input").props["aria-invalid"]).toBe(true)
+    expect(optionsOpen(root)).toBe(false)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()
   }
 })
 
-test("engine projects and the workspace directory supply the space editor options", () => {
-  expect(projectDirectoriesFrom([
-    { canonical: "/synthetic/work" },
-    { canonical: "/synthetic/work/" },
-    { canonical: "/synthetic/alpha" },
-    { canonical: "" },
-    null,
-    { id: "no-canonical" },
-  ])).toEqual(["/synthetic/work", "/synthetic/alpha"])
-  expect(projectDirectoriesFrom({ projects: [] })).toEqual([])
-  expect(uniqueDirectories("/synthetic/work", null, "/synthetic/notes", "/synthetic/work/", "")).toEqual([
-    "/synthetic/work",
-    "/synthetic/notes",
+test("directory browsing resolves parents and relative child paths", () => {
+  expect(canonicalDirectory("/synthetic/work/")).toBe("/synthetic/work")
+  expect(canonicalDirectory("/")).toBe("/")
+  expect(parentDirectory("/synthetic/work")).toBe("/synthetic")
+  expect(parentDirectory("/synthetic")).toBe("/")
+  expect(parentDirectory("/")).toBeNull()
+  expect(browseDirectory("")).toBe("/")
+  expect(browseDirectory("  /synthetic/work  ")).toBe("/synthetic")
+  expect(browseDirectory("relative/path")).toBe("/")
+  expect(browseDirectory("/")).toBe("/")
+  expect(
+    subdirectoryPaths("/synthetic", {
+      data: [
+        { path: "alpha", type: "directory" },
+        { path: "alpha/", type: "directory" },
+        { path: ".git", type: "directory" },
+        { path: "README.md", type: "file" },
+        { path: "/synthetic/notes", type: "directory" },
+        null,
+      ],
+    })
+  ).toEqual(["/synthetic/alpha", "/synthetic/notes"])
+  expect(subdirectoryPaths("/", { data: [{ path: "synthetic", type: "directory" }] })).toEqual([
+    "/synthetic",
   ])
+  expect(subdirectoryPaths("/synthetic", { data: "not-a-list" })).toEqual([])
+  expect(subdirectoryPaths("/synthetic", null)).toEqual([])
 })

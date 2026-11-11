@@ -323,3 +323,299 @@ describe("event matching", () => {
     expect(matchesKeybinding(keyboardEvent({ key: "/", metaKey: true }), slash, "mac")).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Settings → Keys renders shortcuts as a table whose key cells capture combos.
+// ---------------------------------------------------------------------------
+
+const nodeText = (node) =>
+  (node.children ?? [])
+    .map((child) => (typeof child === "string" ? child : nodeText(child)))
+    .join("")
+
+function fakeBrowser() {
+  const windowListeners = new Map()
+  const documentListeners = new Map()
+  const entries = new Map()
+  const register = (registry) => (type, handler) => {
+    const handlers = registry.get(type) ?? new Set()
+    handlers.add(handler)
+    registry.set(type, handlers)
+  }
+  const unregister = (registry) => (type, handler) => {
+    registry.get(type)?.delete(handler)
+  }
+  const storage = {
+    getItem: (key) => (entries.has(key) ? entries.get(key) : null),
+    setItem: (key, value) => entries.set(key, String(value)),
+    removeItem: (key) => entries.delete(key),
+  }
+  const fakeWindow = {
+    location: { origin: "https://ui.test" },
+    localStorage: storage,
+    addEventListener: register(windowListeners),
+    removeEventListener: unregister(windowListeners),
+    dispatchEvent(event) {
+      for (const handler of windowListeners.get(event.type) ?? []) handler(event)
+    },
+  }
+  const fakeDocument = {
+    addEventListener: register(documentListeners),
+    removeEventListener: unregister(documentListeners),
+  }
+  return {
+    window: fakeWindow,
+    document: fakeDocument,
+    storage,
+    entries,
+    windowListeners,
+    documentListeners,
+  }
+}
+
+async function mountKeybindings() {
+  const browser = fakeBrowser()
+  const previous = {
+    window: globalThis.window,
+    document: globalThis.document,
+    localStorage: globalThis.localStorage,
+    act: globalThis.IS_REACT_ACT_ENVIRONMENT,
+  }
+  globalThis.window = browser.window
+  globalThis.localStorage = browser.storage
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+  const React = await import("react")
+  const { act } = React
+  const { create } = await import("react-test-renderer")
+  const { KeybindingsSettings } = await import(
+    "../src/components/keybindings-settings"
+  )
+
+  // Import first: Base UI chooses its layout-effect implementation from
+  // `typeof document` at module load, so the fake document must come later.
+  globalThis.document = browser.document
+
+  let root
+  await act(async () => {
+    root = create(React.createElement(KeybindingsSettings))
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  return {
+    browser,
+    root,
+    act,
+    storageKey: keybindingStorageKey("https://ui.test"),
+    async restore() {
+      if (root) await act(async () => root.unmount())
+      for (const [name, value] of Object.entries(previous)) {
+        const key = name === "act" ? "IS_REACT_ACT_ENVIRONMENT" : name
+        if (value === undefined) delete globalThis[key]
+        else globalThis[key] = value
+      }
+    },
+  }
+}
+
+const keyCells = (root) =>
+  root.root
+    .findAllByType("button")
+    .filter((node) =>
+      /^(Change keybind for|Press keys for) /.test(node.props["aria-label"] ?? "")
+    )
+
+const storedBindings = (browser, storageKey) => {
+  const raw = browser.storage.getItem(storageKey)
+  return raw === null ? null : JSON.parse(raw)
+}
+
+const dispatchKey = async (browser, act, overrides = {}) => {
+  const handlers = [...(browser.windowListeners.get("keydown") ?? [])]
+  const event = {
+    key: "p",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    isComposing: false,
+    keyCode: 0,
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true
+    },
+    stopPropagation() {},
+    ...overrides,
+  }
+  await act(async () => {
+    for (const handler of handlers) handler(event)
+  })
+  return event
+}
+
+const dispatchMouseDown = async (browser, act, target) => {
+  const handlers = [...(browser.documentListeners.get("mousedown") ?? [])]
+  await act(async () => {
+    for (const handler of handlers) handler({ target })
+  })
+}
+
+describe("keybindings table", () => {
+  test("renders one row per shortcut with header, scope, and key cells", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root } = mounted
+      const table = root.root.findByProps({ role: "table" })
+      expect(table.props["aria-label"]).toBe("Keyboard shortcuts")
+
+      expect(
+        root.root.findAllByProps({ role: "columnheader" }).map(nodeText)
+      ).toEqual(["Shortcut", "Scope", "Keys"])
+      expect(root.root.findAllByProps({ role: "row" })).toHaveLength(5)
+      expect(root.root.findAllByProps({ role: "cell" })).toHaveLength(12)
+
+      // The old per-row button is gone; the key cell is the control.
+      expect(
+        root.root.findAllByType("button").filter((node) => nodeText(node) === "Change")
+      ).toHaveLength(0)
+      expect(keyCells(root)).toHaveLength(4)
+      expect(keyCells(root)[0].props["aria-label"]).toBe(
+        "Change keybind for Open inspector Command, currently Mod+K"
+      )
+      expect(keyCells(root)[3].props["aria-label"]).toBe(
+        "Change keybind for Send and start a fresh draft, currently Mod+Enter"
+      )
+      expect(
+        keyCells(root).map((node) => nodeText(node.findAllByType("kbd")[0]))
+      ).toEqual(["Mod+K", "Mod+F", "Mod+S", "Mod+Enter"])
+      // Every key cell keeps a 44px target.
+      for (const cell of keyCells(root)) {
+        expect(cell.props.className).toContain("min-h-11")
+      }
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("a captured combo auto-saves and swaps the cell to the new shortcut", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      await act(async () => keyCells(root)[0].props.onClick())
+      expect(JSON.stringify(root.toJSON())).toContain("Press keys…")
+      expect(keyCells(root)[0].props["aria-label"]).toBe(
+        "Press keys for Open inspector Command"
+      )
+
+      const event = await dispatchKey(browser, act, {
+        key: "p",
+        metaKey: true,
+        shiftKey: true,
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(storedBindings(browser, storageKey)[0]).toEqual({
+        command: "command.open",
+        key: "p",
+        mod: true,
+        ctrl: false,
+        alt: false,
+        shift: true,
+        when: "global",
+      })
+      expect(keyCells(root)).toHaveLength(4)
+      expect(keyCells(root)[0].props["aria-label"]).toBe(
+        "Change keybind for Open inspector Command, currently Mod+Shift+P"
+      )
+      expect(JSON.stringify(root.toJSON())).not.toContain("Press keys…")
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("Escape cancels capture and writes nothing", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      await act(async () => keyCells(root)[1].props.onClick())
+      expect(JSON.stringify(root.toJSON())).toContain("Press keys…")
+
+      await dispatchKey(browser, act, { key: "Escape" })
+      expect(JSON.stringify(root.toJSON())).not.toContain("Press keys…")
+      expect(storedBindings(browser, storageKey)).toBeNull()
+      expect(keyCells(root)[1].props["aria-label"]).toBe(
+        "Change keybind for Find in conversation, currently Mod+F"
+      )
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("a press outside the capturing cell cancels without saving", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      await act(async () => keyCells(root)[2].props.onClick())
+      expect(JSON.stringify(root.toJSON())).toContain("Press keys…")
+
+      await dispatchMouseDown(browser, act, { nodeType: 1 })
+      expect(JSON.stringify(root.toJSON())).not.toContain("Press keys…")
+      expect(storedBindings(browser, storageKey)).toBeNull()
+      expect(keyCells(root)[2].props["aria-label"]).toBe(
+        "Change keybind for Stash draft, currently Mod+S"
+      )
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("a conflicting combo is reported in its row and never persisted", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      // Send and start a fresh draft shares the composer scope with Stash draft.
+      await act(async () => keyCells(root)[3].props.onClick())
+      await dispatchKey(browser, act, { key: "s", metaKey: true })
+
+      const alerts = root.root
+        .findAllByProps({ role: "alert" })
+        .map(nodeText)
+        .filter((value) => value.length > 0)
+      expect(alerts).toContain("Conflicts with Stash draft.")
+      expect(storedBindings(browser, storageKey)).toBeNull()
+      expect(JSON.stringify(root.toJSON())).toContain("Resolve duplicate shortcuts")
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("Reset stays a separate control that clears stored overrides", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      await act(async () => keyCells(root)[0].props.onClick())
+      await dispatchKey(browser, act, { key: "p", metaKey: true })
+      expect(storedBindings(browser, storageKey)).not.toBeNull()
+
+      const resetButton = root.root
+        .findAllByType("button")
+        .find((node) => nodeText(node) === "Reset")
+      await act(async () => resetButton.props.onClick())
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(browser.entries.has(storageKey)).toBe(false)
+      expect(keyCells(root)[0].props["aria-label"]).toBe(
+        "Change keybind for Open inspector Command, currently Mod+K"
+      )
+    } finally {
+      await mounted.restore()
+    }
+  })
+})

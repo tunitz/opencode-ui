@@ -20,10 +20,8 @@ import {
 import { NoteStatusLabel } from "@/components/note-status-label"
 import {
   SpaceDirectoryField,
-  projectDirectoriesFrom,
   spaceDirectoryError,
   spaceDirectoryValue,
-  uniqueDirectories,
 } from "@/components/notes-space-editor"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -542,7 +540,6 @@ export function NotesPanel({
   const [activeNoteID, setActiveNoteID] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null)
   const [spaceDraft, setSpaceDraft] = useState<SpaceDraft | null>(null)
-  const [projectDirectories, setProjectDirectories] = useState<string[]>([])
   const [reviewNote, setReviewNote] = useState<NotesNote | null>(null)
   const [reviewSpace, setReviewSpace] = useState<NotesSpace | null>(null)
   const [deletion, setDeletion] = useState<Deletion | null>(null)
@@ -571,6 +568,7 @@ export function NotesPanel({
   const deletionReturnFocus = useRef<HTMLElement | null>(null)
   const noteComposerRef = useRef<HTMLTextAreaElement | null>(null)
   const attachInputRef = useRef<HTMLInputElement | null>(null)
+  const statusFiltersRef = useRef<HTMLDivElement | null>(null)
   const uploadCursor = useRef<number | null>(null)
   // Keep unsaved work when moving between notes, including the mobile back action.
   const [drafts] = useState(() => {
@@ -759,27 +757,6 @@ export function NotesPanel({
     return adapter.subscribe?.(() => void refresh())
   }, [adapter, refresh, refreshKey])
 
-  // Known project directories for the space editor: fetched once per opening,
-  // and a failure simply leaves the workspace directory as the only option.
-  const spaceDialogOpen = spaceDraft !== null
-  useEffect(() => {
-    if (!spaceDialogOpen) return
-    const controller = new AbortController()
-    void fetch("/api/project", { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Project list unavailable.")
-        return (await response.json()) as unknown
-      })
-      .then((body) => {
-        if (!controller.signal.aborted)
-          setProjectDirectories(projectDirectoriesFrom(body))
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setProjectDirectories([])
-      })
-    return () => controller.abort()
-  }, [spaceDialogOpen])
-
   async function run<T>(
     action: () => Promise<T>,
     done: (result: T) => void,
@@ -851,11 +828,6 @@ export function NotesPanel({
     filterSpaceOptions.find((option) => option.value === space)?.label ??
     "All spaces"
   const noteCountLabel = `${notes.length} note${notes.length === 1 ? "" : "s"}`
-  const knownSpaceDirectories = uniqueDirectories(
-    ...projectDirectories,
-    workspaceDirectory,
-    spaceDraft?.original?.projectDir ?? null
-  )
   const spaceDirectoryInvalid = spaceDirectoryError(
     spaceDraft?.value.projectDir ?? null
   )
@@ -948,6 +920,28 @@ export function NotesPanel({
       clearTimeout(timer)
     }
   }, [editorDirectory, filePickerOpen, fileQuery])
+
+  // A desktop mouse wheel only scrolls vertically; translate it into
+  // horizontal movement over the filter pills. Trackpad horizontal gestures
+  // and rows that fit keep their native behaviour.
+  useEffect(() => {
+    const row = statusFiltersRef.current
+    if (!row) return
+    const onWheel = (event: WheelEvent) => {
+      if (row.scrollWidth <= row.clientWidth) return
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return
+      if (!event.deltaY) return
+      const unit =
+        event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? row.clientWidth : 1
+      const delta = event.deltaY * unit
+      event.preventDefault()
+      row.scrollBy({
+        left: getComputedStyle(row).direction === "rtl" ? -delta : delta,
+      })
+    }
+    row.addEventListener("wheel", onWheel, { passive: false })
+    return () => row.removeEventListener("wheel", onWheel)
+  }, [snapshot])
 
   function openFilePicker() {
     setFileQuery("")
@@ -1223,6 +1217,7 @@ export function NotesPanel({
               </div>
               <div className="flex min-w-0 flex-col gap-2">
                 <div
+                  ref={statusFiltersRef}
                   role="group"
                   aria-label="Filter by status"
                   data-notes-status-filters
@@ -1472,9 +1467,19 @@ export function NotesPanel({
                       data-space-id={item.id}
                       className="flex flex-wrap items-center justify-between gap-2 p-3"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="font-medium break-words">{item.name}</p>
                         <SpaceScopeBadge space={item} className="mt-1" />
+                        {item.projectDir && (
+                          <p
+                            data-space-path={item.projectDir}
+                            dir="auto"
+                            title={item.projectDir}
+                            className="mt-1 truncate text-xs text-muted-foreground"
+                          >
+                            {item.projectDir}
+                          </p>
+                        )}
                       </div>
                       <div className="flex gap-1">
                         <Button
@@ -2107,7 +2112,6 @@ export function NotesPanel({
                 <SpaceDirectoryField
                   id={spaceDirectoryID}
                   value={spaceDraft.value.projectDir ?? ""}
-                  directories={knownSpaceDirectories}
                   disabled={busy}
                   onChange={(next) =>
                     setSpaceDraft({

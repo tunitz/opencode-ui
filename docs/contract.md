@@ -120,21 +120,32 @@ One `NotesService` instance per UI-server process, backed by the shared file sto
 ## App-layer Plugins API [app layer]
 
 Mounted under `/api/ui/plugins`; body limit 8 KiB. The UI server uses the server-held engine Basic
-credential and never writes engine configuration files.
+credential and never exposes it to clients. Registration persists in the engine config file's
+`mcp.servers.notes` (atomic JSONC edit), so it survives engine reloads; hot-connecting the running
+engine is best-effort and an engine restart may be required.
 
 - `GET /api/ui/plugins` → `{ engineAvailable, plugins: [{ id, name, description, registered, connected, restartRequired }] }`.
-  The server reads `GET <engine>/api/mcp`. Engine unreachable or non-OK → 200 with
-  `engineAvailable: false` and `registered: false`.
-- `POST /api/ui/plugins/notes/enable` → registers the local MCP server with
-  `PUT /api/experimental/mcp/notes` and body
-  `{ "config": { "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false } }`
+  `registered` is read from the config: `mcp.servers.notes` exists and is not `disabled: true`.
+  `connected` comes from `GET <engine>/api/mcp`; when the engine is unreachable the response is 200
+  with `engineAvailable: false` and `connected: false`, while a persisted registration still reports
+  `registered: true`. `restartRequired` is `registered && !connected`. A config read failure → 500
+  `{ error: { code: "config_read_failed" } }`.
+- `POST /api/ui/plugins/notes/enable` → sets `mcp.servers.notes` to
+  `{ "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false }`
   (the bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH).
-  If it is registered but not connected, the server then calls
-  `POST /api/experimental/mcp/notes/connect` and re-reads status. Response
-  `{ registered: true, connected, restartRequired: !connected }`. Engine crash → 502
-  `engine_unavailable`; rejected request → 502 `engine_rejected`.
-- `POST /api/ui/plugins/notes/disable` → `DELETE /api/experimental/mcp/notes`; an already-absent
-  server (404) is treated as success. Response `{ registered: false }`.
+  The global config directory follows `$OPENCODE_CONFIG_DIR` → `$XDG_CONFIG_HOME/opencode` →
+  `~/.config/opencode`; `opencode.jsonc` is preferred when present, else `opencode.json`. The edit
+  keeps all other keys, servers, and comments (`jsonc-parser`) and is written atomically (private
+  temp file, fsync, rename, directory fsync). A config write failure → 500
+  `{ error: { code: "config_write_failed" } }` and the engine is not touched. On success the server
+  best-effort applies the entry through `PUT /api/experimental/mcp/notes` (and
+  `POST /api/experimental/mcp/notes/connect` when registered but not connected), then re-reads
+  status. That hot registration is ephemeral, so the config write is authoritative; the response is
+  `{ registered: true, connected, restartRequired: !connected }` even when the engine is unreachable
+  or rejects the hot apply.
+- `POST /api/ui/plugins/notes/disable` → removes `mcp.servers.notes` with the same atomic JSONC edit
+  (a missing key or file is success) and best-effort calls `DELETE /api/experimental/mcp/notes`.
+  Response `{ registered: false }`.
 - Engine list shape is `{ location, data: [{ name, status }] }`, where `status` is
   `{ status: "connected" | "pending" | "disabled" | "failed" | "needs_auth" }`. The UI treats only
   `connected` as connected; a registered non-connected server surfaces `restartRequired`.

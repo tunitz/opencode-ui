@@ -138,7 +138,7 @@ function Harness() {
   )
 }
 
-async function mount(openID = "open-default") {
+async function mount(openID = "open-default", options) {
   let root
   await act(async () => {
     root = create(
@@ -146,7 +146,8 @@ async function mount(openID = "open-default") {
         SettingsProvider,
         null,
         React.createElement(Harness)
-      )
+      ),
+      options
     )
   })
   await act(async () => root.root.findByProps({ id: openID }).props.onClick())
@@ -385,4 +386,118 @@ test("the retired dialog and sidebar theme entry points are gone", async () => {
   expect(header).toContain('aria-label="Back to conversation"')
   expect(app).toContain("notes.open || settings.open")
   expect(app).toContain("settings.open &&")
+})
+
+// --- Tab strip wheel scrolling ---------------------------------------------
+
+function tabStripMock({ scrollWidth = 900, clientWidth = 300 } = {}) {
+  const listeners = new Map()
+  const strip = {
+    scrollWidth,
+    clientWidth,
+    scrollLeft: 0,
+    addEventListener(type, handler, options) {
+      listeners.set(type, { handler, options })
+    },
+    removeEventListener(type) {
+      listeners.delete(type)
+    },
+    scrollTo() {},
+    focus() {},
+  }
+  return { strip, listeners }
+}
+
+const mountWithTabStrip = (strip) =>
+  mount("open-default", {
+    createNodeMock: (element) =>
+      element.type === "div" && element.props.role === "tablist" ? strip : {},
+  })
+
+function wheelEvent(overrides = {}) {
+  return {
+    deltaX: 0,
+    deltaY: 120,
+    deltaMode: 0,
+    ctrlKey: false,
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true
+    },
+    ...overrides,
+  }
+}
+
+test("a vertical mouse wheel scrolls the overflowing tab strip", async () => {
+  const { strip, listeners } = tabStripMock()
+  const root = await mountWithTabStrip(strip)
+  try {
+    const wheel = listeners.get("wheel")
+    expect(wheel).toBeDefined()
+    expect(wheel.options).toEqual({ passive: false })
+
+    const event = wheelEvent()
+    await act(async () => wheel.handler(event))
+    expect(event.defaultPrevented).toBe(true)
+    expect(strip.scrollLeft).toBe(120)
+
+    // Line-mode deltas are translated to pixels rather than swallowed.
+    const lines = wheelEvent({ deltaY: 3, deltaMode: 1 })
+    await act(async () => wheel.handler(lines))
+    expect(strip.scrollLeft).toBe(168)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("trackpad horizontal gestures and pinch zoom stay native", async () => {
+  const { strip, listeners } = tabStripMock()
+  const root = await mountWithTabStrip(strip)
+  try {
+    const wheel = listeners.get("wheel")
+    const horizontal = wheelEvent({ deltaX: 120, deltaY: 8 })
+    await act(async () => wheel.handler(horizontal))
+    expect(horizontal.defaultPrevented).toBe(false)
+    expect(strip.scrollLeft).toBe(0)
+
+    const zoom = wheelEvent({ ctrlKey: true })
+    await act(async () => wheel.handler(zoom))
+    expect(zoom.defaultPrevented).toBe(false)
+    expect(strip.scrollLeft).toBe(0)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("a tab strip with no horizontal overflow ignores wheel input", async () => {
+  const { strip, listeners } = tabStripMock({ scrollWidth: 300, clientWidth: 300 })
+  const root = await mountWithTabStrip(strip)
+  try {
+    const event = wheelEvent()
+    await act(async () => listeners.get("wheel").handler(event))
+    expect(event.defaultPrevented).toBe(false)
+    expect(strip.scrollLeft).toBe(0)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("RTL keeps wheel scrolling pointing at the end of the strip", async () => {
+  const previousDocument = globalThis.document
+  globalThis.document = {
+    documentElement: { getAttribute: () => "rtl" },
+  }
+  const { strip, listeners } = tabStripMock()
+  const root = await mountWithTabStrip(strip)
+  try {
+    const event = wheelEvent()
+    await act(async () => listeners.get("wheel").handler(event))
+    expect(event.defaultPrevented).toBe(true)
+    // RTL scroll offsets run negative from the start edge.
+    expect(strip.scrollLeft).toBe(-120)
+  } finally {
+    await act(async () => root.unmount())
+    if (previousDocument === undefined) delete globalThis.document
+    else globalThis.document = previousDocument
+  }
 })

@@ -282,8 +282,11 @@ skips confirmation.
 
 ## Registering with the engine
 
-Register a local MCP server from the engine's plugin/MCP settings (the UI Settings →
-Plugins section does this through the engine HTTP API):
+Settings → Plugins writes a `notes` MCP server into the engine's global config file under
+`mcp.servers.notes` (atomic JSONC edit; `opencode.jsonc` preferred when present, else
+`opencode.json`) and then tries to hot-connect it. That config write is what survives an engine
+reload; the engine's experimental MCP API does not. The engine may still need a restart to apply
+the registration, which the API reports as `restartRequired`.
 
 ```jsonc
 {

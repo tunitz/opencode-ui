@@ -99,6 +99,13 @@ const projects = [
     time: { created: now - 100_000, updated: now - 1_000 },
     sandboxes: [],
   },
+  {
+    id: "p-location",
+    canonical: "/synthetic/location",
+    name: "Location Project",
+    time: { created: now - 100_000, updated: now - 1_000 },
+    sandboxes: [],
+  },
 ] as unknown as OpenCodeController["projects"]
 
 function log(kind: string, value?: string) {
