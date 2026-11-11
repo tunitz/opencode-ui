@@ -18,6 +18,13 @@ import {
   type NoteAttachmentReference,
 } from "@/components/note-attachment-dialog"
 import { NoteStatusLabel } from "@/components/note-status-label"
+import {
+  SpaceDirectoryField,
+  projectDirectoriesFrom,
+  spaceDirectoryError,
+  spaceDirectoryValue,
+  uniqueDirectories,
+} from "@/components/notes-space-editor"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -62,6 +69,7 @@ import {
 import {
   NOTE_STATUS_CATEGORIES,
   NOTE_STATUS_LABELS,
+  NOTE_STATUSES,
   spaceScopeLabel,
   uniqueByID,
   type NoteInput,
@@ -212,6 +220,47 @@ type Deletion =
 const statusLabels = NOTE_STATUS_LABELS
 const noSelection = "__notes_none__"
 const newDraftKey = "__new_note__"
+
+/** Dot colours match the status label palette, so category reads by colour. */
+const statusDotClasses: Record<NoteStatus, string> = {
+  idea: "bg-violet-600 dark:bg-violet-400",
+  todo: "bg-amber-600 dark:bg-amber-400",
+  "in-progress": "bg-sky-600 dark:bg-sky-400",
+  blocked: "bg-rose-600 dark:bg-rose-400",
+  finished: "bg-emerald-600 dark:bg-emerald-400",
+  cancelled: "bg-slate-600 dark:bg-slate-400",
+  archived: "bg-stone-600 dark:bg-stone-400",
+}
+
+function statusCategoryLabel(status: NoteStatus): string {
+  return (
+    NOTE_STATUS_CATEGORIES.find((category) =>
+      category.statuses.includes(status)
+    )?.label ?? "Backlog"
+  )
+}
+
+export type SpaceFilterOption = {
+  value: string
+  label: string
+  /** Present for real spaces; undefined for the All spaces / No space rows. */
+  projectDir?: string | null
+}
+
+/** Spaces appear once in the filter menu, with their scope preserved. */
+export function spaceFilterOptions(
+  spaces: readonly NotesSpace[]
+): SpaceFilterOption[] {
+  return [
+    { value: "all", label: "All spaces" },
+    { value: noSelection, label: "No space" },
+    ...uniqueByID(spaces).map((item) => ({
+      value: item.id,
+      label: item.name,
+      projectDir: item.projectDir,
+    })),
+  ]
+}
 
 /**
  * Scope badge for a space row or picker option: "Global" for unscoped spaces,
@@ -493,6 +542,7 @@ export function NotesPanel({
   const [activeNoteID, setActiveNoteID] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null)
   const [spaceDraft, setSpaceDraft] = useState<SpaceDraft | null>(null)
+  const [projectDirectories, setProjectDirectories] = useState<string[]>([])
   const [reviewNote, setReviewNote] = useState<NotesNote | null>(null)
   const [reviewSpace, setReviewSpace] = useState<NotesSpace | null>(null)
   const [deletion, setDeletion] = useState<Deletion | null>(null)
@@ -512,6 +562,7 @@ export function NotesPanel({
   const noteContentID = useId()
   const notePinnedID = useId()
   const spaceNameID = useId()
+  const spaceDirectoryID = useId()
   const fileSearchID = useId()
   const request = useRef(0)
   const notesHeading = useRef<HTMLHeadingElement>(null)
@@ -708,6 +759,27 @@ export function NotesPanel({
     return adapter.subscribe?.(() => void refresh())
   }, [adapter, refresh, refreshKey])
 
+  // Known project directories for the space editor: fetched once per opening,
+  // and a failure simply leaves the workspace directory as the only option.
+  const spaceDialogOpen = spaceDraft !== null
+  useEffect(() => {
+    if (!spaceDialogOpen) return
+    const controller = new AbortController()
+    void fetch("/api/project", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Project list unavailable.")
+        return (await response.json()) as unknown
+      })
+      .then((body) => {
+        if (!controller.signal.aborted)
+          setProjectDirectories(projectDirectoriesFrom(body))
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setProjectDirectories([])
+      })
+    return () => controller.abort()
+  }, [spaceDialogOpen])
+
   async function run<T>(
     action: () => Promise<T>,
     done: (result: T) => void,
@@ -773,6 +845,20 @@ export function NotesPanel({
       label: "Unavailable space",
       detail: "",
     })
+
+  const filterSpaceOptions = spaceFilterOptions(spaces)
+  const activeSpaceLabel =
+    filterSpaceOptions.find((option) => option.value === space)?.label ??
+    "All spaces"
+  const noteCountLabel = `${notes.length} note${notes.length === 1 ? "" : "s"}`
+  const knownSpaceDirectories = uniqueDirectories(
+    ...projectDirectories,
+    workspaceDirectory,
+    spaceDraft?.original?.projectDir ?? null
+  )
+  const spaceDirectoryInvalid = spaceDirectoryError(
+    spaceDraft?.value.projectDir ?? null
+  )
 
   function spaceName(spaceID: string | null): string {
     if (spaceID === null) return "No space"
@@ -1135,72 +1221,98 @@ export function NotesPanel({
                   placeholder="Search title or text"
                 />
               </div>
-              <div
-                role="group"
-                aria-label="Filter by status"
-                className="-mx-1 flex max-w-full flex-col gap-1 px-1"
-              >
-                <div className="flex flex-wrap items-center gap-1">
+              <div className="flex min-w-0 flex-col gap-2">
+                <div
+                  role="group"
+                  aria-label="Filter by status"
+                  data-notes-status-filters
+                  className="flex min-w-0 gap-1.5 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%_-_1rem),transparent)] rtl:[mask-image:linear-gradient(to_left,transparent,black_1rem,black_calc(100%_-_1rem),transparent)]"
+                >
                   <Button
                     type="button"
-                    variant={status === "all" ? "secondary" : "ghost"}
-                    className="h-11 min-w-11 rounded-full px-2"
+                    variant={status === "all" ? "secondary" : "outline"}
+                    className="h-11 min-h-11 shrink-0 rounded-full px-4 text-sm"
                     aria-pressed={status === "all"}
                     onClick={() => setStatus("all")}
                   >
                     All
                   </Button>
-                </div>
-                {NOTE_STATUS_CATEGORIES.map((category) => (
-                  <div
-                    key={category.id}
-                    role="group"
-                    aria-label={`${category.label} statuses`}
-                    className="flex flex-wrap items-center gap-1"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="w-14 shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
+                  {NOTE_STATUSES.map((option) => (
+                    <Button
+                      key={option}
+                      type="button"
+                      variant={status === option ? "secondary" : "outline"}
+                      className="h-11 min-h-11 shrink-0 gap-1.5 rounded-full px-4 text-sm"
+                      aria-pressed={status === option}
+                      aria-label={`Filter by status: ${NOTE_STATUS_LABELS[option]} (${statusCategoryLabel(option)})`}
+                      onClick={() => setStatus(option)}
                     >
-                      {category.label}
-                    </span>
-                    {category.statuses.map((option) => (
-                      <Button
-                        key={option}
-                        type="button"
-                        variant={status === option ? "secondary" : "ghost"}
-                        className="h-11 min-w-11 rounded-full px-2 text-xs"
-                        aria-pressed={status === option}
-                        onClick={() => setStatus(option)}
+                      <span
+                        aria-hidden="true"
+                        data-status-dot={option}
+                        className={`size-1.5 shrink-0 rounded-full ${statusDotClasses[option]}`}
+                      />
+                      {NOTE_STATUS_LABELS[option]}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex min-w-0 items-center gap-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-11 min-h-11 max-w-[65%] shrink-0 gap-1.5 rounded-full px-3"
+                          aria-label={`Filter by space: ${activeSpaceLabel}`}
+                        />
+                      }
+                    >
+                      <span className="min-w-0 truncate" dir="auto">
+                        {activeSpaceLabel}
+                      </span>
+                      <ChevronDownIcon
+                        aria-hidden="true"
+                        className="size-4 shrink-0 text-muted-foreground"
+                      />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="min-w-56">
+                      <DropdownMenuRadioGroup
+                        value={space}
+                        onValueChange={setSpace}
                       >
-                        {NOTE_STATUS_LABELS[option]}
-                      </Button>
-                    ))}
-                  </div>
-                ))}
+                        {filterSpaceOptions.map((option) => (
+                          <DropdownMenuRadioItem
+                            key={option.value}
+                            value={option.value}
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="min-w-0 truncate" dir="auto">
+                                {option.label}
+                              </span>
+                              {option.projectDir !== undefined && (
+                                <SpaceScopeBadge
+                                  space={{ projectDir: option.projectDir }}
+                                />
+                              )}
+                            </span>
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <span
+                    aria-live="polite"
+                    className="ms-auto shrink-0 text-xs text-muted-foreground tabular-nums"
+                  >
+                    {noteCountLabel}
+                  </span>
+                </div>
               </div>
-              <Choice
-                label="Filter by space"
-                hideLabel
-                value={space}
-                onChange={setSpace}
-                options={[
-                  { value: "all", label: "All spaces" },
-                  { value: noSelection, label: "No space" },
-                  ...spaces.map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                    detail: spaceScopeLabel(item),
-                  })),
-                ]}
-              />
             </div>
             <div>
               <h3 ref={notesHeading} tabIndex={-1} className="mb-2 font-medium">
-                Notes{" "}
-                <span className="text-sm font-normal text-muted-foreground">
-                  ({notes.length})
-                </span>
+                Notes
               </h3>
               {notes.length === 0 ? (
                 <p className="py-4 text-sm text-muted-foreground">
@@ -1945,8 +2057,8 @@ export function NotesPanel({
               {spaceDraft?.original ? "Edit space" : "New space"}
             </DialogTitle>
             <DialogDescription>
-              Global spaces appear in every project. Project spaces stay in
-              this project.
+              Empty is Global. Any absolute project directory scopes the space
+              to that project.
             </DialogDescription>
           </DialogHeader>
           {spaceDraft && (
@@ -1955,15 +2067,20 @@ export function NotesPanel({
               onSubmit={(e) => {
                 e.preventDefault()
                 const { original, value } = spaceDraft
+                if (spaceDirectoryInvalid) return
+                const input = {
+                  ...value,
+                  projectDir: spaceDirectoryValue(value.projectDir),
+                }
                 void run(
                   () =>
                     original
                       ? adapter.updateSpace(
                           original.id,
-                          value,
+                          input,
                           original.revision
                         )
-                      : adapter.createSpace(value),
+                      : adapter.createSpace(input),
                   () => setSpaceDraft(null)
                 )
               }}
@@ -1987,31 +2104,20 @@ export function NotesPanel({
                     }
                   />
                 </div>
-                <Choice
-                  label="Scope"
-                  value={
-                    spaceDraft.value.projectDir === null ? "global" : "project"
-                  }
-                  onChange={(value) =>
+                <SpaceDirectoryField
+                  id={spaceDirectoryID}
+                  value={spaceDraft.value.projectDir ?? ""}
+                  directories={knownSpaceDirectories}
+                  disabled={busy}
+                  onChange={(next) =>
                     setSpaceDraft({
                       ...spaceDraft,
                       value: {
                         ...spaceDraft.value,
-                        projectDir:
-                          value === "global"
-                            ? null
-                            : (workspaceDirectory || null),
+                        projectDir: next === "" ? null : next,
                       },
                     })
                   }
-                  options={[
-                    { value: "global", label: "Global", detail: "Every project" },
-                    {
-                      value: "project",
-                      label: "This project",
-                      detail: workspaceDirectory || "Current project",
-                    },
-                  ]}
                 />
                 {formError && (
                   <div className="grid gap-2">
@@ -2088,7 +2194,11 @@ export function NotesPanel({
                   <Button
                     type="submit"
                     className="h-11"
-                    disabled={busy || !spaceDraft.value.name.trim()}
+                    disabled={
+                      busy ||
+                      !spaceDraft.value.name.trim() ||
+                      spaceDirectoryInvalid !== null
+                    }
                   >
                     {busy ? "Saving…" : "Save space"}
                   </Button>

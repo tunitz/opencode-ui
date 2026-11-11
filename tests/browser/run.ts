@@ -380,6 +380,12 @@ const server = Bun.serve({
         },
       })
     }
+    if (pathname === "/api/project") {
+      return json([
+        { id: "p-alpha", canonical: "/synthetic/alpha" },
+        { id: "p-notes", canonical: "/synthetic/notes" },
+      ])
+    }
     if (pathname.startsWith("/api/")) {
       notFound.push(pathname)
       return json({ message: "Synthetic route not configured." }, 404)
@@ -2153,59 +2159,130 @@ if (browser) {
       await page.getByRole("button", { name: "Back to Notes" }).click()
       await page.getByRole("button", { name: "Open Bugs" }).waitFor({ state: "visible" })
 
-      const chips = await page.evaluate(() => {
-        const group = document.querySelector<HTMLElement>(
-          '[role="group"][aria-label="Filter by status"]'
+      const filters = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>(
+          "[data-notes-status-filters]"
         )
-        if (!group) return null
-        const rect = group.getBoundingClientRect()
+        if (!row) return null
+        const box = row.getBoundingClientRect()
         return {
-          left: rect.left,
-          right: rect.right,
-          buttons: [...group.querySelectorAll("button")].map((button) => {
-            const box = button.getBoundingClientRect()
+          scrollWidth: row.scrollWidth,
+          clientWidth: row.clientWidth,
+          top: box.top,
+          bottom: box.bottom,
+          left: box.left,
+          right: box.right,
+          buttons: [...row.querySelectorAll("button")].map((button) => {
+            const rect = button.getBoundingClientRect()
             return {
-              label: button.textContent,
-              left: box.left,
-              right: box.right,
-              height: box.height,
+              name: button.getAttribute("aria-label") ?? button.textContent?.trim() ?? "",
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+              height: rect.height,
+              dots: button.querySelectorAll("[data-status-dot]").length,
+              pressed: button.getAttribute("aria-pressed") === "true",
             }
           }),
         }
       })
-      check("all seven status filters plus All render", chips?.buttons.length === 8, JSON.stringify(chips))
-      const groups = await page.evaluate(() =>
-        [...document.querySelectorAll<HTMLElement>('[role="group"][aria-label$=" statuses"]')].map(
-          (group) => ({
-            label: group.getAttribute("aria-label"),
-            chips: group.querySelectorAll("button").length,
-            header: group.querySelector("span")?.textContent ?? "",
-          })
-        )
+      check(
+        "all seven status filters plus All render in one row",
+        filters?.buttons.length === 8,
+        JSON.stringify(filters?.buttons.map((button) => button.name))
       )
       check(
-        "status filters are grouped under Backlog, Active and Done",
-        groups.length === 3 &&
-          groups.map((group) => group.label).join(",") ===
-            "Backlog statuses,Active statuses,Done statuses" &&
-          groups.map((group) => group.chips).join(",") === "2,2,3" &&
-          groups.map((group) => group.header).join(",") === "Backlog,Active,Done",
-        JSON.stringify(groups)
+        "the filter row scrolls sideways instead of wrapping",
+        Boolean(filters && filters.scrollWidth > filters.clientWidth),
+        JSON.stringify(filters && { scrollWidth: filters.scrollWidth, clientWidth: filters.clientWidth })
       )
       check(
-        "no status filter is clipped by the column",
+        "no status pill is clipped vertically",
         Boolean(
-          chips &&
-            chips.buttons.every(
-              (button) => button.right <= chips.right + 1 && button.left >= chips.left - 1
+          filters &&
+            filters.buttons.every(
+              (button) =>
+                button.top >= filters.top - 1 && button.bottom <= filters.bottom + 1
             )
         ),
-        JSON.stringify(chips)
+        JSON.stringify(filters?.buttons)
       )
       check(
-        "status filters keep 44px targets",
-        Boolean(chips && chips.buttons.every((button) => button.height >= 44))
+        "status pills keep 44px targets",
+        Boolean(filters && filters.buttons.every((button) => button.height >= 44)),
+        JSON.stringify(filters?.buttons.map((button) => button.height))
       )
+      check(
+        "each status pill carries its own colour dot",
+        Boolean(
+          filters &&
+            filters.buttons[0].dots === 0 &&
+            filters.buttons.slice(1).every((button) => button.dots === 1)
+        ),
+        JSON.stringify(filters?.buttons.map((button) => button.dots))
+      )
+      check(
+        "no uppercase category headers remain",
+        Boolean(
+          filters &&
+            filters.buttons[0].name === "All" &&
+            filters.buttons.slice(1).every((button) => button.name.startsWith("Filter by status: "))
+        ),
+        JSON.stringify(filters?.buttons.map((button) => button.name))
+      )
+      check(
+        "the filter row starts with All selected",
+        Boolean(filters && filters.buttons[0].pressed),
+        JSON.stringify(filters?.buttons.map((button) => button.pressed))
+      )
+
+      await page
+        .getByRole("button", { name: "Filter by status: Finished (Done)" })
+        .click()
+      await page.getByRole("button", { name: "Open Shipped" }).waitFor({ state: "visible" })
+      check(
+        "selecting a pill filters the list",
+        (await page.getByRole("button", { name: "Open Bugs" }).count()) === 0
+      )
+      check(
+        "the selected pill reports pressed",
+        (await page
+          .getByRole("button", { name: "Filter by status: Finished (Done)" })
+          .getAttribute("aria-pressed")) === "true"
+      )
+      await page
+        .locator("[data-notes-status-filters]")
+        .getByRole("button", { name: "All", exact: true })
+        .click()
+      await page.getByRole("button", { name: "Open Bugs" }).waitFor({ state: "visible" })
+
+      const spacesTrigger = page.getByRole("button", {
+        name: "Filter by space: All spaces",
+      })
+      await spacesTrigger.click()
+      const spaceItems = page.getByRole("menuitemradio")
+      await spaceItems.first().waitFor({ state: "visible" })
+      const spaceTexts = await spaceItems.allTextContents()
+      check(
+        "the spaces pill lists each space once",
+        spaceTexts.filter((text) => text.includes("Ideas")).length === 1 &&
+          spaceTexts.filter((text) => text.includes("Work")).length === 1,
+        JSON.stringify(spaceTexts)
+      )
+      check(
+        "the space menu keeps Global and project badges",
+        spaceTexts.some((text) => text.includes("Ideas") && text.includes("Global")) &&
+          spaceTexts.some((text) => text.includes("Work") && text.includes("notes")),
+        JSON.stringify(spaceTexts)
+      )
+      await page.keyboard.press("Escape")
+
+      const count = await page.locator("[data-notes-status-filters]").evaluate((row) => {
+        const live = row.parentElement?.querySelector('[aria-live="polite"]')
+        return live?.textContent?.trim() ?? ""
+      })
+      check("the filter bar shows a live note count", /^\d+ notes?$/.test(count), count)
 
       const preview = await page.locator("#note-preview-note-plan").textContent()
       check(
@@ -2294,9 +2371,11 @@ if (browser) {
         JSON.stringify(work)
       )
 
-      const trigger = page.getByRole("combobox", { name: "Filter by space" })
+      const trigger = page.getByRole("button", {
+        name: "Filter by space: All spaces",
+      })
       await trigger.click()
-      const options = page.getByRole("option")
+      const options = page.getByRole("menuitemradio")
       await options.first().waitFor({ state: "visible" })
       const texts = await options.allTextContents()
       check(
@@ -2324,7 +2403,7 @@ if (browser) {
     try {
       await page.getByRole("button", { name: "Open Bugs" }).click()
       await page.getByRole("button", { name: "Edit", exact: true }).click()
-      await page.getByRole("button", { name: "Status: To do" }).click()
+      await page.getByRole("button", { name: "Status: To do", exact: true }).click()
       const items = page.getByRole("menuitemradio")
       await items.first().waitFor({ state: "visible" })
       check("the status menu lists all seven statuses", (await items.count()) === 7)
@@ -2374,37 +2453,75 @@ if (browser) {
     }
   })
 
-  await run("new spaces offer exactly Global and This project", async ({ check }) => {
+  await run("space editor scopes to any absolute project directory", async ({ check }) => {
     const opened = await openPage({ width: 1440, height: 900 }, "notes-wide")
     const page = opened.page
     try {
       await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
       await page.getByRole("button", { name: "New space" }).click()
       await page.getByRole("textbox", { name: "Name", exact: true }).fill("Scoped")
-      await page.getByRole("combobox", { name: "Scope" }).click()
-      const options = page.getByRole("option")
-      await options.first().waitFor({ state: "visible" })
-      const labels = await options.allTextContents()
-      check(
-        "only Global and This project are offered",
-        labels.filter((label) => label.includes("Global")).length === 1 &&
-          labels.filter((label) => label.includes("This project")).length === 1 &&
-          !labels.some((label) => /planning|global space|kind/i.test(label)),
-        JSON.stringify(labels)
+      const directory = page.getByRole("textbox", { name: "Project directory" })
+      await directory.waitFor({ state: "visible" })
+      check("a new space starts empty, meaning Global", (await directory.inputValue()) === "")
+      await page.locator('[data-space-directory="/synthetic/alpha"]').waitFor({ state: "visible" })
+
+      const rows = await page.locator("[data-space-directory]").evaluateAll((nodes) =>
+        nodes.map((node) => ({
+          path: node.getAttribute("data-space-directory") ?? "",
+          text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+        }))
       )
-      await page.getByRole("option", { name: /This project/ }).click()
+      check(
+        "the option list starts with Global",
+        rows[0]?.path === "" && rows[0].text.includes("Visible in every project"),
+        JSON.stringify(rows)
+      )
+      check(
+        "engine projects and the workspace directory are offered",
+        rows.some((row) => row.path === "/synthetic/alpha") &&
+          rows.some((row) => row.path === "/synthetic/notes"),
+        JSON.stringify(rows)
+      )
+      check(
+        "each directory row names its basename and full path",
+        rows.some(
+          (row) => row.path === "/synthetic/alpha" && row.text.includes("alpha") && row.text.includes("/synthetic/alpha")
+        ),
+        JSON.stringify(rows)
+      )
+
+      await directory.fill("/synthetic/newproj")
+      const custom = page.getByRole("button", {
+        name: "Use custom path: /synthetic/newproj",
+      })
+      await custom.waitFor({ state: "visible" })
+      check("a not-yet-created path gets its own row", true)
+      await custom.click()
+      check(
+        "the custom row fills the input",
+        (await directory.inputValue()) === "/synthetic/newproj"
+      )
+
       await page.getByRole("button", { name: "Save space" }).click()
       const created = await poll(
         async () => notesRequests.filter((entry) => entry.method === "createSpace").at(-1),
         "the space was not saved"
       )
       check(
-        "saving writes the workspace directory as projectDir",
-        created?.input.name === "Scoped" && created?.input.projectDir === "/synthetic/notes",
+        "saving writes the custom path as projectDir without an existence check",
+        created?.input.name === "Scoped" &&
+          created?.input.projectDir === "/synthetic/newproj",
         JSON.stringify(created)
       )
-      await page.locator("[data-notes-spaces]").getByText("Scoped").waitFor({ state: "visible" })
-      check("the new space appears once", (await page.locator("[data-notes-spaces]").getByText("Scoped").count()) === 1)
+      await page.getByRole("button", { name: "Save space" }).waitFor({ state: "detached" })
+      check(
+        "the editor closes after saving a space scoped elsewhere",
+        (await page.getByRole("button", { name: "Save space" }).count()) === 0
+      )
+      check(
+        "only one space was created",
+        notesRequests.filter((entry) => entry.method === "createSpace").length === 1
+      )
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
     } finally {
       await opened.context.close()

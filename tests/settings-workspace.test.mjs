@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, expect, test, mock } from "bun:test"
 
 // Product modules reach `window.location` at import time (the OpenCode client).
 // Install a minimal browser surface before importing anything.
@@ -17,6 +17,23 @@ globalThis.window = {
 const React = await import("react")
 const { act } = React
 const { create } = await import("react-test-renderer")
+
+// The workspace defaults to Appearance; the real panel needs a ThemeProvider and
+// a DOM, which this unit test does not mount. Its content is covered elsewhere.
+mock.module("@/components/theme-select", () => ({
+  AppearancePanel: () => React.createElement("p", null, "Appearance controls"),
+}))
+// Sections are separately tested; this suite targets the workspace chrome.
+mock.module("@/components/agent-config-settings", () => ({
+  AgentConfigSettings: () => React.createElement("p", null, "Agent controls"),
+}))
+mock.module("@/components/keybindings-settings", () => ({
+  KeybindingsSettings: () => React.createElement("p", null, "Key controls"),
+}))
+mock.module("@/components/notifications-settings", () => ({
+  NotificationsSettings: () => React.createElement("p", null, "Alert controls"),
+}))
+
 const { SettingsProvider, useSettingsWorkspace } = await import(
   "../src/components/settings-context"
 )
@@ -49,11 +66,16 @@ const text = (node) =>
     .map((child) => (typeof child === "string" ? child : text(child)))
     .join("")
 const button = (root, label) =>
-  root.root.findAllByType("button").find((item) => text(item).includes(label))
+  root.root.findAllByType("button").find((item) => text(item) === label)
+const tabs = (root) => root.root.findAllByProps({ role: "tab" })
+const tabByID = (root, id) =>
+  tabs(root).find((item) => item.props.id === `settings-tab-${id}`)
+const selectedTabs = (root) =>
+  tabs(root)
+    .filter((item) => item.props["aria-selected"] === true)
+    .map((item) => item.props.id)
 const headings = (root) =>
   root.root.findAllByType("h2").map((item) => text(item))
-const currentSection = (root) =>
-  root.root.findAllByProps({ "aria-current": "page" }).map((item) => text(item))
 
 function Harness() {
   const settings = useSettingsWorkspace()
@@ -64,9 +86,23 @@ function Harness() {
       ? null
       : React.createElement(
           "button",
-          { type: "button", onClick: () => settings.openSettings("plugins") },
+          { type: "button", id: "open-default", onClick: () => settings.openSettings() },
           "Open settings"
         ),
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        id: "open-plugins",
+        onClick: () => settings.openSettings("plugins"),
+      },
+      "Open plugins"
+    ),
+    React.createElement(
+      "button",
+      { type: "button", id: "close-settings", onClick: settings.closeSettings },
+      "Close settings"
+    ),
     React.createElement(
       "button",
       {
@@ -93,11 +129,6 @@ function Harness() {
     ),
     React.createElement(
       "span",
-      { id: "view-state" },
-      settings.detailView ? "detail" : "list"
-    ),
-    React.createElement(
-      "span",
       { id: "confirm-state" },
       settings.confirmOpen ? "confirming" : "idle"
     ),
@@ -107,7 +138,7 @@ function Harness() {
   )
 }
 
-async function mount() {
+async function mount(openID = "open-default") {
   let root
   await act(async () => {
     root = create(
@@ -118,63 +149,138 @@ async function mount() {
       )
     )
   })
-  await act(async () => button(root, "Open settings").props.onClick())
+  await act(async () => root.root.findByProps({ id: openID }).props.onClick())
   return root
 }
 
-test("deep-opened section shows its detail with the section list preserving aria-current", async () => {
+const pressKey = async (root, key) => {
+  const tablist = root.root.findByProps({ role: "tablist" })
+  await act(async () => {
+    tablist.props.onKeyDown({ key, preventDefault() {} })
+  })
+}
+
+test("opening Settings without a deep link always lands on Appearance", async () => {
   const root = await mount()
   try {
-    expect(headings(root)).toContain("Plugins")
-    expect(JSON.stringify(root.toJSON())).toContain("Plugins run inside the OpenCode engine.")
-    expect(currentSection(root)).toContain("Plugins")
-    expect(currentSection(root)).not.toContain("Access")
-    expect(root.root.findByProps({ id: "view-state" }).children).toEqual([
-      "detail",
-    ])
+    expect(headings(root)).toEqual(["Appearance"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-appearance"])
+    const panel = root.root.findByProps({ role: "tabpanel" })
+    expect(panel.props["aria-labelledby"]).toBe("settings-tab-appearance")
+    expect(panel.props.id).toBe("settings-panel-appearance")
   } finally {
     await act(async () => root.unmount())
   }
 })
 
-test("selecting a section updates the detail, and All settings returns to the list", async () => {
+test("the tab bar renders every section in registry order with icon and label", async () => {
+  const root = await mount()
+  try {
+    expect(tabs(root).map((item) => item.props.id)).toEqual([
+      "settings-tab-appearance",
+      "settings-tab-agents",
+      "settings-tab-alerts",
+      "settings-tab-keys",
+      "settings-tab-plugins",
+      "settings-tab-access",
+    ])
+    for (const [id, label] of [
+      ["appearance", "Appearance"],
+      ["agents", "Agents"],
+      ["alerts", "Alerts"],
+      ["keys", "Keys"],
+      ["plugins", "Plugins"],
+      ["access", "Access"],
+    ]) {
+      const tab = tabByID(root, id)
+      expect(tab).toBeDefined()
+      expect(text(tab)).toBe(label)
+      expect(tab.findAllByType("svg")).toHaveLength(1)
+      // 44px minimum touch target on every pill.
+      expect(tab.props.className).toContain("min-h-11")
+      expect(tab.props.className).toContain("rounded-full")
+    }
+    expect(
+      root.root.findByProps({ role: "tablist" }).props["aria-label"]
+    ).toBe("Settings sections")
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("a deep link still opens its section", async () => {
+  const root = await mount("open-plugins")
+  try {
+    expect(headings(root)).toEqual(["Plugins"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-plugins"])
+    expect(JSON.stringify(root.toJSON())).toContain(
+      "Plugins run inside the OpenCode engine."
+    )
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("clicking a tab switches content immediately with no back navigation", async () => {
+  const root = await mount("open-plugins")
+  try {
+    await act(async () => button(root, "Access").props.onClick())
+    expect(headings(root)).toEqual(["Access"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-access"])
+    expect(text(root.toJSON())).not.toContain("All settings")
+    // Every tab stays reachable in one tap.
+    expect(tabs(root)).toHaveLength(6)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("reopening after visiting another section starts at Appearance again", async () => {
   const root = await mount()
   try {
     await act(async () => button(root, "Access").props.onClick())
-    expect(headings(root)).toContain("Access")
-    expect(currentSection(root)).toContain("Access")
-    expect(currentSection(root)).not.toContain("Plugins")
+    expect(headings(root)).toEqual(["Access"])
 
-    await act(async () => button(root, "All settings").props.onClick())
-    expect(root.root.findByProps({ id: "view-state" }).children).toEqual([
-      "list",
-    ])
-    // The section list stays rendered at every width; only the detail pane hides.
-    expect(button(root, "Plugins")).toBeDefined()
+    await act(async () => root.root.findByProps({ id: "close-settings" }).props.onClick())
+    await act(async () => root.root.findByProps({ id: "open-default" }).props.onClick())
+
+    expect(headings(root)).toEqual(["Appearance"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-appearance"])
   } finally {
     await act(async () => root.unmount())
   }
 })
 
-test("all registered sections are reachable from the list", async () => {
+test("unsaved agent edits guard tab switches until confirmed", async () => {
   const root = await mount()
   try {
-    for (const label of [
-      "Appearance",
-      "Agents",
-      "Alerts",
-      "Keys",
-      "Plugins",
-      "Access",
-    ]) {
-      expect(button(root, label)).toBeDefined()
-    }
+    await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
+    await act(async () => button(root, "Keys").props.onClick())
+    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
+      "confirming",
+    ])
+    // The tab does not change while the confirmation is pending.
+    expect(headings(root)).toEqual(["Appearance"])
+
+    await act(async () => root.root.findByProps({ id: "keep-editing" }).props.onClick())
+    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
+      "idle",
+    ])
+    expect(headings(root)).toEqual(["Appearance"])
+
+    await act(async () => button(root, "Keys").props.onClick())
+    await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
+    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
+      "idle",
+    ])
+    expect(headings(root)).toEqual(["Keys"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-keys"])
   } finally {
     await act(async () => root.unmount())
   }
 })
 
-test("unsaved agent edits guard close until confirmed", async () => {
+test("unsaved agent edits guard closing the workspace", async () => {
   const root = await mount()
   try {
     await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
@@ -182,34 +288,81 @@ test("unsaved agent edits guard close until confirmed", async () => {
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "confirming",
     ])
-    // Still open while the confirmation is pending.
-    expect(root.root.findAllByProps({ id: "view-state" })).not.toHaveLength(0)
+    expect(tabs(root)).toHaveLength(6)
 
-    await act(async () => root.root.findByProps({ id: "keep-editing" }).props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "idle",
-    ])
-
-    await act(async () => root.root.findByProps({ id: "request-close" }).props.onClick())
     await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "idle",
-    ])
     expect(button(root, "Open settings")).toBeDefined()
   } finally {
     await act(async () => root.unmount())
   }
 })
 
-test("workspace chrome uses the container-query layout and in-pane back button", async () => {
+test("arrow keys, Home and End move selection with roving tab focus", async () => {
+  const root = await mount()
+  try {
+    const tabIndexes = () =>
+      tabs(root).map((item) => [item.props.id, item.props.tabIndex])
+
+    expect(tabIndexes()[0]).toEqual(["settings-tab-appearance", 0])
+    expect(
+      tabs(root).filter((item) => item.props.tabIndex === 0)
+    ).toHaveLength(1)
+
+    await pressKey(root, "ArrowRight")
+    expect(selectedTabs(root)).toEqual(["settings-tab-agents"])
+    expect(tabByID(root, "agents").props.tabIndex).toBe(0)
+    expect(tabByID(root, "appearance").props.tabIndex).toBe(-1)
+
+    await pressKey(root, "ArrowRight")
+    expect(selectedTabs(root)).toEqual(["settings-tab-alerts"])
+
+    await pressKey(root, "ArrowLeft")
+    expect(selectedTabs(root)).toEqual(["settings-tab-agents"])
+
+    await pressKey(root, "End")
+    expect(selectedTabs(root)).toEqual(["settings-tab-access"])
+
+    await pressKey(root, "Home")
+    expect(selectedTabs(root)).toEqual(["settings-tab-appearance"])
+
+    // Arrow keys wrap around the ends.
+    await pressKey(root, "ArrowLeft")
+    expect(selectedTabs(root)).toEqual(["settings-tab-access"])
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("honours horizontal tablist semantics and 44px targets", async () => {
   const source = await Bun.file(
     new URL("../src/components/settings-workspace.tsx", import.meta.url)
   ).text()
-  expect(source).toContain("@container")
-  expect(source).toContain("@[40rem]:flex")
-  expect(source).toContain("rtl:rotate-180")
+  expect(source).toContain('role="tablist"')
+  expect(source).toContain('role="tab"')
+  expect(source).toContain('role="tabpanel"')
+  expect(source).toContain('aria-orientation="horizontal"')
+  expect(source).toContain("aria-selected={selected}")
+  expect(source).toContain("aria-labelledby={tabID(active.id)}")
   expect(source).toContain("min-h-11")
-  expect(source).toContain("All settings")
+  expect(source).toContain("rounded-full")
+  expect(source).toContain("sticky top-0")
+  expect(source).toContain("bg-background/95 backdrop-blur")
+  expect(source).toContain("[scrollbar-width:none]")
+  expect(source).toContain("overflow-x-auto")
+  expect(source).toContain("rtl:bg-linear-to-l")
+  expect(source).toContain("motion-reduce:transition-none")
+})
+
+test("both Settings entry points left-align their footer", async () => {
+  const navigation = await Bun.file(
+    new URL("../src/components/session-nav.tsx", import.meta.url)
+  ).text()
+
+  expect(navigation).toContain('"justify-start gap-1 p-3"')
+  expect(navigation).toContain(
+    'SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4"'
+  )
+  expect(navigation).not.toContain('"justify-end gap-1 p-3"')
 })
 
 test("the retired dialog and sidebar theme entry points are gone", async () => {

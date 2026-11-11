@@ -15,7 +15,15 @@ import {
   notePreviewText,
   pinnedNoteInput,
   removeNoteAttachmentReference,
+  spaceFilterOptions,
 } from "../src/components/notes-panel"
+import {
+  SpaceDirectoryField,
+  projectDirectoriesFrom,
+  spaceDirectoryError,
+  spaceDirectoryValue,
+  uniqueDirectories,
+} from "../src/components/notes-space-editor"
 import { NoteStatusLabel } from "../src/components/note-status-label"
 import {
   NOTE_STATUSES,
@@ -276,9 +284,13 @@ test("the notes split layout follows its container, not the viewport", async () 
     expect(text).toContain("@container")
     expect(text).toContain("@[40rem]:grid-cols-[minmax(17rem,0.85fr)_minmax(0,1.5fr)]")
     expect(text).toContain("@[40rem]:border-s")
-    expect(text).toContain("flex-wrap")
     expect(text).not.toContain("md:grid-cols")
-    expect(text).not.toContain("overflow-x-auto")
+    // Only the status-pill row scrolls sideways; the page itself never does.
+    const scrollers = root.root.findAll(
+      (node) => typeof node.props.className === "string" && node.props.className.includes("overflow-x-auto")
+    )
+    expect(scrollers).toHaveLength(1)
+    expect(scrollers[0].props.className).toContain("min-w-0")
   } finally {
     if (root) await act(async () => root.unmount())
     restore()
@@ -456,34 +468,109 @@ test("space rows are de-duplicated and carry Global/project badges", async () =>
   }
 })
 
-test("status filters group chips by category and narrow the list", async () => {
+test("status filters are one row of pills with colour dots and no category headers", async () => {
   const restore = environment()
   let root
   const adapter = { list: async () => snapshot([
-    { ...note("one"), title: "Draft plan" },
-    { ...note("two"), title: "Shipped feature", status: "finished" },
-    { ...note("three"), title: "Stuck", status: "blocked" },
+    { ...note({ id: "one" }), title: "Draft plan" },
+    { ...note({ id: "two" }), title: "Shipped feature", status: "finished" },
+    { ...note({ id: "three" }), title: "Stuck", status: "blocked" },
   ]) }
   try {
     await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
-    for (const label of ["Backlog statuses", "Active statuses", "Done statuses"])
-      expect(root.root.findAllByProps({ "aria-label": label }).length).toBeGreaterThan(0)
-    const group = root.root.findAllByProps({ "role": "group", "aria-label": "Filter by status" })[0]
-    expect(group.findAllByType("button")).toHaveLength(8)
+    const group = root.root.findAllByProps({ role: "group", "aria-label": "Filter by status" })[0]
+    expect(group.props["data-notes-status-filters"]).toBe(true)
+    expect(group.props.className).toContain("overflow-x-auto")
+    expect(group.props.className).toContain("[scrollbar-width:none]")
+    expect(group.props.className).toContain("mask-image")
 
-    const blocked = root.root.findAllByType("button").find((button) => button.children.includes("Blocked"))
-    await act(async () => blocked.props.onClick())
+    const statusGroup = () => root.root.findAllByProps({ role: "group", "aria-label": "Filter by status" })[0]
+    const pill = (label) => statusGroup().findAllByType("button").find((button) => button.props["aria-label"] === label)
+
+    const pills = statusGroup().findAllByType("button")
+    expect(pills).toHaveLength(8)
+    expect(pills.map((item) => item.props["aria-label"] ?? item.children.filter((child) => typeof child === "string").join(""))).toEqual([
+      "All",
+      "Filter by status: Idea (Backlog)",
+      "Filter by status: To do (Backlog)",
+      "Filter by status: In progress (Active)",
+      "Filter by status: Blocked (Active)",
+      "Filter by status: Finished (Done)",
+      "Filter by status: Cancelled (Done)",
+      "Filter by status: Archived (Done)",
+    ])
+    expect(pills[0].children).toContain("All")
+
+    // Category reaches assistive technology through the pill name, never a header row.
+    for (const category of ["Backlog statuses", "Active statuses", "Done statuses"])
+      expect(root.root.findAllByProps({ "aria-label": category })).toHaveLength(0)
+    expect(JSON.stringify(root.toJSON())).not.toContain("uppercase")
+
+    const dots = statusGroup().findAll((node) => node.props["data-status-dot"] !== undefined)
+    expect(dots.map((dot) => dot.props["data-status-dot"])).toEqual([
+      "idea", "todo", "in-progress", "blocked", "finished", "cancelled", "archived",
+    ])
+    const blockedDot = dots.find((dot) => dot.props["data-status-dot"] === "blocked")
+    expect(blockedDot.props.className).toContain("bg-rose-600")
+    expect(blockedDot.props.className).toContain("size-1.5")
+    expect(blockedDot.props["aria-hidden"]).toBe("true")
+
+    expect(pills[0].props["aria-pressed"]).toBe(true)
+    expect(pill("Filter by status: Blocked (Active)").props["aria-pressed"]).toBe(false)
+
+    await act(async () => pill("Filter by status: Blocked (Active)").props.onClick())
+    expect(pill("Filter by status: Blocked (Active)").props["aria-pressed"]).toBe(true)
+    expect(pills[0].props["aria-pressed"]).toBe(false)
     expect(root.root.findAllByProps({ "aria-label": "Open Stuck" }).length).toBeGreaterThan(0)
     expect(root.root.findAllByProps({ "aria-label": "Open Draft plan" })).toHaveLength(0)
 
-    const finished = root.root.findAllByType("button").find((button) => button.children.includes("Finished"))
-    await act(async () => finished.props.onClick())
+    await act(async () => pill("Filter by status: Finished (Done)").props.onClick())
     expect(root.root.findAllByProps({ "aria-label": "Open Shipped feature" }).length).toBeGreaterThan(0)
     expect(root.root.findAllByProps({ "aria-label": "Open Stuck" })).toHaveLength(0)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()
   }
+})
+
+test("the live note count and space pill replace the full-width space select", async () => {
+  const restore = environment()
+  let root
+  const spaces = [
+    { id: "global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
+    { id: "work", name: "Work", projectDir: "/synthetic/work", pinned: false, revision: 1 },
+  ]
+  const adapter = { list: async () => snapshot([note(), note({ id: "n2", title: "Second" })], { spaces }) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("2 notes")
+    expect(text).toContain('"aria-live":"polite"')
+    const trigger = root.root.findAllByType("button").find((button) => String(button.props["aria-label"] ?? "").startsWith("Filter by space:"))
+    expect(trigger.props["aria-label"]).toBe("Filter by space: All spaces")
+    expect(trigger.props.className).toContain("rounded-full")
+    expect(trigger.props.className).toContain("h-11")
+    expect(trigger.props.className).toContain("max-w-[65%]")
+    // No standalone combobox select is left behind.
+    expect(root.root.findAllByProps({ role: "combobox" })).toHaveLength(0)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("space filter options list each space once with its scope", () => {
+  const spaces = [
+    { id: "global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
+    { id: "work", name: "Work", projectDir: "/synthetic/work", pinned: false, revision: 1 },
+    { id: "work", name: "Work", projectDir: "/synthetic/work", pinned: false, revision: 1 },
+  ]
+  expect(spaceFilterOptions(spaces)).toEqual([
+    { value: "all", label: "All spaces" },
+    { value: "__notes_none__", label: "No space" },
+    { value: "global", label: "Ideas", projectDir: null },
+    { value: "work", label: "Work", projectDir: "/synthetic/work" },
+  ])
 })
 
 test("drafts survive leaving the panel when the adapter instance is reused", async () => {
@@ -507,4 +594,145 @@ test("drafts survive leaving the panel when the adapter instance is reused", asy
     if (root) await act(async () => root.unmount())
     restore()
   }
+})
+
+async function renderDirectoryField(props) {
+  let root
+  await act(async () => {
+    root = create(
+      React.createElement(SpaceDirectoryField, {
+        id: "space-directory",
+        value: "",
+        directories: [],
+        onChange() {},
+        ...props,
+      })
+    )
+  })
+  return root
+}
+
+const directoryRows = (root) =>
+  root.root
+    .findAllByType("button")
+    .filter((node) => typeof node.props["data-space-directory"] === "string")
+
+test("the space editor lists Global first, then known directories, and prefills edits", async () => {
+  const restore = environment()
+  let root
+  try {
+    root = await renderDirectoryField({
+      value: "/synthetic/work",
+      directories: ["/synthetic/work", "/synthetic/alpha"],
+    })
+    const input = root.root.findByType("input")
+    expect(input.props.value).toBe("/synthetic/work")
+    expect(input.props.placeholder).toBe("Empty = Global (every project)")
+    expect(input.props.dir).toBe("ltr")
+    const label = root.root.findAllByType("label")[0]
+    expect(label.children).toContain("Project directory")
+
+    const rows = directoryRows(root)
+    expect(rows.map((row) => row.props["data-space-directory"])).toEqual([
+      "",
+      "/synthetic/work",
+      "/synthetic/alpha",
+    ])
+    expect(rows[0].props["aria-pressed"]).toBe(false)
+    expect(rows[1].props["aria-pressed"]).toBe(true)
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Global")
+    expect(text).toContain("Visible in every project")
+    expect(text).toContain("/synthetic/alpha")
+    expect(text).toContain("Any absolute path works, even before the folder exists.")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("typing filters directories and offers an exact custom path", async () => {
+  const restore = environment()
+  let root
+  const directories = ["/synthetic/alpha", "/synthetic/work"]
+  try {
+    root = await renderDirectoryField({ value: "/ALPHA", directories })
+    expect(directoryRows(root).map((row) => row.props["data-space-directory"])).toEqual([
+      "",
+      "/synthetic/alpha",
+    ])
+    await act(async () => root.unmount())
+    root = undefined
+
+    const changes = []
+    root = await renderDirectoryField({
+      value: "/synthetic/work",
+      directories,
+      onChange: (next) => changes.push(next),
+    })
+    // An exact match needs no custom row.
+    expect(
+      root.root
+        .findAllByType("button")
+        .filter((node) => node.props["data-space-directory-custom"] !== undefined)
+    ).toHaveLength(0)
+    await act(async () => directoryRows(root)[1].props.onClick())
+    expect(changes.at(-1)).toBe("/synthetic/alpha")
+    await act(async () => directoryRows(root)[0].props.onClick())
+    expect(changes.at(-1)).toBe("")
+    await act(async () => root.unmount())
+    root = undefined
+
+    root = await renderDirectoryField({
+      value: "/not/created/yet",
+      directories,
+      onChange: (next) => changes.push(next),
+    })
+    expect(JSON.stringify(root.toJSON())).toContain("Use custom path: ")
+    const custom = root.root.findAllByType("button").find((node) => node.props["data-space-directory-custom"] === "/not/created/yet")
+    await act(async () => custom.props.onClick())
+    expect(changes.at(-1)).toBe("/not/created/yet")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("space directories must be absolute but need not exist yet", async () => {
+  expect(spaceDirectoryError(null)).toBeNull()
+  expect(spaceDirectoryError("   ")).toBeNull()
+  expect(spaceDirectoryError("/synthetic/new")).toBeNull()
+  expect(spaceDirectoryError("/synthetic/not/created/yet")).toBeNull()
+  expect(spaceDirectoryError("relative/path")).toBe("Use an absolute path starting with /")
+  expect(spaceDirectoryValue("  /synthetic/new  ")).toBe("/synthetic/new")
+  expect(spaceDirectoryValue("   ")).toBeNull()
+  expect(spaceDirectoryValue(null)).toBeNull()
+
+  const restore = environment()
+  let root
+  try {
+    root = await renderDirectoryField({ value: "relative/path", directories: [] })
+    const alert = root.root.findAllByProps({ role: "alert" })[0]
+    expect(alert.children).toContain("Use an absolute path starting with /")
+    expect(root.root.findByType("input").props["aria-invalid"]).toBe(true)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("engine projects and the workspace directory supply the space editor options", () => {
+  expect(projectDirectoriesFrom([
+    { canonical: "/synthetic/work" },
+    { canonical: "/synthetic/work/" },
+    { canonical: "/synthetic/alpha" },
+    { canonical: "" },
+    null,
+    { id: "no-canonical" },
+  ])).toEqual(["/synthetic/work", "/synthetic/alpha"])
+  expect(projectDirectoriesFrom({ projects: [] })).toEqual([])
+  expect(uniqueDirectories("/synthetic/work", null, "/synthetic/notes", "/synthetic/work/", "")).toEqual([
+    "/synthetic/work",
+    "/synthetic/notes",
+  ])
 })

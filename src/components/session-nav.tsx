@@ -1295,7 +1295,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
           </ScrollArea>
         </>
       )}
-      <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-end gap-1 p-3")}>
+      <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-start gap-1 p-3")}>
         <SettingsButton />
       </div>
     </aside>
@@ -1385,7 +1385,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
             }}
           />
         </ScrollArea>
-        <SheetFooter className="flex-row items-center justify-end gap-1 border-t border-border p-4">
+        <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4">
           <SettingsTriggerButton
             onClick={() => {
               pendingSettings.current = true

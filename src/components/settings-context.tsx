@@ -39,18 +39,16 @@ type PendingChange =
 export type SettingsWorkspaceContextValue = {
   /** The Settings workspace is the active main pane. */
   open: boolean
-  /** Selected section, persisted while closed so reopening resumes it. */
+  /** Selected tab. A plain open always starts at Appearance; deep links win. */
   section: SettingsSectionID
-  /** Mobile single-pane view shows the section detail instead of the list. */
-  detailView: boolean
   /** Open the workspace, optionally deep-linking to a section. Closes Notes. */
   openSettings: (section?: SettingsSectionID) => void
   /** Close without the unsaved-agent-edits guard. */
   closeSettings: () => void
   /** Close, confirming first while agent edits are still saving. */
   requestClose: () => void
+  /** Select a tab, confirming first while agent edits are still saving. */
   selectSection: (section: SettingsSectionID) => void
-  showSectionList: () => void
   agentDirty: boolean
   setAgentDirty: (dirty: boolean) => void
   confirmOpen: boolean
@@ -80,7 +78,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const [openRequested, setOpenRequested] = useState(false)
   const [section, setSection] = useState<SettingsSectionID>("appearance")
-  const [detailView, setDetailView] = useState(false)
   const [agentDirty, setAgentDirtyState] = useState(false)
   const [pendingChange, setPendingChange] = useState<PendingChange | null>(null)
   // Notes and Settings are mutually exclusive: Notes wins while it is open, so
@@ -110,7 +107,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const closeNow = useCallback(() => {
     setOpenRequested(false)
-    setDetailView(false)
     setPendingChange(null)
     setAgentDirty(false)
     restoreFocus()
@@ -125,8 +121,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         }
       }
       closeNotes?.()
-      if (nextSection) setSection(nextSection)
-      setDetailView(nextSection !== undefined)
+      // A plain open always starts at Appearance; a deep link selects its section.
+      setSection(nextSection ?? "appearance")
       setPendingChange(null)
       setAgentDirty(false)
       setOpenRequested(true)
@@ -140,7 +136,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     if (!notesOpen || !openRequested) return
     /* eslint-disable react-hooks/set-state-in-effect -- reconcile against the Notes workspace, which is external state */
     setOpenRequested(false)
-    setDetailView(false)
     setPendingChange(null)
     setAgentDirty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -156,21 +151,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const selectSection = useCallback(
     (next: SettingsSectionID) => {
-      if (next === section) {
-        setDetailView(true)
-        return
-      }
+      if (next === section) return
       if (agentDirtyRef.current) {
         setPendingChange({ kind: "section", id: next })
         return
       }
       setSection(next)
-      setDetailView(true)
     },
     [section]
   )
-
-  const showSectionList = useCallback(() => setDetailView(false), [])
 
   const keepEditing = useCallback(() => setPendingChange(null), [])
 
@@ -184,19 +173,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       return
     }
     setSection(change.id)
-    setDetailView(true)
   }, [pendingChange, setAgentDirty, closeNow])
 
   const value = useMemo<SettingsWorkspaceContextValue>(
     () => ({
       open,
       section,
-      detailView,
       openSettings,
       closeSettings: closeNow,
       requestClose,
       selectSection,
-      showSectionList,
       agentDirty,
       setAgentDirty,
       confirmOpen: pendingChange !== null,
@@ -207,12 +193,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     [
       open,
       section,
-      detailView,
       openSettings,
       closeNow,
       requestClose,
       selectSection,
-      showSectionList,
       agentDirty,
       setAgentDirty,
       pendingChange,
@@ -235,7 +219,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             <AlertDialogTitle>Changes are still saving</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingChange?.kind === "section"
-                ? "Switch sections anyway? The latest edit may not be saved."
+                ? "Switch tabs anyway? The latest edit may not be saved."
                 : "Close Settings anyway? The latest edit may not be saved."}
             </AlertDialogDescription>
           </AlertDialogHeader>
