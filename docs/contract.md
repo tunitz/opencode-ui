@@ -13,10 +13,11 @@ are intentional; do not weaken them when simplifying UI code.
   browser-facing origin and injects the server-held credential. Engine URL and port are
   configuration-dependent: the CLI defaults to `http://127.0.0.1:4096`, while the direct/dev
   server defaults to `http://127.0.0.1:8090`.
-- Registration JSON contains hostname, password, and port. The CLI reads
-  `$XDG_CONFIG_HOME/opencode/service.json` or `~/.config/opencode/service.json`; the direct server
-  uses `~/.config/opencode/service.json`. The password is read server-side and never printed,
-  persisted in browser storage, or exposed to client code.
+- Registration JSON must contain a nonempty `password`; other fields (such as hostname and port) are
+  not required by this client. The CLI reads `$XDG_CONFIG_HOME/opencode/service.json` or
+  `~/.config/opencode/service.json`; the direct server uses `~/.config/opencode/service.json`. The
+  password is read server-side and never printed, persisted in browser storage, or exposed to client
+  code.
 - The engine API is not a frontend review URL. Network isolation of the engine listener is outside
   this client and requires separate approval.
 
@@ -48,19 +49,104 @@ are intentional; do not weaken them when simplifying UI code.
   unknown/missing unsafe origins rejected for mutations/WS; API path/method allowlist; JSON
   content-type for bodied mutations; security headers; no wildcard CORS; API
   `cache-control: no-store`; SSE remains `no-cache, no-transform`.
-- **No browser cookie/session auth or extra login service is built in.** Loopback is the default
-  boundary. Any non-loopback exposure needs its own authenticated access boundary and secure
-  transport. Allowlists are not authentication or multi-tenant isolation; any client that can
-  reach the UI has full app/engine access.
-- Plugin RPC is not a general browser proxy: only the explicit `opencode-notes` methods (`list`,
-  `get`, `create`, `update`, `delete`, `spaces`, `createSpace`, `updateSpace`, `deleteSpace`,
-  `createAttachment`, `readAttachment`, `deleteAttachment`) are allowed under
-  `/api/rpc/opencode-notes/`; other plugins and methods remain unreachable.
+- **Browser access gate:** a shared UI password gates `/api/*` (HTTP and WebSocket upgrades)
+  whenever a password is configured or the bind host is non-loopback. Loopback with no password
+  stays pass-through. It is one shared credential, not multi-tenant isolation.
+- **Notes are an app-layer API, not a general browser proxy:** `POST /api/ui/notes/<method>` exposes
+  only the fixed method list below. `/api/rpc/opencode-notes/*` and `NOTES_RPC_PATHS` were removed;
+  no plugin RPC route remains.
 - The gateway is not network isolation. The engine endpoint is separate and must be protected
   independently.
 - `/connect` supports native key/OAuth methods with ephemeral key state, bounded polling, and
   explicit cancellation. External/command methods remain blocked; no real credential/OAuth/login/
   pairing code/provider config was exercised.
+
+## Browser access gate [app layer]
+
+State is file-backed at `~/.local/share/opencode-ui/auth/state.json` (override
+`OPENCODE_UI_AUTH_STATE`), directory `0700`, file `0600`, atomic temp+rename. It contains an argon2id
+password hash (`Bun.password`) and SHA-256 session-token hashes; passwords and raw tokens are never
+persisted or logged. Passwords are 8–256 characters. Sessions last 30 days, are capped at 20, and are
+pruned on each auth write.
+
+- Cookie: `opencode_ui_session=<token>; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`, with
+  `Secure` only when the request URL is HTTPS.
+- Gating is active when a password is configured **or** the resolved bind host is not loopback
+  (`0.0.0.0` and LAN addresses count as non-loopback). When inactive, requests pass through.
+- When active, every path starting with `/api` requires a valid session cookie, including SSE and
+  WebSocket upgrades, except `/api/ui/auth/status`, `/api/ui/auth/setup`, `/api/ui/auth/login`, and
+  `/api/ui/auth/logout`. Static/SPA paths and `/openapi.json` are not gated.
+- Unauthorized API response: **401** JSON `{ "error": { "code": "auth_required" } }`, or
+  `setup_required` when no password exists but one is required. Unauthorized WebSocket upgrades get
+  a bare 401. All responses keep the shared security headers.
+- Login throttling: per remote IP, 10 failed attempts per 60 seconds → 429 `too_many_attempts`, plus a
+  250 ms delay per failure.
+
+| Method and path | Body | Result |
+|---|---|---|
+| `GET /api/ui/auth/status` | none | `{ configured, required, authenticated }`; `authenticated` is true for a valid session or when gating is inactive. |
+| `POST /api/ui/auth/setup` | `{ password }` | 200 `{ ok: true }` + session cookie; 409 `already_configured`; 400 `invalid`. |
+| `POST /api/ui/auth/login` | `{ password }` | 200 `{ ok: true }` + session cookie; 401 `invalid_credentials`; 409 `not_configured`; 429 `too_many_attempts`. |
+| `POST /api/ui/auth/logout` | none | 204, clears the cookie, removes the session server-side. |
+| `PUT /api/ui/auth/password` | `{ current, next }` | 200 `{ ok: true }`; 401 `invalid_credentials` or `auth_required`; 409 `password_required` when `next: ""` on a non-loopback bind. Changing the password keeps the current session and invalidates others; `next: ""` removes the password and all sessions. |
+
+Auth bodies are JSON objects limited to 8 KiB; failures use `{ "error": { "code" } }`. The UI fetches
+status once at boot and re-fetches it after sign-in; it does not poll. Mid-session `auth_required` /
+`setup_required` responses from the notes or plugins APIs re-show the auth screen.
+
+## App-layer Notes API [app layer]
+
+One `NotesService` instance per UI-server process, backed by the shared file store. Mounted under
+`/api/ui/notes/*` before the generic engine proxy.
+
+- `POST /api/ui/notes/<method>` where method is one of `list`, `get`, `create`, `update`, `delete`,
+  `search`, `history`, `restore`, `spaces`, `createSpace`, `updateSpace`, `deleteSpace`,
+  `createAttachment`, `readAttachment`, `deleteAttachment`. The JSON body is the service input and may
+  include `directory` for scoping. Success is 200 with the service output object (for example
+  `{ notes, total }`).
+- Mutations must use a JSON content type; otherwise the response is 415 with code `invalid`.
+- Body limit is 1 MiB, except `POST createAttachment`, which allows 8 MiB. Oversized bodies are
+  rejected with 413 by the dispatcher.
+- Errors: `invalid` → 400, `note_not_found` / `space_not_found` / `snapshot_not_found` /
+  `attachment_not_found` → 404, `revision_conflict` / `space_not_empty` → 409, `limit_exceeded` → 413,
+  `mime_rejected` → 415, anything else → 500. Body `{ "error": { "code", "message" } }`.
+- `GET /api/ui/notes/events` is an SSE stream (`text/event-stream`, `no-cache, no-transform`). It
+  sends `event: changed` with `data: {"at":<epochMs>}` for in-process mutations and for filesystem
+  changes under `notes/`, `spaces/`, and `attachments/` (250 ms debounce), plus a 30-second comment
+  heartbeat. There is no replay; clients refetch.
+- `/api/ui` remains an allowed API prefix in request security. `NOTES_RPC_PATHS` and its POST/JSON
+  special cases are removed.
+
+## App-layer Plugins API [app layer]
+
+Mounted under `/api/ui/plugins`; body limit 8 KiB. The UI server uses the server-held engine Basic
+credential and never writes engine configuration files.
+
+- `GET /api/ui/plugins` → `{ engineAvailable, plugins: [{ id, name, description, registered, connected, restartRequired }] }`.
+  The server reads `GET <engine>/api/mcp`. Engine unreachable or non-OK → 200 with
+  `engineAvailable: false` and `registered: false`.
+- `POST /api/ui/plugins/notes/enable` → registers the local MCP server with
+  `PUT /api/experimental/mcp/notes` and body
+  `{ "config": { "type": "local", "command": ["bun", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false } }`.
+  If it is registered but not connected, the server then calls
+  `POST /api/experimental/mcp/notes/connect` and re-reads status. Response
+  `{ registered: true, connected, restartRequired: !connected }`. Engine crash → 502
+  `engine_unavailable`; rejected request → 502 `engine_rejected`.
+- `POST /api/ui/plugins/notes/disable` → `DELETE /api/experimental/mcp/notes`; an already-absent
+  server (404) is treated as success. Response `{ registered: false }`.
+- Engine list shape is `{ location, data: [{ name, status }] }`, where `status` is
+  `{ status: "connected" | "pending" | "disabled" | "failed" | "needs_auth" }`. The UI treats only
+  `connected` as connected; a registered non-connected server surfaces `restartRequired`.
+  `disabled: false` means enabled.
+- `codemode: false` is required so each notes tool call renders as a real tool row.
+
+## Dispatch order [app layer]
+
+The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied
+upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
+Notes API, Plugins API, agents, notifications, artifacts (`/api/ui` fallback), engine proxy (`/api*`
+and `/openapi.json`), then static frontend assets. Notes and Plugins branches are skipped when those
+services are not installed. Notes events and `/api/event` disable the request timeout.
 
 ## API contract [source/spec; runtime exercised only for info, spec, auth, SSE]
 
@@ -281,8 +367,8 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
   Localhost/private/metadata/arbitrary hosts are rejected before any push request.
 - App routes under `/api/ui/notifications`: `GET public-key`, `GET state?deviceId`, `GET health`,
   `POST subscribe`, `POST preferences`, `POST watch`, `POST heartbeat`, `POST test`,
-  `POST unsubscribe`. They pass the existing exact Origin/Host/path/JSON guards; no new login,
-  cookie, wildcard CORS, or public Funnel.
+  `POST unsubscribe`. They pass the existing exact Origin/Host/path/JSON guards and the shared access
+  gate; no separate login, wildcard CORS, or public Funnel.
 - A single server-side background watcher uses the server-held Basic credential against native
   `/api/event`; it runs without a browser tab. It maps native `session.execution.succeeded/failed`,
   `permission.asked`, and `form.created` to generic completion/failure/needs-attention payloads.
@@ -324,8 +410,14 @@ Pins are not evidence of integration.
 
 ## Known limits
 
-- There is no browser login. Non-loopback use needs its own authenticated boundary; allowlists are
-  not authentication or multi-tenant isolation.
+- The browser password is one shared credential. It is an access boundary, not multi-tenant
+  isolation; non-loopback use still needs secure transport and network protection. Allowlists are
+  not authentication.
+- MCP registration is engine-side state: a newly registered Notes server may need an engine restart
+  before its tools appear. The UI reports `restartRequired` and never restarts the engine itself.
+- Notes use per-record advisory locks plus `expectedRevision` compare-and-set, not multi-record
+  transactions. Cross-process races are bounded by lockfiles (50 ms retry × 40, stale takeover after
+  5 s); a crash can leave an orphaned attachment, and space deletion is not atomic with note creation.
 - `/connect` key/OAuth support is implemented; external/command methods and some provider loopback
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests

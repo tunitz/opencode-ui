@@ -1,418 +1,358 @@
-# OpenCode Notes plugin
+# @tunitz/opencode-notes
 
-A standalone OpenCode V2 plugin, packaged separately from the UI. It stores notes in the
-OpenCode server's plugin storage, exposes agent CRUD tools, publishes a typed RPC contract, and
-adds a direct TUI command surface.
+Standalone notes core for OpenCode UI. It owns a plaintext file store, a typed
+service API, search, revision history, and an MCP stdio server that agents can call.
+It no longer runs inside the OpenCode engine as a plugin: the former engine plugin
+export, RPC contract, and TUI command surface are retired.
 
-No engine, UI, or live configuration changes are required to build or test this package.
+- Package: `@tunitz/opencode-notes`
+- Core export: `@tunitz/opencode-notes` (`.`)
+- MCP helper export: `@tunitz/opencode-notes/mcp` (`./mcp`)
+- Runnable MCP entry: `plugins/notes/src/mcp/main.ts`
 
-The same usage guidance is available to agents as the global `notes` skill at
-`~/.agents/skills/notes/SKILL.md`.
+```sh
+# From the repository root:
+bun plugins/notes/src/mcp/main.ts
+```
 
-## Package layout
+## Architecture
 
-| Export     | File        | Purpose                                        |
-| ---------- | ----------- | ---------------------------------------------- |
-| `.`        | `index.ts`  | Server plugin (`id: "opencode-notes"`)         |
-| `./server` | `server.ts` | Same server plugin, for package subpath hosts  |
-| `./rpc`    | `rpc.ts`    | Portable RPC contract (`id: "opencode-notes"`) |
-| `./tui`    | `tui.ts`    | TUI plugin (`id: "opencode-notes.tui"`)        |
+| Piece | Purpose |
+| --- | --- |
+| `src/types.ts` | v2 records, inputs/outputs, statuses, limits, `NotesError` |
+| `src/store.ts` | `NotesStore` interface, `FileNotesStore`, `MemoryNotesStore`, parsers |
+| `src/service.ts` | `NotesService` and `createNotesService` |
+| `src/core/migrate.ts` | one-time read-only import from engine SQLite |
+| `src/fs-utils.ts` | data-dir resolution, atomic writes, safe file names |
+| `src/mcp/server.ts` | MCP server factory, tools/prompts/resources wiring |
+| `src/mcp/main.ts` | stdio entry point |
 
-The server export is a `Plugin.define`-compatible object with `id` and `setup`. It imports only
-types at runtime, so it works whether the host resolves `@opencode/plugin` or not.
+The UI server imports the core in-process; agents connect to the MCP server. Both
+resolve the same default data directory, so there is no sync step between them as
+long as they run with the same user and environment.
 
-## Loading it
+## Data directory
 
-This repository does not configure the plugin for you. To load it in a separate OpenCode
-configuration, point the V2 `plugins` array at this directory (the directory, not a single file):
+Default: `$XDG_DATA_HOME/opencode-notes/v1`, or
+`~/.local/share/opencode-notes/v1` when `XDG_DATA_HOME` is unset.
+Override with `OPENCODE_NOTES_DATA_DIR`.
 
-```jsonc
-{
-  "plugins": ["/absolute/path/to/opencode-ui/plugins/notes"],
+```text
+notes/<noteID>.json                 plaintext note records
+spaces/<spaceID>.json               plaintext space records
+attachments/<attachmentID>          raw attachment bytes
+history/<noteID>/<revision>-<savedAt>.json
+migrated.json                       one-time migration marker
+```
+
+Writes use a temp file plus rename, files are `0600`, and directories are `0700`.
+Per-record mutations take an advisory lock (`<record>.json.lock`, created with
+`O_EXCL`, 50 ms retry × 40, stale takeover after 5 s) and do the
+read-modify-write inside it. `expectedRevision` compare-and-set checks run under
+that same lock, so two processes cannot silently overwrite each other.
+
+A missing or corrupt individual record is skipped when listing; it does not take
+the store down.
+
+## Status model
+
+```ts
+type NoteStatus =
+  | "idea"
+  | "todo"
+  | "in-progress"
+  | "blocked"
+  | "finished"
+  | "cancelled"
+  | "archived"
+
+const STATUS_CATEGORIES = {
+  backlog: ["idea", "todo"],
+  active: ["in-progress", "blocked"],
+  done: ["finished", "cancelled", "archived"],
 }
 ```
 
-OpenCode discovers the root `server.ts`/`index.ts` as the server part, root `rpc.ts` as the RPC
-contract, and root `tui.ts` as the TUI part. These root files are thin forwarders, so both
-local-directory loading and package-subpath resolution work.
-Do not edit the live config unless the user explicitly asks for it.
+- New notes default to `todo`.
+- Transitions are not hard-enforced. Lifecycle is a convention:
+  - `idea` / `todo` — not started.
+  - `in-progress` — actively being worked; move a plan note here when work starts.
+  - `blocked` — waiting on a decision or dependency.
+  - `finished` — **verified**, with evidence (commands, outcomes, commit) appended
+    to the note body.
+  - `cancelled` / `archived` — intentionally not completed. The whole `done`
+    category is terminal by convention; reopening is an explicit status change and
+    is recorded in history.
+- Legacy v1 statuses (`todo`, `in-progress`, `finished`) remain valid because they
+  are a subset of the seven.
+- `statusUpdatedAt` is set whenever the status changes and is omitted on legacy
+  records that never had one.
 
-## Model
+## Spaces and directory scoping
 
-- **Space** — `global` or `planning`. Both kinds may have an optional project link. A global
-  space is usually unlinked and shared; a planning space is usually linked to one project.
-- **Note** — belongs to zero or one space (`spaceID: null` means unassigned). Status is `todo`,
-  `in-progress`, or `finished`.
-- **Pinning** — notes and spaces can be pinned. Lists sort pinned entries first.
-- A project link stores a project `id` plus `directory`/`canonical` snapshots. The `id` is the
-  identity; the paths are display data and are not an authorization boundary.
-
-## RPC contract
-
-ID: `opencode-notes`. Methods: `list`, `get`, `create`, `update`, `delete`, `createAttachment`,
-`readAttachment`, `deleteAttachment`, `spaces`, `createSpace`, `updateSpace`, `deleteSpace`.
-Event: `changed`.
-
-All top-level inputs and outputs are closed objects (`additionalProperties: false`). Timestamps are
-epoch milliseconds. IDs are opaque strings.
-
-### Shared shapes
+Spaces are v2:
 
 ```ts
-type NoteStatus = "todo" | "in-progress" | "finished"
-type SpaceKind = "global" | "planning"
-
-interface ProjectLink {
-  id: string
-  directory: string | null
-  canonical: string | null
-}
-
 interface Space {
   id: string
   name: string
-  kind: SpaceKind
-  project: ProjectLink | null
+  projectDir: string | null // null = Global
   pinned: boolean
   revision: number
   createdAt: number
   updatedAt: number
 }
-
-interface Note {
-  id: string
-  spaceID: string | null
-  title: string
-  body: string
-  status: NoteStatus
-  pinned: boolean
-  attachments: NoteAttachment[]
-  revision: number
-  createdAt: number
-  updatedAt: number
-}
-
-interface NoteAttachment {
-  id: string
-  name: string
-  mime: string
-  size: number // decoded bytes
-  createdAt: number
-}
-
-// revision starts at 1 for new records. Records written before revisions were
-// added decode as revision 0. Every successful update increments it by one,
-// independent of updatedAt (which may repeat within the same millisecond).
-// Notes written before attachments existed decode with attachments: [].
 ```
 
-`ProjectInput` is `{ id: string; directory?: string | null; canonical?: string | null }`.
-Every `Note`/`Space` returned by `list`, `spaces`, `create`, `update`, `createSpace`, or
-`updateSpace` includes its current `revision`. Note responses always include `attachments`
-metadata but never attachment bytes; only `readAttachment` returns base64 data.
+- `projectDir === null` is a **Global** space, visible in every project.
+- A non-null `projectDir` is a canonical project directory.
+- The v1 `kind` / `project` vocabulary is gone. Legacy parsing/migration maps a
+  global or unlinked space to `null`, and a linked planning space to
+  `project.canonical ?? project.directory ?? null`.
+- `list`, `search`, and `spaces` accept `directory`. A note or space matches when its
+  space has `projectDir === directory`, or `projectDir === null` while
+  `includeGlobal !== false`.
+- Notes with `spaceID: null` (unassigned) are always visible.
+- There is no `projectID` or location object anymore.
 
-### Methods
+## Core API
 
 ```ts
-list(input?: {
-  spaceID?: string | null   // null selects unassigned notes
-  projectID?: string
-  status?: NoteStatus
-  pinned?: boolean
-  query?: string
-  includeGlobal?: boolean   // default true when projectID is set
-  includeBodies?: boolean   // default true; false returns empty bodies
-  limit?: number            // 1..1000, default 500
-  offset?: number           // default 0
-}): { notes: Note[]; total: number }
+import { createNotesService, type Note, type Space } from "@tunitz/opencode-notes"
 
-get(input: {
-  noteID: string
-}): { note: Note }
+const service = createNotesService() // file store + lazy migration
+await service.ready()                // optional: force migration now
 
-create(input: {
-  spaceID?: string | null   // omit or null for an unassigned note
-  title: string
-  body?: string
-  status?: NoteStatus
-  pinned?: boolean
-}): { note: Note }
-
-update(input: {
-  noteID: string
-  expectedRevision?: number  // optional optimistic check
-  spaceID?: string | null   // null unassigns
-  title?: string
-  body?: string
-  status?: NoteStatus
-  pinned?: boolean
-}): { note: Note }
-
-delete(input: {
-  noteID: string
-  expectedRevision?: number  // optional optimistic check
-}): { deleted: boolean }
-
-createAttachment(input: {
-  noteID: string
-  name: string                // display name, trimmed, <= 255 chars
-  mime: string                // type/subtype; parameters are stripped
-  data: string                // base64 bytes, <= 4 MiB decoded
-  expectedRevision?: number   // optional optimistic check
-}): { note: Note; attachment: NoteAttachment }
-
-readAttachment(input: {
-  noteID: string
-  attachmentID: string
-}): { attachment: NoteAttachment; data: string }  // base64 bytes
-
-deleteAttachment(input: {
-  noteID: string
-  attachmentID: string
-  expectedRevision?: number   // optional optimistic check
-}): { note: Note }
-
-spaces(input?: {
-  projectID?: string
-  kind?: SpaceKind
-  includeGlobal?: boolean
-}): { spaces: Space[]; total: number }
-
-createSpace(input: {
-  name: string
-  kind?: SpaceKind            // default "global"
-  project?: ProjectInput | null
-  linkCurrentProject?: boolean
-  pinned?: boolean
-}): { space: Space }
-
-updateSpace(input: {
-  spaceID: string
-  expectedRevision?: number  // optional optimistic check
-  name?: string
-  kind?: SpaceKind
-  project?: ProjectInput | null   // null unlinks
-  linkCurrentProject?: boolean
-  pinned?: boolean
-}): { space: Space }
-
-deleteSpace(input: {
-  spaceID: string
-  expectedRevision?: number  // optional optimistic check
-  cascade?: boolean           // accepted for compatibility; never deletes notes
-}): { deleted: boolean; deletedNotes: number }
+const notes = await service.list({ directory: "/repo", includeBodies: false })
 ```
 
-`list` includes full bodies by default. With `includeBodies: false`, every returned note has an
-empty `body`; filtering, query matching, `total`, `limit`, and `offset` still use the stored
-bodies. Use `includeBodies: false` or `get` for cheap browsing. `get` returns the complete note
-including its Markdown body and attachment metadata.
+`createNotesService(options)` options:
 
-Notes may be unassigned (`spaceID: null`). Unassigned notes are returned without a `projectID`
-filter and by `spaceID: null`; they do not match a project view.
+| Option | Meaning |
+| --- | --- |
+| `store` | Inject a `NotesStore` (tests). Migration runs only when the store has a `dataDir`. |
+| `dataDir` | Override the file-store root. |
+| `now` / `createID` | Deterministic clock/IDs for tests. |
+| `onChange` | In-process listener for committed `{ entity, action, id }` events. |
+| `migrate` | Explicitly enable/disable the engine import. |
+| `engineDbPath` | Override the engine SQLite path. |
 
-Project filtering: when `projectID` is set, a note/space matches if its space is linked to that
-project, or if it is a `global` space and `includeGlobal` is not `false`. With
-`includeGlobal: false`, only directly linked spaces match. `list` without `projectID` returns every
-note.
-
-`createSpace`/`updateSpace`: `project` and `linkCurrentProject` are mutually exclusive.
-`linkCurrentProject: true` uses the server plugin instance's current project. Passing `project: null`
-unlinks. Omitting both on `updateSpace` preserves the link.
-
-Errors:
-
-| Type                   | Data                                                            | When                                                                     |
-| ---------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `invalid`              | `{ field: string; message: string }`                            | Empty/oversized values, bad enum, bad limit/offset, bad expectedRevision, bad MIME or base64 |
-| `conflict`             | `{ entity; id; expectedRevision; revision }`                    | `expectedRevision` does not match the stored revision                    |
-| `space_not_found`      | `{ spaceID: string }`                                           | Creating a note in, moving to, or updating an unknown space              |
-| `note_not_found`       | `{ noteID: string }`                                            | Reading an unknown note with `get`, updating an unknown note, or an attachment method on an unknown note |
-| `space_not_empty`      | `{ spaceID: string; noteCount: number }`                        | Deleting a non-empty space, with or without `cascade: true`              |
-| `attachment_not_found` | `{ noteID: string; attachmentID: string }`                      | The note exists but does not own that attachment, or its bytes are missing |
-| `attachment_limit`     | `{ noteID: string; attachmentCount: number; size: number; limit: number }` | Per-file, count, or total-size limit exceeded                  |
-
-`conflict` data is `{ entity: "note" | "space"; id: string; expectedRevision: number; revision: number }`.
-The revision check runs inside the same per-instance mutation queue as the write, before any change.
-
-`delete` and `deleteSpace` are idempotent for a missing target: they return `deleted: false` rather
-than `not_found`, even when `expectedRevision` is supplied. A conflict is reported only when the
-target exists and its stored revision differs.
-
-`deleteSpace` never deletes notes. Non-empty spaces are refused with `space_not_empty` even when
-`cascade: true`, because plugin storage has no transaction that could make a partial cascade safe.
-`deletedNotes` is therefore always 0. Delete notes individually, then delete the empty space.
-
-### Attachments
-
-Attachments are plugin-managed binary blobs owned by a note. `list`, `create`, and `update`
-responses contain metadata only: `{ id, name, mime, size, createdAt }`, where `size` is the decoded
-byte count. Bytes are returned only by `readAttachment`, never by a list response.
-
-Limits (enforced inside the same mutation queue as the note write):
-
-- 4 MiB per attachment (4,194,304 decoded bytes).
-- 4 attachments per note.
-- 8 MiB total per note (8,388,608 decoded bytes).
-- `name`: trimmed, nonempty, at most 255 characters, no control characters. It is display data and
-  is never part of a storage key.
-- `mime`: `type/subtype`, at most 200 characters; parameters such as `; charset=utf-8` are stripped
-  before validation and storage. Active inline types are refused: `image/svg+xml`, `text/html`,
-  `application/xhtml+xml`, `application/javascript`, `text/javascript`, `application/ecmascript`,
-  `text/ecmascript`, and any `*/javascript`. Other types (safe raster images, PDF, text, and generic
-  downloads) are accepted.
-- `data`: strict base64 (no whitespace), decoded size must be greater than 0.
-
-`createAttachment` appends metadata, increments the note revision, updates `updatedAt`, and emits a
-`note:updated` event. `deleteAttachment` removes metadata, increments the revision, updates
-`updatedAt`, and emits `note:updated`. Both accept `expectedRevision`; a mismatch is a `conflict`.
-Attachment IDs are generated by the plugin and are scoped by the note that owns them: passing an
-attachment ID that belongs to another note returns `attachment_not_found`.
-
-Deleting a note removes its metadata first, then best-effort removes each attachment bytes key. A
-cleanup failure never fails or reverses the note delete, so orphaned `opencode-notes/v1/attachment/`
-keys are possible. Deleting an attachment likewise commits metadata removal before best-effort bytes
-cleanup.
-
-### Event
-
-`changed` data:
+Service methods:
 
 ```ts
+list({ spaceID?, directory?, status?, statuses?, pinned?, query?,
+       includeGlobal?, includeBodies?, limit?, offset? }) // -> { notes, total }
+get({ noteID })                                          // -> Note
+create({ spaceID?, title, body?, status?, pinned? })     // -> Note
+update({ noteID, expectedRevision?, spaceID?, title?, body?, status?, pinned? })
+delete({ noteID, expectedRevision? })                    // -> { deleted }
+spaces({ directory?, includeGlobal? })                   // -> { spaces, total }
+createSpace({ name, projectDir?, pinned? })              // -> Space
+updateSpace({ spaceID, expectedRevision?, name?, projectDir?, pinned? })
+deleteSpace({ spaceID, expectedRevision?, cascade? })    // -> { deleted, deletedNotes }
+createAttachment({ noteID, name, mime, data, expectedRevision? })
+readAttachment({ noteID, attachmentID })                 // -> { attachment, data }
+deleteAttachment({ noteID, attachmentID, expectedRevision? })
+search({ query, directory?, spaceID?, statuses?, pinned?,
+         includeGlobal?, limit?, offset? })              // -> { results, total }
+history({ noteID, limit?, offset? })                     // -> { snapshots, total }
+restore({ noteID, revision, expectedRevision? })         // -> { note }
+```
+
+- `limit` is `1..1000`, default 500 for `list` and 100 for `search`; history is
+  capped at 50 snapshots per note.
+- Lists sort pinned first, then `updatedAt` descending, then ID. Spaces sort pinned
+  first, then Global, then directory/name.
+- `includeBodies: false` returns empty bodies; filtering, totals, and pagination
+  still use the stored bodies.
+- `delete` / `deleteSpace` are idempotent for a missing target (`deleted: false`).
+  `deleteSpace` refuses non-empty spaces even with `cascade: true`; `cascade` is
+  accepted only for wire compatibility.
+- Attachments: 4 MiB per file, 4 files per note, 8 MiB total. Active inline types
+  (`image/svg+xml`, `text/html`, `application/xhtml+xml`, `application/javascript`,
+  `text/javascript`, `application/ecmascript`, `text/ecmascript`, any
+  `*/javascript`) are rejected. Notes expose metadata only; bytes are returned only
+  by `readAttachment`.
+
+### Search
+
+Case-insensitive. A title match scores 100; each body occurrence adds 10, capped at
+50. `snippet` is ±80 characters around the first body match, whitespace-collapsed,
+and ellipsized when cut. Result notes always have `body: ""`; use `notes_get` for
+the full content. Results sort by score, then by the normal note order.
+
+### History and restore
+
+Before every note update, delete, or attachment mutation, the previous record is
+snapshotted to `history/<noteID>/`. The newest 50 snapshots are kept. A snapshot
+records the full note plus `savedAt`; `history()` returns only metadata (revision,
+title, status, spaceID, savedAt, updatedAt).
+
+`restore` restores title, body, status, spaceID, and pinned state from a snapshot as
+a **new** revision, and snapshots the pre-restore state first. Attachments are not
+restored. Unknown revisions throw `snapshot_not_found`.
+
+### Errors
+
+| Type | When |
+| --- | --- |
+| `invalid` | Bad field, limit, base64, MIME shape, revision, or missing confirmation |
+| `revision_conflict` | `expectedRevision` does not match the stored revision |
+| `note_not_found` | Unknown note |
+| `space_not_found` | Unknown space |
+| `space_not_empty` | Deleting a space that still has notes |
+| `attachment_not_found` | Note does not own the attachment, or bytes are missing |
+| `snapshot_not_found` | Unknown history revision |
+| `limit_exceeded` | Per-file/count/total attachment limit exceeded |
+| `mime_rejected` | Active content type rejected |
+
+`NotesError` exposes `type` plus a `data` object. `revision_conflict` data is
+`{ entity, id, expectedRevision, revision }`.
+
+## Migration from the engine plugin
+
+On first service creation (for any store with a data directory; pass `migrate: false`
+to opt out) the service checks `migrated.json`. If it is absent, it reads the engine
+SQLite database **read-only** at `$XDG_DATA_HOME/opencode/opencode.db` (default
+`~/.local/share/opencode/opencode.db`, override `OPENCODE_ENGINE_DB_PATH`), selects
+keys like `plugin:<hex>:opencode-notes/v1/{note,space,attachment}/<id>`, converts v1
+spaces to v2, decodes attachment base64 into bytes files, and then writes
+`migrated.json` `{ at, notes, spaces, attachments }`.
+
+- Missing database → a zero marker is written and the import is skipped.
+- Records that already exist in the new store are never overwritten.
+- The engine database is never written to.
+- The migration marker makes the operation idempotent and lazy; deleting the marker
+  reruns the import for IDs that are still missing.
+
+If a real notes file already exists next to a legacy engine database, the file-store
+record wins.
+
+## MCP server
+
+`src/mcp/main.ts` connects over stdio. Tools return JSON text; failures set
+`isError` and prefix the text with the error type.
+
+### Tools (13)
+
+| Tool | Purpose |
+| --- | --- |
+| `notes_list` | List/filter notes; `includeBodies: false` for cheap browsing |
+| `notes_get` | Read one note including body and attachment metadata |
+| `notes_create` | Create a note in a space or unassigned |
+| `notes_update` | Patch a note; pass `expectedRevision` to reject stale writes |
+| `notes_delete` | Delete; confirmation via elicitation unless `expectedRevision` is given |
+| `notes_search` | Scored search with snippets |
+| `notes_history` | List saved snapshots (metadata only) |
+| `notes_restore` | Restore a snapshot as a new revision |
+| `notes_spaces` | List spaces in the current project plus Global |
+| `notes_create_space` | Create a Global or project space |
+| `notes_update_space` | Rename, re-scope, or pin a space |
+| `notes_delete_space` | Delete an empty space |
+| `notes_attachment_read` | Read a text attachment (≤64 KiB); binary returns metadata only |
+
+`notes_list`, `notes_search`, and `notes_spaces` accept `directory` and default it to
+`process.cwd()`. Inputs are closed JSON Schema objects (`additionalProperties:
+false`).
+
+### Prompts
+
+| Prompt | Arguments | Behavior |
+| --- | --- | --- |
+| `notes:capture` | `title?`, `space?`, `status?` | Distill the conversation into a durable note via `notes_create` |
+| `notes:daily` | `date?` | Find/create the Global "Daily" space and a note titled `YYYY-MM-DD`, then append a dated section |
+| `notes:review` | `directory?` | Review pinned and active notes, verify statuses, update with `expectedRevision`, append evidence before `finished` |
+
+### Resources
+
+- `notes://note/{noteID}` — a note as Markdown with YAML-ish frontmatter
+  (`id`, `status`, `space`, `updated`).
+- `notes://spaces` — space inventory text with project scope and note counts.
+- `resources/list` returns those two entries plus up to 50 pinned/most-recent notes.
+- `resources/templates/list` also exposes the note URI template.
+
+### Elicitation
+
+Only `notes_delete` uses elicitation, and only when `expectedRevision` is omitted.
+The client must advertise form elicitation; the request asks for
+`{ confirm: boolean }` and names the note title. If the capability is missing, the
+request fails, or the user declines/cancels, the call aborts with an `invalid`
+error whose text contains `confirmation_required`. Passing `expectedRevision`
+skips confirmation.
+
+## Registering with the engine
+
+Register a local MCP server from the engine's plugin/MCP settings (the UI Settings →
+Plugins section does this through the engine HTTP API):
+
+```jsonc
 {
-  entity: "note" | "space"
-  action: "created" | "updated" | "deleted"
-  id: string
+  "type": "local",
+  "command": ["bun", "/path/to/opencode-ui/plugins/notes/src/mcp/main.ts"],
+  "disabled": false,
+  "codemode": false
 }
 ```
 
-Events are hints to refetch and are live-only. Deleting an empty space emits one `space` event;
-notes are never deleted by a space delete.
+Keep `codemode: false` so each notes call renders as a real tool row instead of a
+code-mode snippet. Tools accept an explicit `directory`; when it is omitted they
+default to the server process's working directory, so pass the project directory
+when the server is not launched from that project. The UI registration does not
+set a `cwd`.
 
-## Agent tools
+The UI server also imports the core directly for its `/api/ui/notes/*` endpoints;
+that path does not require the engine MCP registration.
 
-Tools are registered in namespace `notes` with Code Mode enabled:
+## Limits
 
-`notes_list`, `notes_get`, `notes_create`, `notes_update`, `notes_delete`, `notes_spaces`,
-`notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_read`.
-
-Their inputs mirror the RPC methods, including optional `expectedRevision` on update and delete
-tools. Successful results are JSON text in the tool content, including `revision`. Service errors
-become thrown tool errors with a `type: message` prefix. Agents should call `notes_spaces` before
-creating a note when they do not know a space ID, and must delete notes individually before
-`notes_delete_space`. For browsing, pass `includeBodies: false` to `notes_list` and use `notes_get`
-only for notes whose content is needed.
-
-`notes_get` returns one full note: title, Markdown body, status, revision, and attachment metadata.
-
-`notes_attachment_read` returns decoded text only for text-like attachments: `text/*`,
-`application/json`, or `application/xml`, up to 64 KiB. Larger text returns metadata plus a
-too-large reason. Images, PDFs, and all other binary types return metadata plus an unreadable
-reason; the tool never returns base64 bytes.
-
-## TUI
-
-`src/tui.ts` (forwarded by root `tui.ts`) registers palette and slash commands:
-
-| Command             | Slash           | Behavior                                                                       |
-| ------------------- | --------------- | ------------------------------------------------------------------------------ |
-| `notes.list`        | `/notes`        | Pick from all notes, including unlinked and unassigned notes                   |
-| `notes.create`      | `/note-new`     | Create an assigned or explicitly unassigned note                               |
-| `notes.update`      | `/note-edit`    | Edit title, body, status, pin; sends only changed fields plus expectedRevision |
-| `notes.move`        | `/note-move`    | Move a note to another space, or make it unassigned                            |
-| `notes.delete`      | `/note-delete`  | Pick and confirm deletion with expectedRevision                                |
-| `notes.spaces`      | `/notes-spaces` | Browse spaces                                                                  |
-| `notes.createSpace` | `/notes-space`  | Create a space, link any host project or leave it unlinked, and pin it         |
-| `notes.editSpace`   | `/notes-edit`   | Rename, re-scope, link/unlink a project, or pin a space                        |
-| `notes.deleteSpace` | `/notes-delete` | Confirm deletion of an empty space with expectedRevision                       |
-
-The TUI part intentionally uses only commands and dialogs; it never calls a model. It does not
-render a sidebar slot, so it has no Solid/OpenTUI JSX peer dependency. Its note picker uses an
-all-notes view with no project filter, so unlinked and unassigned notes remain reachable. It pages
-through `list` in 500-note pages and deduplicates by note ID, so notes beyond the first page are
-selectable. This is a best-effort snapshot, not a transaction: concurrent inserts or deletes during
-paging can still produce a stale or skipped entry; rerun the command for a fresh view. A safety cap
-of 200 pages (100,000 notes) shows a truncation warning instead of looping forever.
-
-Project choices come from `context.data.project.list()` plus an explicit "Not linked to a project"
-option. Note-space choices include an explicit "No space" option. Cancelling a prompt or picker
-preserves the existing value; only selecting "No space" or "Not linked to a project" clears a field.
-Space deletion requires confirmation and is refused before calling the RPC when the space is
-non-empty; a race that adds a note after that check is still rejected by the RPC. A host UI can
-render the same data through the RPC.
-
-## Mapping to the UI notes panel
-
-The existing `src/components/notes-panel.tsx` `NotesAdapter` can be backed by this RPC:
-
-- `NotesNote.content` ↔ `Note.body`.
-- `NotesNote.spaceID` maps directly; both support `null`.
-- `NotesSpace.projectID` ↔ `space.project?.id ?? null`.
-- `NotesSnapshot.spaces` comes from `spaces({})`; `NotesSnapshot.notes` from `list({ limit: 1000 })`;
-  `projects` comes from the host UI's project data, not this plugin.
-- `NotesNote.revision` / `NotesSpace.revision` map directly. Pass them as `expectedRevision` on
-  update/delete for best-effort stale-write detection.
-- `deleteSpace` refuses non-empty spaces even with `cascade: true`; surface `space_not_empty` and
-  require the user to delete notes individually before deleting the space.
-- When `projectID` is chosen, send `kind: "planning"`; when it is cleared, `kind: "global"` is a
-  reasonable default. Pass `project: { id: projectID }`; the plugin fills known paths only when the
-  ID matches its own current project.
-
-## Storage and concurrency
-
-Keys:
-
-- `opencode-notes/v1/space/<id>`
-- `opencode-notes/v1/note/<id>`
-- `opencode-notes/v1/attachment/<attachmentID>` (value: `{ data: "<base64>" }`)
-
-Attachment keys use generated IDs only; display names and note IDs never appear in the key. Note
-lists scan only the `note/` prefix, so attachment bytes stay out of list responses. Each record is a
-separate JSON value. Writes are serialized in-process by `NotesService` so a single plugin instance
-does not interleave its own read-modify-write operations. `expectedRevision` checks run inside that
-queue, immediately before the write. There is no cross-record transaction: note metadata and
-attachment bytes are separate writes, so a crash between them can leave an orphaned bytes key or a
-metadata entry whose bytes are missing (reported as `attachment_not_found` on read).
-
-There are **no transactions, locks, compare-and-swap operations, or cross-instance guarantees**.
-Two independent OpenCode server instances can read the same revision and both write the same next
-revision; the last write wins and stale-write detection is then bypassed. Cross-instance CAS is
-unavailable, and this plugin cannot make it available without an atomic storage primitive. Plugin
-storage may also be scoped by the host; this plugin does not create a cross-project database.
-Do not treat this as a database.
+Names 200, titles 500, bodies 100,000, search queries 500, IDs 200, directory paths
+4,096, list pages 1,000. Attachments: 4 MiB each, 4 per note, 8 MiB total per note.
+History: 50 snapshots per note.
 
 ## Security and honest limitations
 
-- Notes are stored as plaintext JSON in OpenCode plugin storage. Do not put secrets, tokens, or
-  private credentials in notes.
-- Attachments are stored unencrypted as base64 in the same plugin storage. They are not a secure
-  file vault, antivirus scan, or content-addressed store; the plugin validates type shape, size,
-  and active-inline MIME rejection only. Do not store secrets as attachments.
-- Attachment bytes are never included in note lists. `readAttachment` returns base64 bytes to any
-  client allowed to call RPC; the text-only limitation applies only to the agent tool.
-- RPC access inherits the OpenCode server's existing access boundary. This plugin adds no login,
-  authorization, tenant isolation, or encryption. Any client permitted to call server RPC can read
-  and modify all notes in the plugin's storage.
-- Agent tools are available to agents whose permissions allow them. Tool inputs are validated, but
-  a model can still create/modify notes.
-- Project paths in a link can become stale after a move/rename. Use the project ID for identity.
-- "Global" means global within OpenCode's plugin storage scope. The host decides whether that scope
-  spans projects/locations; this plugin does not create a separate cross-project database.
-- Cascade deletion is deliberately unsupported. A non-empty space must be emptied one note at a
-  time, then deleted, so a storage failure cannot leave an irreversible partial cascade.
-- The TUI is a command/dialog surface, not a persistent sidebar. It has not been exercised inside a
-  live OpenCode TUI in this repository.
+- Notes and attachments are plaintext on disk. Do not store secrets, tokens, or
+  credentials.
+- Attachment validation covers size, name shape, and active-inline MIME rejection
+  only. It is not a virus scanner or encrypted vault.
+- Access control is the filesystem's. Anyone who can read the data directory can
+  read every note.
+- IDs are generated locally; record IDs that are unsafe as file names are rejected
+  rather than encoded.
+- The store has per-record locks, not multi-record transactions. A crash between an
+  attachment byte write and the note metadata write can leave an orphan, and space
+  deletion checks are not atomic with note creation.
+- MCP clients that do not support elicitation cannot delete notes without an
+  explicit `expectedRevision`.
 
-## Verification
+## Exports
+
+```ts
+// @tunitz/opencode-notes
+export * from "./src/types.js" // Note, Space, inputs/outputs, NOTE_STATUSES, STATUS_CATEGORIES, LIMITS, NotesError
+export { NotesService, createNotesService } from "./src/service.js"
+export { FileNotesStore, MemoryNotesStore, parseNote, parseSpace, ... } from "./src/store.js"
+export { resolveDataDir, resolveEngineDbPath, ... } from "./src/fs-utils.js"
+export { migrateEngineData, migrationMarkerPath, readMigrationMarker, ... } from "./src/core/migrate.js"
+
+// @tunitz/opencode-notes/mcp
+export { createNotesMcpServer, startNotesMcpServer, NOTES_TOOLS, NOTES_PROMPTS, ... }
+```
+
+The former `./server`, `./rpc`, and `./tui` exports and the root
+`index.ts`/`server.ts`/`rpc.ts`/`tui.ts` forwarders are removed, along with the
+`@opencode/plugin` dependency and the TUI command surface.
+
+## Testing
 
 ```sh
 bun test plugins/notes/test
+bunx tsc --noEmit -p plugins/notes/tsconfig.json
 ```
 
-The tests use in-memory storage and a fake OpenCode context. They cover revision increments under
-colliding timestamps, stale update/delete conflicts, cascade refusal without partial deletion, TUI
-access past 500 notes, duplicate rows across pages, the all-notes TUI view, cancellation safety,
-changed-fields-only TUI updates, legacy note decoding, attachment create/read/delete, metadata-only
-lists, cross-note access, count/per-file/total limits, MIME and base64 rejection, best-effort
-cleanup, and text-only agent reads. They do not touch the engine, live configuration, credentials,
-or the network.
+The suite covers parsers and legacy conversion, memory and real-filesystem stores,
+atomic writes and file modes, cross-process lock contention and CAS conflicts,
+stale lock takeover, history capping/pruning, search scoring and snippets, the full
+service surface, and MCP tools/prompts/resources/elicitation through the SDK's
+in-memory transport. Migration tests build synthetic SQLite fixtures under the
+system temp directory; they never open the user's real engine database.

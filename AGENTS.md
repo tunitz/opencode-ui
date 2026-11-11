@@ -14,10 +14,10 @@ established. Do not upgrade either pin without checking the native contracts and
 | Path | Purpose |
 | --- | --- |
 | `src/` | React application, components, hooks, and browser-local state. |
-| `server/` | Bun server, engine proxy, request security, artifacts, notifications, and agent config. |
+| `server/` | Bun server, engine proxy, access gate, request security, artifacts, notifications, agent config, and the Notes/Plugins APIs. |
 | `bin/` | `opencode-ui` CLI entry point and option validation. |
 | `scripts/` | Bun build and development tooling. |
-| `plugins/notes/` | Optional Notes plugin package with its own tests and README. |
+| `plugins/notes/` | Standalone notes core (`src/`), MCP stdio server (`src/mcp/`), its own tests, and README. |
 | `tests/` | Bun unit/integration tests plus synthetic browser checks. |
 | `docs/` | Architecture, native contract, and command coverage. |
 | `public/` | Static release assets; keep it free of private data and secrets. |
@@ -35,8 +35,22 @@ to the browser, logs, command-line flags, or version control.
 
 ## Local development
 
+Serve the production build from a checkout:
+
 ```sh
 bun install --frozen-lockfile
+bun run start
+```
+
+`bun run start` serves `dist-bun-build/` on `127.0.0.1:5174` and accepts the shared flags described
+below. When the production build is missing it runs `scripts/build-bun.ts` first. On a loopback bind
+the password gate stays inactive until a password is set; a non-loopback bind requires one. Use
+`bun run start --host 0.0.0.0 --port 1234 --allowed-host ui.example.test --allowed-origin http://ui.example.test:1234`
+for another interface (substitute the real reachable hostname or IP).
+
+For development:
+
+```sh
 bun run dev
 ```
 
@@ -61,14 +75,21 @@ overwrite or disturb an existing production `dist-bun-build/`.
 
 | Mode | Entry point | Engine default | Service file | Allowlist environment | Assets |
 | --- | --- | --- | --- | --- | --- |
+| Start (checkout) | `bun run start` (aliases `bun run start:bun`, `bun run preview`) → `server/bun-server.ts` | `http://127.0.0.1:8090` | `~/.config/opencode/service.json` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` when no explicit security flags | `dist-bun-build/`; built automatically when missing, or `dist-bun-dev/` with `OPENCODE_UI_BUILD_TARGET=dev` |
 | Dev | `bun run dev` → `server/bun-server.ts` | `http://127.0.0.1:8090` | `~/.config/opencode/service.json` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` | `dist-bun-dev/` |
-| Direct server | `bun run start:bun` / `bun run preview` | `http://127.0.0.1:8090` | `~/.config/opencode/service.json` | Same as dev | `dist-bun-build/`, or `dist-bun-dev/` with `OPENCODE_UI_BUILD_TARGET=dev` |
 | CLI / package | `bin/opencode-ui.ts` | `http://127.0.0.1:4096` | `$XDG_CONFIG_HOME/opencode/service.json` or `~/.config/opencode/service.json` | Not read; use `--allowed-host` / `--allowed-origin` | `dist-bun-build/` |
 
-The direct server also keeps the legacy artifact root `/tmp/opencode/shots` when
-`OPENCODE_UI_ARTIFACT_ROOTS` is absent. The CLI starts with no artifact roots unless
-`--artifact-root` or the environment list is supplied. Use the CLI for the isolated defaults and
-explicit service-file and engine selection.
+The start entry, dev server, and CLI all accept `--host`, `--port`, `--engine-url`, `--service-file`,
+repeatable `--allowed-host` / `--allowed-origin` / `--artifact-root`, `--help`, and `--version`;
+flags override environment values. The direct server keeps the legacy artifact root
+`/tmp/opencode/shots` when `OPENCODE_UI_ARTIFACT_ROOTS` is absent. The CLI starts with no artifact
+roots unless `--artifact-root` or the environment list is supplied. Use the CLI for the isolated
+defaults and explicit service-file and engine selection.
+
+Password/session state defaults to `~/.local/share/opencode-ui/auth/state.json` and can be moved with
+`OPENCODE_UI_AUTH_STATE`. Notes data defaults to `$XDG_DATA_HOME/opencode-notes/v1` (or
+`~/.local/share/opencode-notes/v1`) and can be moved with `OPENCODE_NOTES_DATA_DIR`; legacy engine
+data is read from `$XDG_DATA_HOME/opencode/opencode.db` unless `OPENCODE_ENGINE_DB_PATH` is set.
 
 ## Verification
 
@@ -84,7 +105,7 @@ bun run build:bun
 bun run verify         # typecheck + lint + tests
 ```
 
-The Notes plugin tests are separate and are not included in `bun run verify`. Run the appropriate
+The Notes package tests are separate and are not included in `bun run verify`. Run the appropriate
 checks locally before committing.
 
 - Keep loading, empty, unavailable, and error states honest.
@@ -113,7 +134,9 @@ bun pm pack
 
 The package name is `@tunitz/opencode-ui`; the unscoped `opencode-ui` package is unrelated. Confirm
 package-name ownership and credentials privately, and get explicit authorization before publishing.
-Do not publish from a dirty tree or include private files, credentials, or local state.
+Do not publish from a dirty tree or include private files, credentials, or local state. The package
+ships the UI server modules plus the `plugins/notes` sources and declares
+`@tunitz/opencode-notes` as a workspace dependency.
 
 ## Code and UX conventions
 
@@ -123,29 +146,45 @@ Do not publish from a dirty tree or include private files, credentials, or local
   actual component capabilities and restrictions in [docs/components.md](docs/components.md).
 - Preserve mobile and desktop accessibility: Light, Dark, and System themes, 44px targets,
   keyboard and focus behavior, RTL, reduced motion, and accessible names.
+- Settings is a full workspace, not a dialog: section list plus detail at container width ≥40rem,
+  one pane below it, and the Back-to-conversation control on the left of the app header. Notes and
+  Settings are mutually exclusive main panes. Appearance controls live only in Settings →
+  Appearance; do not reintroduce sidebar theme triggers or appearance dialogs.
+- Never use `window.confirm`, `window.alert`, or `window.prompt`. Confirm destructive or
+  draft-losing actions with the app `AlertDialog` pattern, and keep focus return explicit.
 - Preserve composer behavior: on touch, Enter inserts a newline and only Send submits; on a
   fine-pointer desktop, Enter sends and Shift+Enter inserts a newline. Never submit during IME
   composition. Preserve browser-local drafts and preferences.
+- Notes run on the local UI server (`/api/ui/notes/*` plus the change SSE), not an engine plugin.
+  Keep drafts in the per-directory adapter cache so they survive project switches.
 - Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal`, for
   example, is reported as unsupported because no terminal UI is mounted.
 
 ## Notes workflow
 
+- Notes live in the Notes workspace (sidebar) or through the agent tools when the Notes MCP server is
+  enabled in Settings → Plugins.
+- Statuses are `idea`, `todo`, `in-progress`, `blocked`, `finished`, `cancelled`, and `archived`,
+  grouped Backlog, Active, and Done. New notes default to `todo`.
 - Check pinned and in-progress notes for this project before substantial work, and mark a note
-  `in-progress` when work starts.
+  `in-progress` when work starts. Use `blocked` while waiting on a decision or dependency.
 - Set `finished` only after verification; append the outcome, commands run, and commit reference to
-  the note body. Keep it `in-progress` when work is unverified or uncommitted.
-- Browse with `notes_list({ includeBodies: false })`; read one note's content with `notes_get`.
+  the note body. Keep it `in-progress` when work is unverified or uncommitted. `cancelled` and
+  `archived` mean intentionally not completed; the Done category is terminal by convention, and
+  reopening is an explicit status change recorded in history.
+- Browse with `notes_list({ includeBodies: false })` or `notes_search`; read one note's content with
+  `notes_get`. Use `notes_history`/`notes_restore` to inspect or restore a snapshot.
 
 ## Security and live state
 
 - The UI server holds an engine credential; do not expose it to the browser or logs. Keep secrets,
   subscriptions, capability IDs, transcripts, and private state out of version control.
+- A shared browser password gate protects `/api/*` (including SSE and WebSocket upgrades) whenever a
+  password is set or the bind host is non-loopback. It is an access boundary, not multi-tenant
+  isolation; non-loopback use still needs secure transport and an appropriate network boundary.
 - Preserve explicit host and Origin checks, WebSocket guards, route/method allowlists, JSON
   mutation checks, no wildcard CORS, and `no-store` API responses. Do not bypass artifact
   provenance or file safety checks. See [docs/contract.md](docs/contract.md) for relevant details.
-- There is no separate browser login. Do not represent the UI as safe for public or multi-tenant
-  use without an appropriate access boundary and secure transport.
 - Ask before mutating live sessions, PTYs, providers, notifications, credentials, engine or agent
   configuration, permission policies, or other live state. Do not stage, commit, or push unless
   requested.

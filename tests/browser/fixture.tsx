@@ -587,8 +587,9 @@ function InspectorFixture() {
 }
 
 function NotesFixture({ wide = false }: { wide?: boolean }) {
+  const [directory, setDirectory] = useState("/synthetic/notes")
   const nav = {
-    directory: "/synthetic/notes",
+    directory,
     activeSession: null,
     connection: "connected",
     streamStatus: "ready",
@@ -598,6 +599,20 @@ function NotesFixture({ wide = false }: { wide?: boolean }) {
     <Providers nav={nav}>
       <div className="flex h-svh min-h-0">
         <div className="hidden w-[350px] shrink-0 overflow-y-auto border-e px-3 md:block">
+          <button
+            type="button"
+            data-qa-switch-project
+            className="mt-2 min-h-11 w-full rounded-lg border px-3 text-xs"
+            onClick={() =>
+              setDirectory((current) =>
+                current === "/synthetic/notes"
+                  ? "/synthetic/alpha"
+                  : "/synthetic/notes"
+              )
+            }
+          >
+            Switch project
+          </button>
           <NotesSidebar />
         </div>
         <div

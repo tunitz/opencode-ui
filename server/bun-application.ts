@@ -1,3 +1,5 @@
+import { createAuthApiHandler } from "./auth-api.ts"
+import { createAuthGate, type AuthService } from "./auth.ts"
 import { createPtyWebSocketBridge } from "./pty-websocket-bridge.ts"
 import type { SecurityOptions } from "./request-security.ts"
 import { createWebGateway } from "./web-gateway.ts"
@@ -13,14 +15,31 @@ export function createBunApplication(options: {
   agents: Service
   artifacts: Service
   notifications: Service
+  /** Optional; existing deployments without a password keep the previous pass-through behavior. */
+  auth?: AuthService
+  /** Optional Notes HTTP API; when absent /api/ui/notes/* keeps its previous routing. */
+  notes?: Service & { dispose?: () => void }
+  /** Optional Plugins HTTP API; when absent /api/ui/plugins* keeps its previous routing. */
+  plugins?: Service
 }) {
   const bridge = createPtyWebSocketBridge({ upstream: options.target, authorization: options.authorization, security: options.security })
   const fetch = createWebGateway({
     security: options.security,
+    authGate: options.auth ? createAuthGate(options.auth) : undefined,
+    auth: options.auth ? createAuthApiHandler(options.auth) : undefined,
+    notes: options.notes?.handleRequest,
+    plugins: options.plugins?.handleRequest,
     agents: options.agents.handleRequest, artifacts: options.artifacts.handleRequest,
     notifications: options.notifications.handleRequest,
     engine: (request) => proxyEngineRequest(request, { target: options.target, authorization: options.authorization }),
     frontend: createStaticHandler(options.directory), bridge,
   })
-  return { fetch, websocket: bridge.websocket, dispose: bridge.dispose }
+  return {
+    fetch,
+    websocket: bridge.websocket,
+    dispose: () => {
+      options.notes?.dispose?.()
+      bridge.dispose()
+    },
+  }
 }

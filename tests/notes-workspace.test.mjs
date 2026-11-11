@@ -20,7 +20,7 @@ const environment = () => {
   }
 }
 const note = (id) => ({ id, title: id, content: "", status: "todo", pinned: false, spaceID: null, revision: 1, attachments: [] })
-const snapshot = (notes) => ({ notes, spaces: [], projects: [], workspaceDirectory: "/project" })
+const snapshot = (notes) => ({ notes, spaces: [], workspaceDirectory: "/project" })
 const button = (root, label) => root.root.findAllByType("button").find((item) => item.children.includes(label))
 const editButton = (root) => button(root, "Edit")
 const backButton = (root) => button(root, "Back to Notes")
@@ -91,7 +91,7 @@ test("compact status and search filters narrow the notebook", async () => {
   let root
   try {
     await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
-    const done = button(root, "Done")
+    const done = button(root, "Finished")
     await act(async () => done.props.onClick())
     expect(root.root.findAllByProps({ "aria-label": "Open Draft plan" })).toHaveLength(0)
     expect(root.root.findAllByProps({ "aria-label": "Open Shipped feature" }).length).toBeGreaterThan(0)

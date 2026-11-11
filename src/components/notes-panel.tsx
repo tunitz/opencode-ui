@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import {
   ArrowLeftIcon,
+  ChevronDownIcon,
   EllipsisIcon,
   FilePlusIcon,
   PaperclipIcon,
@@ -25,6 +26,9 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -44,7 +48,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { PickerSelect } from "@/components/ui/picker-select"
+import { PickerSelect, type PickerOption } from "@/components/ui/picker-select"
 import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import {
   basename,
@@ -55,46 +59,32 @@ import {
   type ProjectEntry,
 } from "@/lib/files"
 
-export type NoteStatus = "todo" | "in-progress" | "finished"
-export type NotesAttachment = {
-  id: string
-  name: string
-  mime: string
-  size: number
-  createdAt?: number
-}
-export type NotesNote = {
-  id: string
-  title: string
-  content: string
-  status: NoteStatus
-  pinned: boolean
-  spaceID: string | null
-  revision?: string | number
-  attachments?: NotesAttachment[]
-}
-export type NotesSpace = {
-  id: string
-  name: string
-  projectID: string | null
-  revision?: string | number
-}
-export type NotesProject = {
-  id: string
-  name: string
-  directory: string | null
-}
-export type NotesSnapshot = {
-  notes: NotesNote[]
-  spaces: NotesSpace[]
-  projects: NotesProject[]
-  workspaceDirectory: string
-}
-export type NoteInput = Pick<
+import {
+  NOTE_STATUS_CATEGORIES,
+  NOTE_STATUS_LABELS,
+  spaceScopeLabel,
+  uniqueByID,
+  type NoteInput,
+  type NoteStatus,
+  type NotesAdapter,
+  type NotesAttachment,
+  type NotesNote,
+  type NotesSnapshot,
+  type NotesSpace,
+  type SpaceInput,
+} from "@/lib/notes-types"
+
+export type {
+  NoteInput,
+  NoteStatus,
+  NotesAdapter,
+  NotesAttachment,
   NotesNote,
-  "title" | "content" | "status" | "pinned" | "spaceID"
->
-export type SpaceInput = Pick<NotesSpace, "name" | "projectID">
+  NotesSnapshot,
+  NotesSpace,
+  SpaceInput,
+} from "@/lib/notes-types"
+
 export function mergeNoteDraft(
   original: NotesNote,
   draft: NoteInput,
@@ -117,50 +107,11 @@ export function mergeSpaceDraft(
 ): SpaceInput {
   return {
     name: draft.name === original.name ? latest.name : draft.name,
-    projectID:
-      draft.projectID === original.projectID
-        ? latest.projectID
-        : draft.projectID,
+    projectDir:
+      draft.projectDir === original.projectDir
+        ? latest.projectDir
+        : draft.projectDir,
   }
-}
-/** Mutations resolve only after they succeed. list returns the authoritative current snapshot. */
-export type NotesAdapter = {
-  list: () => Promise<NotesSnapshot>
-  subscribe?: (onChange: () => void) => () => void
-  createNote: (input: NoteInput) => Promise<unknown>
-  updateNote: (
-    id: string,
-    input: NoteInput,
-    expectedRevision?: string | number
-  ) => Promise<unknown>
-  deleteNote: (
-    id: string,
-    expectedRevision?: string | number
-  ) => Promise<unknown>
-  createSpace: (input: SpaceInput) => Promise<unknown>
-  updateSpace: (
-    id: string,
-    input: SpaceInput,
-    expectedRevision?: string | number
-  ) => Promise<unknown>
-  deleteSpace: (
-    id: string,
-    expectedRevision?: string | number
-  ) => Promise<unknown>
-  createAttachment?: (
-    noteID: string,
-    input: { name: string; mime: string; data: string },
-    expectedRevision?: string | number
-  ) => Promise<{ note: NotesNote; attachment: NotesAttachment }>
-  readAttachment?: (
-    noteID: string,
-    attachmentID: string
-  ) => Promise<{ attachment: NotesAttachment; data: string }>
-  deleteAttachment?: (
-    noteID: string,
-    attachmentID: string,
-    expectedRevision?: string | number
-  ) => Promise<{ note: NotesNote }>
 }
 export type NotesPanelProps = {
   adapter: NotesAdapter
@@ -258,13 +209,38 @@ const workspaceDrafts = new WeakMap<NotesAdapter, Map<string, NoteDraft>>()
 type SpaceDraft = { original: NotesSpace | null; value: SpaceInput }
 type Deletion =
   { kind: "note"; item: NotesNote } | { kind: "space"; item: NotesSpace }
-const statusLabels: Record<NoteStatus, string> = {
-  todo: "To do",
-  "in-progress": "In progress",
-  finished: "Finished",
-}
+const statusLabels = NOTE_STATUS_LABELS
 const noSelection = "__notes_none__"
 const newDraftKey = "__new_note__"
+
+/**
+ * Scope badge for a space row or picker option: "Global" for unscoped spaces,
+ * otherwise the project directory's basename.
+ */
+export function SpaceScopeBadge({
+  space,
+  className = "",
+}: {
+  space: Pick<NotesSpace, "projectDir">
+  className?: string
+}) {
+  const global = space.projectDir === null
+  return (
+    <span
+      data-space-scope={global ? "global" : "project"}
+      dir="auto"
+      className={`inline-flex min-w-0 max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+        global
+          ? "border-border text-muted-foreground"
+          : "border-primary/30 bg-primary/5 text-primary"
+      } ${className}`}
+    >
+      <span className="min-w-0 truncate" dir="auto">
+        {spaceScopeLabel(space)}
+      </span>
+    </span>
+  )
+}
 
 export const NOTE_ATTACHMENT_LIMITS = {
   count: 4,
@@ -414,7 +390,7 @@ function Choice({
   label: string
   value: string
   onChange: (value: string) => void
-  options: { value: string; label: string }[]
+  options: readonly PickerOption[]
   hideLabel?: boolean
 }) {
   const id = useId()
@@ -448,6 +424,54 @@ function message(error: unknown) {
   )
     return error.message
   return "Please try again."
+}
+
+/** Status menu: all seven statuses, grouped by category. */
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: NoteStatus
+  onChange: (status: NoteStatus) => void
+}) {
+  const label = statusLabels[value] ?? statusLabels.todo
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full justify-between gap-2 px-3"
+            aria-label={`Status: ${label}`}
+          />
+        }
+      >
+        <NoteStatusLabel status={value} />
+        <ChevronDownIcon
+          aria-hidden="true"
+          className="size-4 shrink-0 text-muted-foreground"
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-48">
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(next) => onChange(next as NoteStatus)}
+        >
+          {NOTE_STATUS_CATEGORIES.map((category) => (
+            <DropdownMenuGroup key={category.id}>
+              <DropdownMenuLabel>{category.label}</DropdownMenuLabel>
+              {category.statuses.map((status) => (
+                <DropdownMenuRadioItem key={status} value={status}>
+                  <NoteStatusLabel status={status} />
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuGroup>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 export function NotesPanel({
@@ -727,26 +751,19 @@ export function NotesPanel({
     note,
     preview: notePreviewText(note.content, 160, note.title),
   }))
-  const spaces = snapshot?.spaces ?? []
-  const projects = snapshot?.projects ?? []
+  const spaces = useMemo(
+    () => uniqueByID(snapshot?.spaces ?? []),
+    [snapshot]
+  )
   const workspaceDirectory = snapshot?.workspaceDirectory ?? ""
   const spaceOptions = [
     { value: noSelection, label: "No space" },
-    ...spaces.map((item) => ({ value: item.id, label: item.name })),
+    ...spaces.map((item) => ({
+      value: item.id,
+      label: item.name,
+      detail: spaceScopeLabel(item),
+    })),
   ]
-  const projectOptions = [
-    { value: noSelection, label: "Not linked to a project" },
-    ...projects.map((item) => ({ value: item.id, label: item.name })),
-  ]
-  // Keep unavailable links visible until the user explicitly changes them.
-  if (
-    spaceDraft?.value.projectID &&
-    !projects.some((item) => item.id === spaceDraft.value.projectID)
-  )
-    projectOptions.push({
-      value: spaceDraft.value.projectID,
-      label: "Unavailable project",
-    })
   if (
     noteDraft?.value.spaceID &&
     !spaces.some((item) => item.id === noteDraft.value.spaceID)
@@ -754,6 +771,7 @@ export function NotesPanel({
     spaceOptions.push({
       value: noteDraft.value.spaceID,
       label: "Unavailable space",
+      detail: "",
     })
 
   function spaceName(spaceID: string | null): string {
@@ -768,11 +786,7 @@ export function NotesPanel({
       spaceID === null
         ? undefined
         : spaces.find((item) => item.id === spaceID)
-    const project =
-      linkedSpace?.projectID === null || linkedSpace?.projectID === undefined
-        ? undefined
-        : projects.find((item) => item.id === linkedSpace.projectID)
-    return project?.directory ?? workspaceDirectory
+    return linkedSpace?.projectDir ?? workspaceDirectory
   }
 
   const activeNote =
@@ -1124,24 +1138,45 @@ export function NotesPanel({
               <div
                 role="group"
                 aria-label="Filter by status"
-                className="-mx-1 flex max-w-full flex-wrap gap-1 px-1"
+                className="-mx-1 flex max-w-full flex-col gap-1 px-1"
               >
-                {[
-                  { value: "all", label: "All" },
-                  { value: "todo", label: "To do" },
-                  { value: "in-progress", label: "In progress" },
-                  { value: "finished", label: "Done" },
-                ].map((option) => (
+                <div className="flex flex-wrap items-center gap-1">
                   <Button
-                    key={option.value}
                     type="button"
-                    variant={status === option.value ? "secondary" : "ghost"}
+                    variant={status === "all" ? "secondary" : "ghost"}
                     className="h-11 min-w-11 rounded-full px-2"
-                    aria-pressed={status === option.value}
-                    onClick={() => setStatus(option.value)}
+                    aria-pressed={status === "all"}
+                    onClick={() => setStatus("all")}
                   >
-                    {option.label}
+                    All
                   </Button>
+                </div>
+                {NOTE_STATUS_CATEGORIES.map((category) => (
+                  <div
+                    key={category.id}
+                    role="group"
+                    aria-label={`${category.label} statuses`}
+                    className="flex flex-wrap items-center gap-1"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="w-14 shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase"
+                    >
+                      {category.label}
+                    </span>
+                    {category.statuses.map((option) => (
+                      <Button
+                        key={option}
+                        type="button"
+                        variant={status === option ? "secondary" : "ghost"}
+                        className="h-11 min-w-11 rounded-full px-2 text-xs"
+                        aria-pressed={status === option}
+                        onClick={() => setStatus(option)}
+                      >
+                        {NOTE_STATUS_LABELS[option]}
+                      </Button>
+                    ))}
+                  </div>
                 ))}
               </div>
               <Choice
@@ -1155,6 +1190,7 @@ export function NotesPanel({
                   ...spaces.map((item) => ({
                     value: item.id,
                     label: item.name,
+                    detail: spaceScopeLabel(item),
                   })),
                 ]}
               />
@@ -1305,7 +1341,7 @@ export function NotesPanel({
                     setFormError(null)
                     setSpaceDraft({
                       original: null,
-                      value: { name: "", projectID: null },
+                      value: { name: "", projectDir: null },
                     })
                   }}
                 >
@@ -1317,21 +1353,16 @@ export function NotesPanel({
                   No spaces yet. Group notes for a project or an idea.
                 </p>
               ) : (
-                <ul className="divide-y rounded-lg border">
+                <ul data-notes-spaces className="divide-y rounded-lg border">
                   {spaces.map((item) => (
                     <li
                       key={item.id}
+                      data-space-id={item.id}
                       className="flex flex-wrap items-center justify-between gap-2 p-3"
                     >
                       <div className="min-w-0">
                         <p className="font-medium break-words">{item.name}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {item.projectID === null
-                            ? "Not linked to a project"
-                            : (projects.find(
-                                (project) => project.id === item.projectID
-                              )?.name ?? "Unavailable project")}
-                        </p>
+                        <SpaceScopeBadge space={item} className="mt-1" />
                       </div>
                       <div className="flex gap-1">
                         <Button
@@ -1344,7 +1375,7 @@ export function NotesPanel({
                               original: item,
                               value: {
                                 name: item.name,
-                                projectID: item.projectID,
+                                projectDir: item.projectDir,
                               },
                             })
                           }}
@@ -1780,22 +1811,18 @@ export function NotesPanel({
                   )}
                 </div>
                 <div className="grid gap-4 border-t pt-4 min-[400px]:grid-cols-2">
-                  <Choice
-                    label="Status"
-                    value={noteDraft.value.status}
-                    onChange={(value) =>
-                      setNoteDraft({
-                        ...noteDraft,
-                        value: {
-                          ...noteDraft.value,
-                          status: value as NoteStatus,
-                        },
-                      })
-                    }
-                    options={Object.entries(statusLabels).map(
-                      ([value, label]) => ({ value, label })
-                    )}
-                  />
+                  <div className="grid gap-1.5">
+                    <span className="text-sm font-medium">Status</span>
+                    <StatusSelect
+                      value={noteDraft.value.status}
+                      onChange={(status) =>
+                        setNoteDraft({
+                          ...noteDraft,
+                          value: { ...noteDraft.value, status },
+                        })
+                      }
+                    />
+                  </div>
                   <Choice
                     label="Space"
                     value={noteDraft.value.spaceID ?? noSelection}
@@ -1918,7 +1945,8 @@ export function NotesPanel({
               {spaceDraft?.original ? "Edit space" : "New space"}
             </DialogTitle>
             <DialogDescription>
-              Spaces can be linked to a project now or later.
+              Global spaces appear in every project. Project spaces stay in
+              this project.
             </DialogDescription>
           </DialogHeader>
           {spaceDraft && (
@@ -1960,18 +1988,30 @@ export function NotesPanel({
                   />
                 </div>
                 <Choice
-                  label="Project"
-                  value={spaceDraft.value.projectID ?? noSelection}
+                  label="Scope"
+                  value={
+                    spaceDraft.value.projectDir === null ? "global" : "project"
+                  }
                   onChange={(value) =>
                     setSpaceDraft({
                       ...spaceDraft,
                       value: {
                         ...spaceDraft.value,
-                        projectID: value === noSelection ? null : value,
+                        projectDir:
+                          value === "global"
+                            ? null
+                            : (workspaceDirectory || null),
                       },
                     })
                   }
-                  options={projectOptions}
+                  options={[
+                    { value: "global", label: "Global", detail: "Every project" },
+                    {
+                      value: "project",
+                      label: "This project",
+                      detail: workspaceDirectory || "Current project",
+                    },
+                  ]}
                 />
                 {formError && (
                   <div className="grid gap-2">
@@ -2007,12 +2047,9 @@ export function NotesPanel({
                       <div className="grid gap-2 rounded-lg border p-3 text-sm">
                         <p>
                           Saved version: {reviewSpace.name} ·{" "}
-                          {projects.find(
-                            (project) => project.id === reviewSpace.projectID
-                          )?.name ??
-                            (reviewSpace.projectID
-                              ? "Unavailable project"
-                              : "Not linked to a project")}
+                          {reviewSpace.projectDir
+                            ? `Project ${reviewSpace.projectDir}`
+                            : "Global"}
                         </p>
                         <Button
                           type="button"

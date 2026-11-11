@@ -1,40 +1,38 @@
 import { describe, expect, test } from "bun:test"
-import { NotesService } from "../src/service.js"
-import { ATTACHMENT_PREFIX, LIMITS, NOTE_PREFIX } from "../src/types.js"
-import { MemoryStorage, seededClock, seededIDs } from "./helpers.js"
-
-/** Build a valid base64 string whose decoded length is exactly `size` bytes. */
-function base64OfSize(size: number): string {
-  if (size <= 0) return ""
-  const padding = (3 - (size % 3)) % 3
-  const length = Math.ceil(size / 3) * 4
-  return "A".repeat(length - padding) + "=".repeat(padding)
-}
-
-function makeService(
-  options: {
-    defaultProject?: { id: string; directory: string; canonical: string }
-    now?: () => number
-  } = {}
-) {
-  const storage = new MemoryStorage()
-  const events: Array<{ entity: string; action: string; id: string }> = []
-  const service = new NotesService({
-    storage,
-    defaultProject: options.defaultProject,
-    now: options.now ?? seededClock(),
-    createID: seededIDs(),
-    onChange: (event) => events.push(event),
-  })
-  return { service, storage, events }
-}
+import {
+  LIMITS,
+  NOTE_STATUSES,
+  STATUS_CATEGORIES,
+  statusCategory,
+  type Note,
+} from "../src/index.js"
+import { base64OfSize, makeService } from "./helpers.js"
 
 describe("NotesService", () => {
-  test("creates a global space and a todo note", async () => {
+  test("exposes the seven statuses and their categories", () => {
+    expect(NOTE_STATUSES).toEqual([
+      "idea",
+      "todo",
+      "in-progress",
+      "blocked",
+      "finished",
+      "cancelled",
+      "archived",
+    ])
+    expect(STATUS_CATEGORIES).toEqual({
+      backlog: ["idea", "todo"],
+      active: ["in-progress", "blocked"],
+      done: ["finished", "cancelled", "archived"],
+    })
+    expect(statusCategory("idea")).toBe("backlog")
+    expect(statusCategory("blocked")).toBe("active")
+    expect(statusCategory("archived")).toBe("done")
+  })
+
+  test("creates a Global space and a todo note", async () => {
     const { service } = makeService()
     const space = await service.createSpace({ name: "Global" })
-    expect(space.kind).toBe("global")
-    expect(space.project).toBeNull()
+    expect(space.projectDir).toBeNull()
     expect(space.pinned).toBe(false)
     expect(space.revision).toBe(1)
 
@@ -47,11 +45,11 @@ describe("NotesService", () => {
     expect(note.pinned).toBe(false)
     expect(note.spaceID).toBe(space.id)
     expect(note.revision).toBe(1)
+    expect(note.statusUpdatedAt).toBe(note.createdAt)
 
     const listed = await service.list()
     expect(listed.total).toBe(1)
     expect(listed.notes[0]).toEqual(note)
-    expect(listed.notes[0]?.revision).toBe(1)
   })
 
   test("supports unassigned notes and null-space filtering", async () => {
@@ -70,61 +68,79 @@ describe("NotesService", () => {
     expect(unassigned.spaceID).toBeNull()
   })
 
-  test("links planning spaces to the current project and includes global spaces in project views", async () => {
-    const project = { id: "project-1", directory: "/repo", canonical: "/repo" }
-    const { service } = makeService({ defaultProject: project })
-    const planning = await service.createSpace({
-      name: "Plan",
-      kind: "planning",
-      linkCurrentProject: true,
-    })
-    expect(planning.project).toEqual(project)
-
+  test("scopes notes and spaces by projectDir, Global visibility, and unassigned notes", async () => {
+    const { service } = makeService()
     const global = await service.createSpace({ name: "Global" })
-    await service.create({ spaceID: planning.id, title: "Plan note" })
-    await service.create({ spaceID: global.id, title: "Global note" })
-
-    const all = await service.list({ projectID: project.id })
-    expect(all.total).toBe(2)
-    const linkedOnly = await service.list({
-      projectID: project.id,
-      includeGlobal: false,
+    const project = await service.createSpace({
+      name: "Plan",
+      projectDir: "/repo",
     })
-    expect(linkedOnly.notes.map((note) => note.title)).toEqual(["Plan note"])
-
-    const spaces = await service.spaces({ projectID: project.id })
-    expect(spaces.spaces.map((space) => space.name).toSorted()).toEqual([
-      "Global",
-      "Plan",
-    ])
-    const linkedSpaces = await service.spaces({
-      projectID: project.id,
-      includeGlobal: false,
+    const other = await service.createSpace({
+      name: "Other",
+      projectDir: "/other",
     })
-    expect(linkedSpaces.spaces.map((space) => space.name)).toEqual(["Plan"])
+    const globalNote = await service.create({
+      spaceID: global.id,
+      title: "Global note",
+    })
+    const projectNote = await service.create({
+      spaceID: project.id,
+      title: "Project note",
+    })
+    const otherNote = await service.create({
+      spaceID: other.id,
+      title: "Other note",
+    })
+    const unassigned = await service.create({ title: "Inbox" })
+
+    expect(
+      (await service.list({ directory: "/repo" })).notes.map((note) => note.id)
+        .toSorted()
+    ).toEqual(
+      [globalNote.id, projectNote.id, unassigned.id].toSorted()
+    )
+    expect(
+      (await service.list({ directory: "/repo", includeGlobal: false })).notes
+        .map((note) => note.id)
+        .toSorted()
+    ).toEqual([projectNote.id, unassigned.id].toSorted())
+    expect(
+      (await service.list({ directory: "/other" })).notes.map((note) => note.id)
+        .toSorted()
+    ).toEqual([globalNote.id, otherNote.id, unassigned.id].toSorted())
+
+    expect(
+      (await service.spaces({ directory: "/repo" })).spaces.map(
+        (space) => space.name
+      )
+    ).toEqual(["Global", "Plan"])
+    expect(
+      (
+        await service.spaces({ directory: "/repo", includeGlobal: false })
+      ).spaces.map((space) => space.name)
+    ).toEqual(["Plan"])
   })
 
-  test("unlinks and relinks a space through updates", async () => {
-    const project = { id: "project-1", directory: "/repo", canonical: "/repo" }
-    const { service } = makeService({ defaultProject: project })
+  test("updates space scope between Global and project", async () => {
+    const { service } = makeService()
     const space = await service.createSpace({
       name: "Plan",
-      kind: "planning",
-      project: { id: "other", directory: "/other", canonical: "/other" },
+      projectDir: "/repo",
     })
-    expect(space.project?.id).toBe("other")
+    expect(space.projectDir).toBe("/repo")
 
-    const unlinked = await service.updateSpace({
+    const global = await service.updateSpace({
       spaceID: space.id,
-      project: null,
+      projectDir: null,
     })
-    expect(unlinked.project).toBeNull()
+    expect(global.projectDir).toBeNull()
+    expect(global.revision).toBe(2)
 
     const relinked = await service.updateSpace({
       spaceID: space.id,
-      linkCurrentProject: true,
+      projectDir: "/repo",
     })
-    expect(relinked.project).toEqual(project)
+    expect(relinked.projectDir).toBe("/repo")
   })
 
   test("updates note fields, moves it between spaces, and preserves createdAt", async () => {
@@ -142,17 +158,18 @@ describe("NotesService", () => {
       spaceID: second.id,
       title: "  Final  ",
       body: "new",
-      status: "in-progress",
+      status: "blocked",
       pinned: true,
     })
     expect(updated.spaceID).toBe(second.id)
     expect(updated.title).toBe("Final")
     expect(updated.body).toBe("new")
-    expect(updated.status).toBe("in-progress")
+    expect(updated.status).toBe("blocked")
     expect(updated.pinned).toBe(true)
     expect(updated.createdAt).toBe(note.createdAt)
     expect(updated.updatedAt).toBeGreaterThan(note.updatedAt)
     expect(updated.revision).toBe(note.revision + 1)
+    expect(updated.statusUpdatedAt).toBe(updated.updatedAt)
 
     const unchanged = await service.update({ noteID: note.id })
     expect(unchanged).toEqual(updated)
@@ -184,14 +201,11 @@ describe("NotesService", () => {
     expect((await service.list()).notes.map((item) => item.id)).toEqual([
       second.id,
     ])
-    expect((await service.spaces()).spaces.map((item) => item.id)).toEqual([
-      space.id,
-    ])
 
     await service.delete({ noteID: second.id })
     const deleted = await service.deleteSpace({ spaceID: space.id })
     expect(deleted).toEqual({ deleted: true, deletedNotes: 0 })
-    expect((await service.list()).total).toBe(0)
+    expect(await service.spaces()).toEqual({ spaces: [], total: 0 })
     expect(events).toContainEqual({
       entity: "note",
       action: "deleted",
@@ -224,12 +238,17 @@ describe("NotesService", () => {
       spaceID: beta.id,
       title: "Three",
       body: "alpha body",
+      status: "blocked",
     })
 
     expect((await service.list({ spaceID: beta.id })).total).toBe(1)
     expect((await service.list({ status: "finished" })).notes[0]?.id).toBe(
       two.id
     )
+    expect(
+      (await service.list({ statuses: ["finished", "blocked"] })).total
+    ).toBe(2)
+    expect((await service.list({ statuses: [] })).total).toBe(0)
     expect((await service.list({ pinned: true })).notes[0]?.id).toBe(two.id)
     expect((await service.list({ query: "NEEDLE" })).notes[0]?.id).toBe(two.id)
     expect((await service.list({ query: "alpha body" })).total).toBe(2)
@@ -289,12 +308,9 @@ describe("NotesService", () => {
       (await service.list()).notes.filter((note) => note.body !== "")
     ).toHaveLength(3)
 
-    const finished = await service.list({
-      includeBodies: false,
-      status: "finished",
-    })
-    expect(finished.total).toBe(1)
-    expect(finished.notes[0]).toMatchObject({
+    expect(
+      (await service.list({ includeBodies: false, status: "finished" })).notes[0]
+    ).toMatchObject({
       id: second.id,
       body: "",
       status: "finished",
@@ -303,9 +319,9 @@ describe("NotesService", () => {
     })
 
     expect(
-      (await service.list({ includeBodies: false, spaceID: alpha.id })).notes.map(
-        (note) => note.id
-      )
+      (
+        await service.list({ includeBodies: false, spaceID: alpha.id })
+      ).notes.map((note) => note.id)
     ).toEqual([first.id])
     expect(
       (await service.list({ includeBodies: false, pinned: true })).notes.map(
@@ -360,7 +376,7 @@ describe("NotesService", () => {
     )
   })
 
-  test("serializes concurrent expectedRevision checks inside the mutation queue", async () => {
+  test("serializes concurrent expectedRevision checks and reports revision_conflict", async () => {
     const { service } = makeService()
     const note = await service.create({ title: "Note" })
     const results = await Promise.allSettled([
@@ -379,27 +395,28 @@ describe("NotesService", () => {
       results.filter((result) => result.status === "fulfilled")
     ).toHaveLength(1)
     const rejected = results.find((result) => result.status === "rejected")
-    expect(rejected).toBeDefined()
     expect(rejected?.status === "rejected" && rejected.reason).toMatchObject({
-      type: "conflict",
+      type: "revision_conflict",
     })
     expect((await service.list()).notes[0]?.revision).toBe(2)
   })
 
   test("treats legacy records without revision as revision 0, then increments", async () => {
-    const { service, storage } = makeService()
-    await storage.set(`${NOTE_PREFIX}legacy`, {
+    const { service, store } = makeService()
+    const legacy: Note = {
       id: "legacy",
       spaceID: null,
       title: "Legacy",
       body: "",
       status: "todo",
       pinned: false,
+      attachments: [],
+      revision: 0,
       createdAt: 1_000,
       updatedAt: 1_000,
-    })
-    const legacy = await service.list()
-    expect(legacy.notes[0]?.revision).toBe(0)
+    }
+    await store.putNote(legacy)
+    expect((await service.list()).notes[0]?.revision).toBe(0)
     const updated = await service.update({ noteID: "legacy", title: "Updated" })
     expect(updated.revision).toBe(1)
   })
@@ -421,7 +438,7 @@ describe("NotesService", () => {
         expectedRevision: note.revision,
       })
     ).rejects.toMatchObject({
-      type: "conflict",
+      type: "revision_conflict",
       data: {
         entity: "note",
         id: note.id,
@@ -433,7 +450,7 @@ describe("NotesService", () => {
 
     await expect(
       service.delete({ noteID: note.id, expectedRevision: note.revision })
-    ).rejects.toMatchObject({ type: "conflict" })
+    ).rejects.toMatchObject({ type: "revision_conflict" })
     expect((await service.list()).total).toBe(1)
 
     expect(
@@ -444,7 +461,7 @@ describe("NotesService", () => {
     ).toEqual({ deleted: true })
   })
 
-  test("checks expectedRevision before space update and cascade refusal", async () => {
+  test("checks expectedRevision before space updates and refusal", async () => {
     const { service } = makeService()
     const space = await service.createSpace({ name: "Space" })
     const note = await service.create({ spaceID: space.id, title: "Note" })
@@ -462,7 +479,7 @@ describe("NotesService", () => {
         expectedRevision: space.revision,
       })
     ).rejects.toMatchObject({
-      type: "conflict",
+      type: "revision_conflict",
       data: {
         entity: "space",
         id: space.id,
@@ -476,7 +493,7 @@ describe("NotesService", () => {
         cascade: true,
         expectedRevision: space.revision,
       })
-    ).rejects.toMatchObject({ type: "conflict" })
+    ).rejects.toMatchObject({ type: "revision_conflict" })
     expect((await service.list()).notes[0]?.id).toBe(note.id)
     expect((await service.spaces()).spaces[0]?.name).toBe("Renamed")
 
@@ -490,8 +507,6 @@ describe("NotesService", () => {
       type: "space_not_empty",
       data: { spaceID: space.id, noteCount: 1 },
     })
-    expect((await service.list()).notes[0]?.id).toBe(note.id)
-    expect((await service.spaces()).spaces[0]?.id).toBe(space.id)
   })
 
   test("validates inputs and reports typed errors", async () => {
@@ -506,7 +521,6 @@ describe("NotesService", () => {
       type: "space_not_found",
       data: { spaceID: "missing" },
     })
-    const space = await service.createSpace({ name: "Space" })
     await expect(
       service.update({ noteID: "missing", title: "Note" })
     ).rejects.toMatchObject({
@@ -514,18 +528,7 @@ describe("NotesService", () => {
       data: { noteID: "missing" },
     })
     await expect(
-      service.createSpace({
-        name: "Plan",
-        project: { id: "p" },
-        linkCurrentProject: true,
-      })
-    ).rejects.toMatchObject({
-      type: "invalid",
-      data: { field: "linkCurrentProject" },
-    })
-    await expect(
       service.create({
-        spaceID: space.id,
         title: "Note",
         status: "done" as never,
       })
@@ -543,13 +546,20 @@ describe("NotesService", () => {
       type: "invalid",
       data: { field: "expectedRevision" },
     })
+    await expect(
+      service.search({ query: "x".repeat(LIMITS.query + 1) })
+    ).rejects.toMatchObject({
+      type: "invalid",
+      data: { field: "query" },
+    })
   })
 
-  test("emits change events after committed writes", async () => {
+  test("emits change events after committed writes only", async () => {
     const { service, events } = makeService()
     const space = await service.createSpace({ name: "Space" })
     const note = await service.create({ spaceID: space.id, title: "Note" })
     await service.update({ noteID: note.id, status: "finished" })
+    await service.update({ noteID: note.id })
     await service.delete({ noteID: note.id })
 
     expect(events).toEqual([
@@ -561,7 +571,7 @@ describe("NotesService", () => {
   })
 
   test("starts notes with no attachments and preserves them across updates", async () => {
-    const { service, storage } = makeService()
+    const { service, store } = makeService()
     const note = await service.create({ title: "Note" })
     expect(note.attachments).toEqual([])
 
@@ -577,9 +587,9 @@ describe("NotesService", () => {
     expect(created.attachment.size).toBe(16)
     expect(created.note.revision).toBe(note.revision + 1)
     expect(created.note.attachments).toEqual([created.attachment])
-    expect(
-      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
-    ).toBe(true)
+    expect(await store.getAttachment(created.attachment.id)).toEqual(
+      new TextEncoder().encode("hello attachment")
+    )
 
     const updated = await service.update({ noteID: note.id, title: "Renamed" })
     expect(updated.attachments).toEqual([created.attachment])
@@ -587,7 +597,7 @@ describe("NotesService", () => {
   })
 
   test("reads and deletes attachment bytes while lists expose metadata only", async () => {
-    const { service, storage } = makeService()
+    const { service, store } = makeService()
     const note = await service.create({ title: "Note" })
     const data = btoa("hello")
     const created = await service.createAttachment({
@@ -606,7 +616,7 @@ describe("NotesService", () => {
     const listed = await service.list()
     expect(listed.notes[0]?.attachments).toEqual([created.attachment])
     expect(JSON.stringify(listed)).not.toContain(data)
-    expect(storage.values.get(`${NOTE_PREFIX}${note.id}`)).toMatchObject({
+    expect(await store.getNote(note.id)).toMatchObject({
       attachments: [created.attachment],
     })
 
@@ -617,9 +627,7 @@ describe("NotesService", () => {
     })
     expect(deleted.note.attachments).toEqual([])
     expect(deleted.note.revision).toBe(created.note.revision + 1)
-    expect(
-      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
-    ).toBe(false)
+    expect(await store.getAttachment(created.attachment.id)).toBeUndefined()
     await expect(
       service.readAttachment({
         noteID: note.id,
@@ -647,7 +655,7 @@ describe("NotesService", () => {
         expectedRevision: note.revision,
       })
     ).rejects.toMatchObject({
-      type: "conflict",
+      type: "revision_conflict",
       data: { entity: "note", id: note.id, revision: created.note.revision },
     })
     await expect(
@@ -656,7 +664,7 @@ describe("NotesService", () => {
         attachmentID: created.attachment.id,
         expectedRevision: note.revision,
       })
-    ).rejects.toMatchObject({ type: "conflict" })
+    ).rejects.toMatchObject({ type: "revision_conflict" })
 
     expect(events).toEqual([
       { entity: "note", action: "created", id: note.id },
@@ -683,7 +691,7 @@ describe("NotesService", () => {
         data: base64OfSize(1),
       })
     ).rejects.toMatchObject({
-      type: "attachment_limit",
+      type: "limit_exceeded",
       data: {
         noteID: note.id,
         attachmentCount: LIMITS.attachmentCount,
@@ -700,7 +708,7 @@ describe("NotesService", () => {
         data: base64OfSize(LIMITS.attachmentFileSize + 1),
       })
     ).rejects.toMatchObject({
-      type: "attachment_limit",
+      type: "limit_exceeded",
       data: {
         noteID: oversized.id,
         size: LIMITS.attachmentFileSize + 1,
@@ -730,7 +738,7 @@ describe("NotesService", () => {
         data: base64OfSize(1),
       })
     ).rejects.toMatchObject({
-      type: "attachment_limit",
+      type: "limit_exceeded",
       data: {
         noteID: total.id,
         attachmentCount: 3,
@@ -758,7 +766,7 @@ describe("NotesService", () => {
     ]) {
       await expect(
         service.createAttachment({ ...base, mime })
-      ).rejects.toMatchObject({ type: "invalid", data: { field: "mime" } })
+      ).rejects.toMatchObject({ type: "mime_rejected", data: { field: "mime" } })
     }
 
     await expect(
@@ -827,12 +835,13 @@ describe("NotesService", () => {
         attachmentID: created.attachment.id,
       })
     ).rejects.toMatchObject({ type: "attachment_not_found" })
-    expect((await service.list()).notes.find((note) => note.id === first.id))
-      .toMatchObject({ attachments: [created.attachment] })
+    expect(
+      (await service.list()).notes.find((note) => note.id === first.id)
+    ).toMatchObject({ attachments: [created.attachment] })
   })
 
-  test("best-effort removes attachment keys when deleting a note", async () => {
-    const { service, storage } = makeService()
+  test("best-effort removes attachment files when deleting a note", async () => {
+    const { service, store } = makeService()
     const note = await service.create({ title: "Note" })
     const first = await service.createAttachment({
       noteID: note.id,
@@ -849,14 +858,12 @@ describe("NotesService", () => {
 
     expect(await service.delete({ noteID: note.id })).toEqual({ deleted: true })
     for (const attachment of [first.attachment, second.attachment]) {
-      expect(
-        storage.values.has(`${ATTACHMENT_PREFIX}${attachment.id}`)
-      ).toBe(false)
+      expect(await store.getAttachment(attachment.id)).toBeUndefined()
     }
   })
 
   test("deletes the note even when attachment cleanup fails", async () => {
-    const { service, storage } = makeService()
+    const { service, store } = makeService()
     const note = await service.create({ title: "Note" })
     const created = await service.createAttachment({
       noteID: note.id,
@@ -864,16 +871,171 @@ describe("NotesService", () => {
       mime: "text/plain",
       data: btoa("one"),
     })
-    const remove = storage.remove.bind(storage)
-    storage.remove = async (key: string) => {
-      if (key.startsWith(ATTACHMENT_PREFIX)) throw new Error("cleanup failed")
-      await remove(key)
+    const remove = store.removeAttachment.bind(store)
+    store.removeAttachment = async (attachmentID: string) => {
+      if (attachmentID === created.attachment.id) throw new Error("cleanup failed")
+      await remove(attachmentID)
     }
 
     expect(await service.delete({ noteID: note.id })).toEqual({ deleted: true })
     expect(await service.list()).toEqual({ notes: [], total: 0 })
+    expect(await store.getAttachment(created.attachment.id)).toBeDefined()
+  })
+
+  test("searches titles and bodies with scores, snippets, and scoping", async () => {
+    const { service } = makeService()
+    const global = await service.createSpace({ name: "Global" })
+    const project = await service.createSpace({
+      name: "Plan",
+      projectDir: "/repo",
+    })
+    const other = await service.createSpace({
+      name: "Other",
+      projectDir: "/other",
+    })
+    const titled = await service.create({
+      spaceID: project.id,
+      title: "Deploy checklist",
+      body: "unrelated words",
+    })
+    const bodyOnly = await service.create({
+      spaceID: project.id,
+      title: "Random",
+      body:
+        "The deploy is ready. " +
+        "We need to deploy carefully. " +
+        "deploy deploy deploy deploy deploy deploy".repeat(2),
+      status: "blocked",
+    })
+    const globalNote = await service.create({
+      spaceID: global.id,
+      title: "Deploy notes",
+      body: "global deploy",
+    })
+    const otherNote = await service.create({
+      spaceID: other.id,
+      title: "Deploy elsewhere",
+      body: "deploy",
+    })
+
+    const all = await service.search({ query: "DEPLOY" })
+    expect(all.total).toBe(4)
+    expect(all.results[0]?.score).toBe(110)
     expect(
-      storage.values.has(`${ATTACHMENT_PREFIX}${created.attachment.id}`)
-    ).toBe(true)
+      all.results.find((result) => result.note.id === titled.id)?.score
+    ).toBe(100)
+    expect(all.results.every((result) => result.note.body === "")).toBe(true)
+    const bodyResult = all.results.find((result) => result.note.id === bodyOnly.id)
+    expect(bodyResult?.score).toBe(50)
+    expect(bodyResult?.snippet).toContain("deploy")
+    expect(bodyResult?.snippet.endsWith("…")).toBe(true)
+
+    const scoped = await service.search({ query: "deploy", directory: "/repo" })
+    expect(scoped.total).toBe(3)
+    expect(
+      scoped.results.map((result) => result.note.id).toSorted()
+    ).toEqual(
+      [titled.id, bodyOnly.id, globalNote.id].toSorted()
+    )
+    expect(
+      (
+        await service.search({
+          query: "deploy",
+          directory: "/repo",
+          includeGlobal: false,
+        })
+      ).total
+    ).toBe(2)
+    expect(
+      (await service.search({ query: "deploy", statuses: ["blocked"] })).results
+        .map((result) => result.note.id)
+    ).toEqual([bodyOnly.id])
+    expect(
+      (await service.search({ query: "deploy", directory: "/other" })).results
+        .map((result) => result.note.id)
+        .toSorted()
+    ).toEqual([globalNote.id, otherNote.id].toSorted())
+
+    expect((await service.search({ query: "nothing-matches" })).total).toBe(0)
+  })
+
+  test("snapshots note history, omits bodies, and restores as a new revision", async () => {
+    const { service } = makeService()
+    const note = await service.create({
+      title: "First",
+      body: "body one",
+      status: "todo",
+    })
+    const second = await service.update({
+      noteID: note.id,
+      title: "Second",
+      status: "in-progress",
+    })
+    const third = await service.update({ noteID: note.id, body: "body three" })
+
+    const history = await service.history({ noteID: note.id })
+    expect(history.total).toBe(2)
+    expect(history.snapshots[0]).toEqual({
+      revision: second.revision,
+      title: "Second",
+      status: "in-progress",
+      spaceID: null,
+      savedAt: third.updatedAt,
+      updatedAt: second.updatedAt,
+    })
+    expect(history.snapshots[1]?.revision).toBe(note.revision)
+    expect(JSON.stringify(history)).not.toContain("body one")
+
+    const restored = await service.restore({
+      noteID: note.id,
+      revision: note.revision,
+      expectedRevision: third.revision,
+    })
+    expect(restored.note.title).toBe("First")
+    expect(restored.note.body).toBe("body one")
+    expect(restored.note.status).toBe("todo")
+    expect(restored.note.revision).toBe(third.revision + 1)
+
+    const after = await service.history({ noteID: note.id })
+    expect(after.total).toBe(3)
+    expect(after.snapshots[0]?.revision).toBe(third.revision)
+
+    await expect(
+      service.restore({ noteID: note.id, revision: 999 })
+    ).rejects.toMatchObject({
+      type: "snapshot_not_found",
+      data: { noteID: note.id, revision: 999 },
+    })
+    await expect(
+      service.restore({
+        noteID: note.id,
+        revision: note.revision,
+        expectedRevision: third.revision,
+      })
+    ).rejects.toMatchObject({ type: "revision_conflict" })
+    await expect(service.history({ noteID: "missing" })).resolves.toEqual({
+      snapshots: [],
+      total: 0,
+    })
+  })
+
+  test("does not snapshot no-op updates or keep more than 50 snapshots", async () => {
+    const { service } = makeService()
+    const note = await service.create({ title: "Note" })
+    await service.update({ noteID: note.id })
+    expect((await service.history({ noteID: note.id })).total).toBe(0)
+
+    let current = note
+    for (let index = 0; index < 60; index++) {
+      current = await service.update({
+        noteID: note.id,
+        body: `body ${index}`,
+      })
+    }
+    const history = await service.history({ noteID: note.id })
+    expect(history.total).toBe(50)
+    expect(history.snapshots[0]?.revision).toBe(current.revision - 1)
+    expect(history.snapshots.at(-1)?.revision).toBe(current.revision - 50)
   })
 })
+

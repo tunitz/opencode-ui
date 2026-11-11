@@ -124,6 +124,25 @@ native adapter first, while the project command remains a separately labelled pi
 Selecting that entry records an explicit server-command choice, so the exact
 `POST /api/session/{sid}/command` request still runs with the project command name.
 
+## Notes: retired TUI commands, MCP prompts
+
+The Notes package is no longer an OpenCode engine plugin. Its former TUI command surface is retired
+and is not implemented in the web picker; do not claim notes slash commands. Notes are used from the
+Notes workspace, or by agents through the Notes MCP server.
+
+When the server is registered and connected from Settings → Plugins (an engine restart may be needed
+first), its three prompts appear in the engine catalog and therefore in the generic `/api/command`
+picker like any other MCP prompt command. They render instructions; the agent then calls the notes
+tools.
+
+| Prompt | Arguments | Intent |
+|---|---|---|
+| `notes:capture` | `title?`, `space?`, `status?` | Distill the current conversation into a durable note after checking for an existing related note. |
+| `notes:daily` | `date?` (YYYY-MM-DD) | Find or create the Global "Daily" space and a note titled with the date, then append a dated summary section. |
+| `notes:review` | `directory?` | Review pinned and active notes for the project, reconcile statuses, and append evidence before setting `finished`. |
+
+Without the MCP registration these prompts are absent; there is no browser-local substitute.
+
 ## Terminal
 
 The terminal UI is not shipped. `/terminal` is listed as unsupported, and no client surface mounts
@@ -142,7 +161,8 @@ through the native command endpoint. This includes:
 - plugin-added server commands.
 
 The UI merges the complete returned catalog generically; it does not hardcode project, MCP, or
-plugin command names beyond verified native built-ins.
+plugin command names beyond verified native built-ins. With the Notes MCP server registered, its
+`notes:capture`, `notes:daily`, and `notes:review` prompts arrive through this same generic path.
 
 The web picker does not hardcode their IDs beyond the verified built-ins and does not assume a
 command implies model execution. Arguments are passed as raw text (quotes preserved), not shell

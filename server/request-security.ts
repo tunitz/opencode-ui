@@ -54,25 +54,6 @@ const ALLOWED_METHODS = new Set([
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
-// Plugin RPC is not a general-purpose browser proxy. Only these notes methods
-// are exposed; other plugins and future methods remain inaccessible by default.
-const NOTES_RPC_PATHS = new Set(
-  [
-    "list",
-    "get",
-    "create",
-    "update",
-    "delete",
-    "createAttachment",
-    "readAttachment",
-    "deleteAttachment",
-    "spaces",
-    "createSpace",
-    "updateSpace",
-    "deleteSpace",
-  ].map((method) => `/api/rpc/opencode-notes/${method}`)
-)
-
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
@@ -133,7 +114,6 @@ export function isAllowedApiPath(
   prefixes: readonly string[] = DEFAULT_API_PREFIXES
 ): boolean {
   if (pathname === "/openapi.json") return true
-  if (NOTES_RPC_PATHS.has(pathname) && prefixes === DEFAULT_API_PREFIXES) return true
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   )
@@ -203,9 +183,6 @@ export function evaluateRequest(
   if (!isAllowedApiPath(pathname, allowedApiPrefixes)) {
     return { allowed: false, status: 403, reason: "API path not allowed" }
   }
-  if (NOTES_RPC_PATHS.has(pathname) && method !== "POST") {
-    return { allowed: false, status: 405, reason: "method not allowed" }
-  }
 
   const hasOrigin = Boolean(input.origin)
   if (hasOrigin && !isAllowedOrigin(input.origin, allowedOrigins)) {
@@ -216,10 +193,6 @@ export function evaluateRequest(
   }
   if (isStateChanging(method) && !hasOrigin) {
     return { allowed: false, status: 403, reason: "missing origin" }
-  }
-
-  if (NOTES_RPC_PATHS.has(pathname) && !isJsonContentType(input.contentType)) {
-    return { allowed: false, status: 415, reason: "browser mutation must be JSON" }
   }
 
   if (

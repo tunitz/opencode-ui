@@ -1,7 +1,11 @@
 import type { ComposerAttachment } from "@/lib/attachments"
 import { formatFileSize } from "@/lib/files"
+import {
+  NOTE_STATUS_LABELS,
+  type NoteStatus,
+} from "@/lib/notes-types"
 
-export type NoteReferenceStatus = "todo" | "in-progress" | "finished"
+export type NoteReferenceStatus = NoteStatus
 
 export type NoteReferenceAttachment = {
   id: string
@@ -18,14 +22,8 @@ export type NoteReferenceInput = {
   attachments?: readonly NoteReferenceAttachment[]
 }
 
-const statusText: Record<NoteReferenceStatus, string> = {
-  todo: "To do",
-  "in-progress": "In progress",
-  finished: "Finished",
-}
-
 export function noteStatusText(status: NoteReferenceStatus): string {
-  return statusText[status]
+  return NOTE_STATUS_LABELS[status] ?? NOTE_STATUS_LABELS.todo
 }
 
 /** A display-only file name. The URI and attachment id remain opaque. */

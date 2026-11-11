@@ -59,9 +59,9 @@ import { NotesSidebar, useNotesWorkspace } from "@/components/notes-sidebar"
 import { IntegrationCommandDialogs } from "@/components/integration-command-dialogs"
 import {
   SettingsButton,
-  SettingsDialog,
   SettingsTriggerButton,
-} from "@/components/settings-dialog"
+} from "@/components/settings-workspace"
+import { useOptionalSettingsWorkspace } from "@/components/settings-context"
 import { projectName } from "@/components/project-select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -74,7 +74,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { AppearanceDialog, AppearanceTrigger, ThemeSelect } from "@/components/theme-select"
 import {
   Tooltip,
   TooltipContent,
@@ -1296,9 +1295,8 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
           </ScrollArea>
         </>
       )}
-      <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-between gap-1 p-3")}>
-        <ThemeSelect />
-        <SettingsButton nav={nav} />
+      <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-end gap-1 p-3")}>
+        <SettingsButton />
       </div>
     </aside>
   )
@@ -1307,10 +1305,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
 export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionsSheet")
   const notes = useNotesWorkspace()
+  const settings = useOptionalSettingsWorkspace()
   const [open, setOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [appearanceOpen, setAppearanceOpen] = useState(false)
-  const pendingAppearance = useRef(false)
+  const pendingSettings = useRef(false)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const pendingWorktreeProject = useRef<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
@@ -1319,12 +1316,13 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   return (
     <>
     <Sheet open={open} onOpenChange={(next) => {
-      if (next) { pendingWorktreeProject.current = null; pendingAppearance.current = false }
+      if (next) { pendingWorktreeProject.current = null; pendingSettings.current = false }
       setOpen(next)
     }} onOpenChangeComplete={(next) => {
-      if (!next && pendingAppearance.current) {
-        pendingAppearance.current = false
-        setAppearanceOpen(true)
+      if (!next && pendingSettings.current) {
+        pendingSettings.current = false
+        document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")?.focus()
+        settings?.openSettings()
       }
       if (!next && pendingWorktreeProject.current) {
         setWorktreeProjectID(pendingWorktreeProject.current)
@@ -1387,23 +1385,16 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
             }}
           />
         </ScrollArea>
-        <SheetFooter className="flex-row items-center justify-between gap-1 border-t border-border p-4">
-          <AppearanceTrigger onClick={() => { pendingAppearance.current = true; setOpen(false) }} />
+        <SheetFooter className="flex-row items-center justify-end gap-1 border-t border-border p-4">
           <SettingsTriggerButton
             onClick={() => {
+              pendingSettings.current = true
               setOpen(false)
-              setSettingsOpen(true)
             }}
           />
         </SheetFooter>
       </SheetContent>
     </Sheet>
-    <AppearanceDialog open={appearanceOpen} onOpenChange={setAppearanceOpen} finalFocus={() => document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")} />
-    <SettingsDialog
-      nav={nav}
-      open={settingsOpen}
-      onOpenChange={setSettingsOpen}
-    />
     <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={notes.closeNotes} />
     </>
   )

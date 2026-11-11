@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
+import { AuthGateProvider } from "@/components/auth-context"
 import { Composer } from "@/components/composer"
 import { ContextStrip } from "@/components/context-strip"
 import { Conversation } from "@/components/conversation"
@@ -12,7 +13,11 @@ import { PendingInbox } from "@/components/pending-inbox"
 import { QueueStrip } from "@/components/queue-strip"
 import { SessionInspectorPanel } from "@/components/session-inspector"
 import { SessionSidebar } from "@/components/session-nav"
-import { SettingsDialog } from "@/components/settings-dialog"
+import {
+  SettingsProvider,
+  useSettingsWorkspace,
+} from "@/components/settings-context"
+import { SettingsWorkspace } from "@/components/settings-workspace"
 import { Button } from "@/components/ui/button"
 import { useUndoToast, UndoToastProvider } from "@/lib/undo-toast"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
@@ -23,13 +28,25 @@ import { recordPerfRender } from "@/lib/perf-probe"
 
 export function App() {
   recordPerfRender("App")
-  const nav = useOpenCode()
   useAppViewportHeight()
+
+  return (
+    <AuthGateProvider>
+      <EngineApp />
+    </AuthGateProvider>
+  )
+}
+
+/** Mounted only after the auth gate reports an authenticated session. */
+function EngineApp() {
+  const nav = useOpenCode()
 
   return (
     <UndoToastProvider>
       <NotesProvider nav={nav}>
-        <AppShell nav={nav} />
+        <SettingsProvider>
+          <AppShell nav={nav} />
+        </SettingsProvider>
       </NotesProvider>
     </UndoToastProvider>
   )
@@ -38,18 +55,18 @@ export function App() {
 
 function AppShell({ nav }: { nav: OpenCodeController }) {
   const notes = useNotesWorkspace()
+  const settings = useSettingsWorkspace()
   const undo = useUndoToast()
   const { bindings } = useKeybindings()
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
   const previousNotesOpen = useRef(notes.open)
   useEffect(() => {
     if (previousNotesOpen.current !== notes.open) {
       previousNotesOpen.current = notes.open
-      document.getElementById("chat-main")?.focus()
+      if (!settings.open) document.getElementById("chat-main")?.focus()
     }
-  }, [notes.open])
+  }, [notes.open, settings.open])
 
   // Command opens the inspector's Command tab. It is not a modal search dialog,
   // and it respects custom bindings plus IME/composition.
@@ -87,7 +104,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
         <div className="app-height flex min-w-0 flex-1 flex-col md:h-svh">
           <AppHeader
             nav={nav}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={() => settings.openSettings()}
             onOpenWorktrees={() => setWorktreesOpen(true)}
           />
           <main
@@ -97,7 +114,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
           >
             <div
               className={
-                notes.open
+                notes.open || settings.open
                   ? "hidden"
                   : "mx-auto flex min-h-0 w-full max-w-[42.5rem] flex-1 flex-col md:max-w-none md:px-6 lg:px-8"
               }
@@ -166,13 +183,13 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                 }}
                 modelSettingsOpen={modelSettingsOpen}
                 onModelSettingsOpenChange={setModelSettingsOpen}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() => settings.openSettings()}
               />
             </div>
             {notes.hasWorkspace && (
               <div
                 className={
-                  notes.open
+                  notes.open && !settings.open
                     ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6 lg:px-8"
                     : "hidden"
                 }
@@ -180,15 +197,19 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                 <NotesWorkspace />
               </div>
             )}
+            {settings.open && (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
+                <SettingsWorkspace nav={nav} />
+              </div>
+            )}
           </main>
         </div>
         <SessionInspectorPanel
           nav={nav}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => settings.openSettings()}
           onOpenWorktrees={() => setWorktreesOpen(true)}
         />
       </div>
-      <SettingsDialog nav={nav} open={settingsOpen} onOpenChange={setSettingsOpen} />
       <IntegrationCommandDialogs
         kind={worktreesOpen ? "worktrees" : null}
         nav={nav}

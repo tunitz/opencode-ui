@@ -4,6 +4,7 @@ import { create } from "react-test-renderer"
 import {
   NOTE_ATTACHMENT_LIMITS,
   NotesPanel,
+  SpaceScopeBadge,
   insertNoteText,
   isDirtyNoteDraft,
   mergeNoteDraft,
@@ -16,6 +17,11 @@ import {
   removeNoteAttachmentReference,
 } from "../src/components/notes-panel"
 import { NoteStatusLabel } from "../src/components/note-status-label"
+import {
+  NOTE_STATUSES,
+  NOTE_STATUS_CATEGORIES,
+  noteStatusCategory,
+} from "../src/lib/notes-types"
 
 let previousDocument
 beforeEach(() => { previousDocument = globalThis.document; globalThis.document = { addEventListener() {}, removeEventListener() {} } })
@@ -49,7 +55,6 @@ const note = (overrides = {}) => ({
 const snapshot = (notes, overrides = {}) => ({
   notes,
   spaces: [],
-  projects: [],
   workspaceDirectory: "/project",
   ...overrides,
 })
@@ -59,7 +64,8 @@ test("conflict recovery keeps concurrent moves while preserving user edits", () 
   const latest = { ...original, spaceID: "second", status: "finished", revision: 2 }
   const draft = { title: "My edit", content: "Body", status: "todo", pinned: false, spaceID: "first" }
   expect(mergeNoteDraft(original, draft, latest)).toEqual({ ...draft, spaceID: "second", status: "finished" })
-  expect(mergeSpaceDraft({ id: "s", name: "Before", projectID: "a" }, { name: "My name", projectID: "a" }, { id: "s", name: "Before", projectID: "b" })).toEqual({ name: "My name", projectID: "b" })
+  expect(mergeSpaceDraft({ id: "s", name: "Before", projectDir: "/one" }, { name: "My name", projectDir: "/one" }, { id: "s", name: "Before", projectDir: "/two" })).toEqual({ name: "My name", projectDir: "/two" })
+  expect(mergeSpaceDraft({ id: "s", name: "Before", projectDir: null }, { name: "Mine", projectDir: null }, { id: "s", name: "Before", projectDir: null })).toEqual({ name: "Mine", projectDir: null })
 })
 
 test("notes panel shows saved notes and distinguishes an empty space", async () => {
@@ -303,21 +309,40 @@ test("status labels pair text with colour for every state", async () => {
   try {
     await act(async () => {
       root = create(React.createElement(React.Fragment, null,
+        React.createElement(NoteStatusLabel, { status: "idea" }),
         React.createElement(NoteStatusLabel, { status: "todo" }),
         React.createElement(NoteStatusLabel, { status: "in-progress" }),
-        React.createElement(NoteStatusLabel, { status: "finished" })))
+        React.createElement(NoteStatusLabel, { status: "blocked" }),
+        React.createElement(NoteStatusLabel, { status: "finished" }),
+        React.createElement(NoteStatusLabel, { status: "cancelled" }),
+        React.createElement(NoteStatusLabel, { status: "archived" })))
     })
     const text = JSON.stringify(root.toJSON())
-    expect(text).toContain("To do")
-    expect(text).toContain("In progress")
-    expect(text).toContain("Finished")
-    expect(text).toContain("text-amber-600")
-    expect(text).toContain("text-sky-600")
-    expect(text).toContain("text-emerald-600")
+    for (const label of ["Idea", "To do", "In progress", "Blocked", "Finished", "Cancelled", "Archived"])
+      expect(text).toContain(label)
+    for (const colour of ["text-violet-600", "text-amber-600", "text-sky-600", "text-rose-600", "text-emerald-600", "text-slate-600", "text-stone-600"])
+      expect(text).toContain(colour)
+    for (const aria of ["Status: Idea", "Status: To do", "Status: In progress", "Status: Blocked", "Status: Finished", "Status: Cancelled", "Status: Archived"])
+      expect(text).toContain(aria)
+    expect(text).toContain('"role":"img"')
   } finally {
     if (root) await act(async () => root.unmount())
     restore()
   }
+})
+
+test("status categories group the seven statuses for filters and menus", () => {
+  expect(NOTE_STATUSES).toEqual([
+    "idea", "todo", "in-progress", "blocked", "finished", "cancelled", "archived",
+  ])
+  expect(NOTE_STATUS_CATEGORIES.map((category) => [category.label, category.statuses])).toEqual([
+    ["Backlog", ["idea", "todo"]],
+    ["Active", ["in-progress", "blocked"]],
+    ["Done", ["finished", "cancelled", "archived"]],
+  ])
+  expect(noteStatusCategory("idea")).toBe("backlog")
+  expect(noteStatusCategory("blocked")).toBe("active")
+  expect(noteStatusCategory("archived")).toBe("done")
 })
 
 test("pin input preserves note values and flips only the pin", () => {
@@ -394,6 +419,90 @@ test("removing an attachment persists the body reference cleanup", async () => {
       3,
     ])
     expect(root.root.findAllByType("textarea")[0].props.value).toBe("Body")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("space rows are de-duplicated and carry Global/project badges", async () => {
+  const restore = environment()
+  let root
+  const spaces = [
+    { id: "global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
+    { id: "work", name: "Work", projectDir: "/synthetic/work", pinned: false, revision: 1 },
+    { id: "work", name: "Work", projectDir: "/synthetic/work", pinned: false, revision: 1 },
+  ]
+  const adapter = { list: async () => snapshot([note()], { spaces }) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    expect(JSON.stringify(root.toJSON())).toContain("Spaces")
+    const rows = root.root.findAll((node) => node.type === "p")
+    const ideas = rows.filter((row) => row.children.includes("Ideas"))
+    const work = rows.filter((row) => row.children.includes("Work"))
+    expect(ideas).toHaveLength(1)
+    expect(work).toHaveLength(1)
+    const badges = root.root.findAllByType(SpaceScopeBadge)
+    expect(badges).toHaveLength(2)
+    expect(badges.map((badge) => badge.props.space.id).sort()).toEqual(["global", "work"])
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Global")
+    expect(text).toContain("work")
+    expect(text).toContain('"data-space-scope":"global"')
+    expect(text).toContain('"data-space-scope":"project"')
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("status filters group chips by category and narrow the list", async () => {
+  const restore = environment()
+  let root
+  const adapter = { list: async () => snapshot([
+    { ...note("one"), title: "Draft plan" },
+    { ...note("two"), title: "Shipped feature", status: "finished" },
+    { ...note("three"), title: "Stuck", status: "blocked" },
+  ]) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    for (const label of ["Backlog statuses", "Active statuses", "Done statuses"])
+      expect(root.root.findAllByProps({ "aria-label": label }).length).toBeGreaterThan(0)
+    const group = root.root.findAllByProps({ "role": "group", "aria-label": "Filter by status" })[0]
+    expect(group.findAllByType("button")).toHaveLength(8)
+
+    const blocked = root.root.findAllByType("button").find((button) => button.children.includes("Blocked"))
+    await act(async () => blocked.props.onClick())
+    expect(root.root.findAllByProps({ "aria-label": "Open Stuck" }).length).toBeGreaterThan(0)
+    expect(root.root.findAllByProps({ "aria-label": "Open Draft plan" })).toHaveLength(0)
+
+    const finished = root.root.findAllByType("button").find((button) => button.children.includes("Finished"))
+    await act(async () => finished.props.onClick())
+    expect(root.root.findAllByProps({ "aria-label": "Open Shipped feature" }).length).toBeGreaterThan(0)
+    expect(root.root.findAllByProps({ "aria-label": "Open Stuck" })).toHaveLength(0)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("drafts survive leaving the panel when the adapter instance is reused", async () => {
+  const restore = environment()
+  let root
+  const adapter = { list: async () => snapshot([note({ content: "Body" })]) }
+  try {
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    await act(async () => root.root.findByProps({ "aria-label": "Open Original" }).props.onClick())
+    await act(async () => root.root.findAllByType("button").find((button) => button.children.includes("Edit")).props.onClick())
+    await act(async () => root.root.findByType("textarea").props.onChange({ target: { value: "Survives a switch" } }))
+    await act(async () => root.root.findAllByType("button").find((button) => button.children.includes("Back to Notes")).props.onClick())
+    await act(async () => root.unmount())
+    root = undefined
+
+    await act(async () => { root = create(React.createElement(NotesPanel, { adapter })) })
+    await act(async () => root.root.findByProps({ "aria-label": "Open Original" }).props.onClick())
+    await act(async () => root.root.findAllByType("button").find((button) => button.children.includes("Edit")).props.onClick())
+    expect(root.root.findByType("textarea").props.value).toBe("Survives a switch")
   } finally {
     if (root) await act(async () => root.unmount())
     restore()

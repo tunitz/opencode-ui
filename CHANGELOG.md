@@ -6,18 +6,45 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- `notes_get` plugin RPC method and agent tool for reading one full note.
+- `bun run start` as the single start command, with `--host`/`--port`/`--engine-url`/`--service-file`/
+  `--allowed-host`/`--allowed-origin`/`--artifact-root`/`--help`/`--version` and an automatic first-run
+  production build when `dist-bun-build/` is missing.
+- Optional UI password gate: first-run setup, sign-in, logout, password change, an HTTP-only 30-day
+  session cookie, and server-side argon2id/hash-only state. Optional on loopback, required on
+  non-loopback binds.
+- Settings workspace with Appearance, Agents, Alerts, Keys, Plugins, and Access sections; Notes and
+  Settings are mutually exclusive main panes with Back-to-conversation in the app header.
+- Settings → Plugins management of the Notes MCP server through the engine HTTP API, including
+  Connected / Registered / Not registered state and a restart hint.
+- Notes HTTP API (`POST /api/ui/notes/<method>`) and `/api/ui/notes/events` change stream, served by
+  the UI server.
+- Notes package rewritten as a standalone TypeScript core: plaintext file store, atomic writes,
+  per-record locks, revision CAS, 50 history snapshots, search, seven statuses, spaces v2, and a
+  one-time read-only migration from legacy engine key-value data.
+- Notes MCP stdio server with 13 tools, three prompts (`notes:capture`, `notes:daily`,
+  `notes:review`), and note/space resources.
+- `notes_get` tool and notes method for reading one full note.
 - `includeBodies` on the notes list contract; `false` returns empty bodies for cheap browsing.
 
 ### Changed
 
-- The Notes & plans sidebar starts collapsed by default.
+- Notes no longer run as an OpenCode engine plugin; the engine plugin export, engine RPC contract,
+  TUI command surface, `/api/rpc/opencode-notes/*`, and `NOTES_RPC_PATHS` are retired.
+- Notes spaces use `projectDir` (`null` means Global); the `kind`/`project` vocabulary is removed.
+- The Notes sidebar starts collapsed by default.
 - Notes follow a `todo` → `in-progress` → `finished` lifecycle, with `finished` only after verified
-  work.
+  work; `idea`, `blocked`, `cancelled`, and `archived` complete the seven-status model.
 - Note statuses were reconciled with actual work state.
-- Documentation refreshed for the Bun server, current installation options, and the unsupported
-  terminal surface. Environment-specific instructions were removed.
+- Appearance controls moved from the sidebar into Settings → Appearance.
+- Documentation refreshed for the Bun server, access gate, Settings workspace, Notes MCP
+  architecture, current installation options, and the unsupported terminal surface.
+  Environment-specific instructions were removed.
 - Removed the GitHub Actions CI workflow.
+
+### Fixed
+
+- Removed the spurious "Switch notes project?" confirmation; drafts survive project switches through
+  the per-directory adapter cache, and native `window.confirm` is no longer used.
 
 ## 0.1.0 — 2026-11-09
 

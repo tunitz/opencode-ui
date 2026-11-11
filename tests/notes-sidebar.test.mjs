@@ -2,29 +2,44 @@ import { expect, test } from "bun:test"
 import React, { act } from "react"
 import { create } from "react-test-renderer"
 
-let installed = true
 let pinnedTotal = 1
 let spacesFail = false
 let updateFail = false
 let updateCalls = []
 let updateGate = null
-const spaces = [{ id: "space-1", name: "Work", project: null, revision: 1 }]
+let requested = []
+let confirmCalls = 0
+const spaces = [
+  { id: "space-1", name: "Work", projectDir: "/project", pinned: false, revision: 1 },
+  { id: "space-global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
+]
 const pinnedNote = { id: "pinned-1", title: "Pinned idea", body: "Note body", status: "in-progress", pinned: true, spaceID: "space-1", revision: 1 }
+const planNote = { id: "note-plan", title: "Plan", body: "Plan body", status: "todo", pinned: false, spaceID: null, revision: 1 }
+
+const json = (body, status = 200) => Response.json(body, { status })
 const mockFetch = async (request, init) => {
   const url = typeof request === "string" ? request : String(request?.url ?? request)
-  if (url.includes("/api/plugin")) return Response.json({ location: { directory: "/project" }, data: installed ? [{ id: "opencode-notes", source: { type: "local", path: "/plugin" }, features: { server: true, rpc: true }, state: { status: "active" } }] : [] })
-  if (url.includes("/api/rpc/opencode-notes/list")) return Response.json({ output: { notes: [pinnedNote], total: pinnedTotal } })
-  if (url.includes("/api/rpc/opencode-notes/update")) {
+  requested.push(url)
+  if (url.endsWith("/api/ui/notes/list")) {
+    const input = JSON.parse(String(init?.body ?? "{}"))
+    if (input.pinned === true)
+      return json({ notes: [pinnedNote], total: pinnedTotal })
+    return json({ notes: [pinnedNote, planNote], total: 2 })
+  }
+  if (url.endsWith("/api/ui/notes/spaces")) {
+    if (spacesFail) return json({ error: { code: "invalid", message: "unavailable" } }, 500)
+    return json({ spaces, total: spaces.length })
+  }
+  if (url.endsWith("/api/ui/notes/update")) {
     updateCalls.push(JSON.parse(String(init?.body ?? "{}")))
     if (updateGate) await updateGate.promise
-    if (updateFail) return Response.json({ error: "conflict" }, { status: 500 })
-    return Response.json({ output: { note: { ...pinnedNote, pinned: false, revision: 2 } } })
+    if (updateFail)
+      return json({ error: { code: "revision_conflict", message: "Someone changed this note." } }, 409)
+    return json({ note: { ...pinnedNote, pinned: false, revision: 2 } })
   }
-  if (url.includes("/api/rpc/opencode-notes/spaces")) {
-    if (spacesFail) return Response.json({ error: "unavailable" }, { status: 500 })
-    return Response.json({ output: { spaces, total: spaces.length } })
-  }
-  return new Response("", { headers: { "content-type": "text/event-stream" } })
+  if (url.endsWith("/api/ui/notes/events"))
+    return new Response("", { headers: { "content-type": "text/event-stream" } })
+  return json({ error: { code: "invalid", message: "unexpected request" } }, 400)
 }
 
 const deferred = () => {
@@ -64,6 +79,10 @@ const findNotesTrigger = (root) =>
       node.findAllByType("span").some((span) => span.children.includes("Notes"))
     )
 
+const flush = async () => {
+  for (let index = 0; index < 12; index += 1) await act(async () => { await Promise.resolve() })
+}
+
 function setup() {
   const oldWindow = globalThis.window
   const oldFetch = globalThis.fetch
@@ -71,8 +90,17 @@ function setup() {
   updateFail = false
   updateCalls = []
   updateGate = null
+  requested = []
+  confirmCalls = 0
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
-  globalThis.window = { location: { origin: "http://example.test" }, matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) }
+  globalThis.window = {
+    location: { origin: "http://example.test" },
+    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+    confirm: () => {
+      confirmCalls += 1
+      return false
+    },
+  }
   globalThis.fetch = mockFetch
   return () => {
     globalThis.fetch = oldFetch
@@ -83,24 +111,34 @@ function setup() {
   }
 }
 
-test("notes sidebar appears only for an active plugin at the selected location", async () => {
+const nav = (overrides = {}) => ({
+  directory: "/project",
+  activeSession: null,
+  connection: "connected",
+  streamStatus: "ready",
+  projects: [],
+  ...overrides,
+})
+
+test("notes appear for the directory without an engine plugin gate", async () => {
   const restore = setup()
-  installed = true
   pinnedTotal = 1
   spacesFail = false
   let root
   try {
     const { NotesProvider, NotesSidebar } = await import("../src/components/notes-sidebar")
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
     const tree = (value) => React.createElement(NotesProvider, { nav: value }, React.createElement(NotesSidebar))
-    await act(async () => { root = create(tree(nav)) })
+    await act(async () => { root = create(tree(nav())) })
     const collapsed = JSON.stringify(root.toJSON())
     expect(collapsed).toContain('"aria-label":"Notes"')
     expect(collapsed).not.toContain("All notes")
     await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     expect(JSON.stringify(root.toJSON())).toContain("All notes")
-    installed = false
-    await act(async () => root.update(tree({ ...nav, streamStatus: "connecting" })))
+    expect(requested.some((url) => url.includes("/api/plugin"))).toBe(false)
+    expect(requested.some((url) => url.endsWith("/api/ui/notes/list"))).toBe(true)
+    expect(requested.some((url) => url.includes("/api/rpc/"))).toBe(false)
+
+    await act(async () => root.update(tree(nav({ directory: null, streamStatus: "connecting" }))))
     expect(root.toJSON()).toBeNull()
   } finally {
     if (root) await act(async () => root.unmount())
@@ -110,15 +148,13 @@ test("notes sidebar appears only for an active plugin at the selected location",
 
 test("pinned notes show status and space, and open the workspace with the selected note", async () => {
   const restore = setup()
-  installed = true
   pinnedTotal = 7
   spacesFail = false
   let root, current
   try {
     const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
     function Observer() { current = useNotesWorkspace(); return null }
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
-    await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(NotesSidebar), React.createElement(Observer))) })
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar), React.createElement(Observer))) })
     expect(JSON.stringify(root.toJSON())).not.toContain("Pinned notes")
     await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     const sidebar = JSON.stringify(root.toJSON())
@@ -126,6 +162,7 @@ test("pinned notes show status and space, and open the workspace with the select
     expect(sidebar).toContain("Pinned idea")
     expect(sidebar).toContain("In progress")
     expect(sidebar).toContain("Work")
+    expect(sidebar).not.toContain("Ideas")
     expect(root.root.findAllByType("p").some((item) => item.children.join("").includes("Showing 1 of 7"))).toBe(true)
     expect(current.open).toBe(false)
     const button = root.root.findAll((node) => node.type === "button").find((node) => node.findAllByType("span").some((span) => span.children.includes("Pinned idea")))
@@ -135,14 +172,14 @@ test("pinned notes show status and space, and open the workspace with the select
     expect(current.selectedNoteID).toBe("pinned-1")
     expect(current.pinnedNotes[0].attachments).toEqual([])
     expect(current.pinnedNotes[0].content).toBe("Note body")
+    expect(current.pinnedSpaces.map((space) => space.id)).toEqual(["space-1", "space-global"])
     await act(async () => current.closeNotes())
     expect(current.open).toBe(false)
-    await act(async () => root.update(React.createElement(NotesProvider, { nav: { ...nav, connection: "disconnected" } }, React.createElement(NotesSidebar), React.createElement(Observer))))
-    expect(JSON.stringify(root.toJSON())).toContain("Pinned notes unavailable")
-    const allNotesButton = root.root.findByProps({ "aria-label": "All notes" })
-    await act(async () => allNotesButton.props.onClick())
-    expect(current.open).toBe(true)
-    expect(current.selectedNoteID).toBe("pinned-1")
+    await act(async () => root.update(React.createElement(NotesProvider, { nav: nav({ connection: "disconnected" }) }, React.createElement(NotesSidebar), React.createElement(Observer))))
+    expect(JSON.stringify(root.toJSON())).toContain("Pinned notes")
+    await act(async () => current.refreshPinned())
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(1)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()
@@ -151,14 +188,12 @@ test("pinned notes show status and space, and open the workspace with the select
 
 test("a space lookup failure keeps pinned notes and labels the space unavailable", async () => {
   const restore = setup()
-  installed = true
   pinnedTotal = 1
   spacesFail = true
   let root
   try {
     const { NotesProvider, NotesSidebar } = await import("../src/components/notes-sidebar")
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
-    await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(NotesSidebar))) })
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar))) })
     await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     const sidebar = JSON.stringify(root.toJSON())
     expect(sidebar).toContain("Pinned idea")
@@ -173,7 +208,6 @@ test("a space lookup failure keeps pinned notes and labels the space unavailable
 
 test("unpinning from the sidebar confirms without opening the note and updates it", async () => {
   const restore = setup()
-  installed = true
   pinnedTotal = 1
   spacesFail = false
   let root, current
@@ -181,15 +215,13 @@ test("unpinning from the sidebar confirms without opening the note and updates i
     const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
     const { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent } = await import("../src/components/ui/alert-dialog")
     function Observer() { current = useNotesWorkspace(); return null }
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
-    await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(NotesSidebar), React.createElement(Observer))) })
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar), React.createElement(Observer))) })
     await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
 
     const dialogOpen = () => root.root.findAllByType(AlertDialog)[0].props.open
     const content = () => root.root.findAllByType(AlertDialogContent)[0]
     const action = () => findChildElement(content().props.children, (element) => element.type === AlertDialogAction)
     const cancel = () => findChildElement(content().props.children, (element) => element.type === AlertDialogCancel)
-    const flush = async () => { for (let index = 0; index < 10; index++) await act(async () => { await Promise.resolve() }) }
 
     expect(dialogOpen()).toBe(false)
     const unpin = root.root.findAll((node) => node.type === "button").find((node) => node.props["aria-label"] === "Unpin “Pinned idea”")
@@ -210,7 +242,7 @@ test("unpinning from the sidebar confirms without opening the note and updates i
     await act(async () => { action().props.onClick({ preventDefault() {} }) })
     await flush()
     expect(updateCalls).toHaveLength(1)
-    expect(updateCalls[0].input).toEqual({
+    expect(updateCalls[0]).toEqual({
       noteID: "pinned-1",
       title: "Pinned idea",
       body: "Note body",
@@ -238,7 +270,6 @@ test("unpinning from the sidebar confirms without opening the note and updates i
 
 test("an unpin failure keeps the dialog open and reports the error inside it", async () => {
   const restore = setup()
-  installed = true
   pinnedTotal = 1
   spacesFail = false
   updateFail = true
@@ -246,19 +277,19 @@ test("an unpin failure keeps the dialog open and reports the error inside it", a
   try {
     const { NotesProvider, NotesSidebar } = await import("../src/components/notes-sidebar")
     const { AlertDialog, AlertDialogAction, AlertDialogContent } = await import("../src/components/ui/alert-dialog")
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
-    await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(NotesSidebar))) })
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar))) })
     await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
     const content = () => root.root.findAllByType(AlertDialogContent)[0]
     const unpin = root.root.findAll((node) => node.type === "button").find((node) => node.props["aria-label"] === "Unpin “Pinned idea”")
     await act(async () => unpin.props.onClick({ currentTarget: { isConnected: true } }))
     const action = () => findChildElement(content().props.children, (element) => element.type === AlertDialogAction)
     await act(async () => { action().props.onClick({ preventDefault() {} }) })
-    for (let index = 0; index < 10; index++) await act(async () => { await Promise.resolve() })
+    await flush()
     expect(root.root.findAllByType(AlertDialog)[0].props.open).toBe(true)
     const alert = findChildElement(content().props.children, (element) => element.props?.role === "alert")
     expect(alert).toBeTruthy()
     expect(collectText(alert)).toContain("Could not unpin the note.")
+    expect(collectText(alert)).toContain("Someone changed this note.")
     expect(action().props.disabled).toBe(false)
   } finally {
     if (root) await act(async () => root.unmount())
@@ -268,7 +299,6 @@ test("an unpin failure keeps the dialog open and reports the error inside it", a
 
 test("the optional notes hook returns null without a provider and the workspace with one", async () => {
   const restore = setup()
-  installed = true
   let root, value = "unset"
   try {
     const { NotesProvider, useOptionalNotesWorkspace } = await import("../src/components/notes-sidebar")
@@ -277,10 +307,57 @@ test("the optional notes hook returns null without a provider and the workspace 
     expect(value).toBeNull()
     await act(async () => root.unmount())
     root = undefined
-    const nav = { directory: "/project", activeSession: null, connection: "connected", streamStatus: "ready", projects: [] }
-    await act(async () => { root = create(React.createElement(NotesProvider, { nav }, React.createElement(Probe))) })
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(Probe))) })
     expect(value).not.toBeNull()
     expect(value.available).toBe(true)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("switching notes projects reuses each project's adapter and never prompts", async () => {
+  const restore = setup()
+  pinnedTotal = 1
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    const tree = (value) =>
+      React.createElement(
+        NotesProvider,
+        { nav: value },
+        React.createElement(NotesSidebar),
+        React.createElement(Observer)
+      )
+    await act(async () => { root = create(tree(nav())) })
+    await flush()
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
+    await flush()
+    const openAllNotes = async () => {
+      await act(async () => root.root.findByProps({ "aria-label": "All notes" }).props.onClick())
+      await flush()
+    }
+    await openAllNotes()
+    const firstAdapter = current.adapter
+    expect(current.workspaceKey).toBe("/project")
+    expect(confirmCalls).toBe(0)
+
+    await act(async () => root.update(tree(nav({ directory: "/other" }))))
+    await flush()
+    await openAllNotes()
+    const otherAdapter = current.adapter
+    expect(otherAdapter).not.toBe(firstAdapter)
+    expect(current.workspaceKey).toBe("/other")
+    expect(confirmCalls).toBe(0)
+
+    await act(async () => root.update(tree(nav())))
+    await flush()
+    await openAllNotes()
+    // Same adapter instance: drafts keyed by it survive the round trip.
+    expect(current.adapter).toBe(firstAdapter)
+    expect(confirmCalls).toBe(0)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()

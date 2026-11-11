@@ -1,4 +1,5 @@
 import {
+  Component,
   createContext,
   useCallback,
   useContext,
@@ -9,16 +10,15 @@ import {
   type ReactNode,
 } from "react"
 import { NotebookPenIcon, PinIcon } from "lucide-react"
+import { useAuthGate } from "@/components/auth-context"
 import {
   NotesPanel,
   pinnedNoteInput,
   type NotesAdapter,
-  type NotesAttachment,
   type NotesNote,
   type NotesSpace,
 } from "@/components/notes-panel"
 import { NoteStatusLabel } from "@/components/note-status-label"
-import { projectName } from "@/components/project-select"
 import { Accordion } from "@/components/ui/accordion"
 import { AccordionSection } from "@/components/ui/accordion-section"
 import {
@@ -32,70 +32,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { openCode } from "@/lib/opencode"
+import {
+  createNotesAdapter,
+  listNotesScoped,
+  listSpacesScoped,
+  setNotesAuthHandler,
+  subscribeNotesEvents,
+} from "@/lib/notes-api"
+import { uniqueByID } from "@/lib/notes-types"
 import type { OpenCodeController } from "@/lib/use-opencode"
-
-type PluginAttachment = {
-  id: string
-  name: string
-  mime: string
-  size: number
-  createdAt?: number
-}
-type PluginNote = {
-  id: string
-  title: string
-  body: string
-  status: NotesNote["status"]
-  pinned: boolean
-  spaceID: string | null
-  revision?: number
-  attachments?: PluginAttachment[]
-}
-type PluginSpace = {
-  id: string
-  name: string
-  project: { id: string } | null
-  revision?: number
-}
-
-function pluginAttachmentToNotes(
-  attachment: PluginAttachment
-): NotesAttachment {
-  return {
-    id: attachment.id,
-    name: attachment.name,
-    mime: attachment.mime,
-    size: attachment.size,
-    ...(typeof attachment.createdAt === "number"
-      ? { createdAt: attachment.createdAt }
-      : {}),
-  }
-}
-
-function pluginNoteToNotes(note: PluginNote): NotesNote {
-  return {
-    id: note.id,
-    title: note.title,
-    content: note.body,
-    status: note.status,
-    pinned: note.pinned,
-    spaceID: note.spaceID,
-    ...(typeof note.revision === "number"
-      ? { revision: note.revision }
-      : {}),
-    attachments: (note.attachments ?? []).map(pluginAttachmentToNotes),
-  }
-}
-
-function pluginSpaceToNotes(space: PluginSpace): NotesSpace {
-  return {
-    id: space.id,
-    name: space.name,
-    projectID: space.project?.id ?? null,
-    revision: space.revision,
-  }
-}
 
 export type NotesContextValue = {
   available: boolean
@@ -117,6 +62,7 @@ export type NotesContextValue = {
   directoryChanged: boolean
   connected: boolean
   refreshKey: string
+  refreshPinned: () => void
 }
 const NotesContext = createContext<NotesContextValue | null>(null)
 
@@ -131,8 +77,35 @@ export function useOptionalNotesWorkspace(): NotesContextValue | null {
   return useContext(NotesContext)
 }
 
+/**
+ * `useAuthGate` throws without an AuthGateProvider. Notes also mount in
+ * isolated fixtures and tests, so a missing gate must not take the workspace
+ * down; in the app the provider is always present inside App.
+ */
+class OptionalAuthBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
 
-/** Optional client: the plugin remains the only source of notes data. */
+/** Surfaces a mid-session 401 from the notes API through the auth gate. */
+function NotesAuthBridge() {
+  const { signalUnauthorized } = useAuthGate()
+  useEffect(() => {
+    setNotesAuthHandler(signalUnauthorized)
+    return () => setNotesAuthHandler(null)
+  }, [signalUnauthorized])
+  return null
+}
+
+/** Notes are served by the UI server: initialize eagerly, no plugin gate. */
 export function NotesProvider({
   nav,
   children,
@@ -141,9 +114,6 @@ export function NotesProvider({
   children: ReactNode
 }) {
   const directory = nav.activeSession?.location.directory ?? nav.directory
-  const [availableDirectory, setAvailableDirectory] = useState<string | null>(
-    null
-  )
   const [open, setOpen] = useState(false)
   const [editingDirectory, setEditingDirectory] = useState<string | null>(null)
   const [selectedNoteID, setSelectedNoteID] = useState<string | null>(null)
@@ -156,311 +126,51 @@ export function NotesProvider({
     total: number
     error: boolean
   } | null>(null)
-  const pinnedRequest = useRef(0)
+  const [pinnedRequest, setPinnedRequest] = useState(0)
+
+  // One adapter per directory. Drafts are kept in a map keyed by adapter, so a
+  // cached adapter is what lets drafts survive leaving a project and returning.
+  const [adapters] = useState(() => new Map<string, NotesAdapter>())
+  const workspaceDirectory = editingDirectory ?? directory ?? ""
+  const adapter = useMemo(() => {
+    const existing = adapters.get(workspaceDirectory)
+    if (existing) return existing
+    const created = createNotesAdapter(workspaceDirectory)
+    adapters.set(workspaceDirectory, created)
+    return created
+  }, [adapters, workspaceDirectory])
+
+  const refreshPinned = useCallback(
+    () => setPinnedRequest((request) => request + 1),
+    []
+  )
 
   useEffect(() => {
-    if (!directory || nav.connection !== "connected") return
+    if (!directory) return
     let active = true
-    void openCode.plugin.list({ location: { directory } }).then(
-      (result) => {
-        if (active)
-          setAvailableDirectory(
-            result.data.some(
-              (plugin) =>
-                plugin.id === "opencode-notes" &&
-                plugin.state.status === "active"
-            )
-              ? directory
-              : null
-          )
-      },
-      () => {
-        if (active) setAvailableDirectory(null)
-      }
-    )
-    return () => {
-      active = false
-    }
-  }, [directory, nav.connection, nav.streamStatus])
-
-  const navProjects = nav.projects
-  const adapter = useMemo<NotesAdapter>(() => {
-    const location = { directory: editingDirectory ?? directory }
-    const spaceProjects = new Map<string, string | null>()
-    let changeCounter = 0
-    const call = async (
-      method: string,
-      input: Record<string, string | number | boolean | null | { id: string }>
-    ) => {
-      const result = await openCode.rpc.call({
-        rpcID: "opencode-notes",
-        method,
-        input,
-        location,
-      })
-      return result.output
-    }
-    const toAttachment = pluginAttachmentToNotes
-    const toNote = pluginNoteToNotes
-    const projectDirectory = (
-      project: (typeof navProjects)[number]
-    ): string | null => {
-      const record = project as unknown as {
-        location?: { directory?: string | null } | null
-        canonical?: string | null
-      }
-      return record.location?.directory ?? record.canonical ?? null
-    }
-    return {
-      async list() {
-        const started = changeCounter
-        const [spacesResult, first] = await Promise.all([
-          call("spaces", {}) as Promise<{ spaces: PluginSpace[] }>,
-          call("list", { limit: 1000, offset: 0 }) as Promise<{
-            notes: PluginNote[]
-            total: number
-          }>,
-        ])
-        const notes = [...first.notes]
-        while (notes.length < first.total) {
-          const page = (await call("list", {
-            limit: 1000,
-            offset: notes.length,
-          })) as { notes: PluginNote[]; total: number }
-          if (!page.notes.length)
-            throw new Error(
-              "The complete notes list could not be loaded. Refresh and try again."
-            )
-          notes.push(...page.notes)
-        }
-        if (
-          changeCounter !== started ||
-          new Set(notes.map((note) => note.id)).size !== notes.length
-        ) {
-          throw new Error("Notes changed while loading. Refresh to try again.")
-        }
-        if (
-          notes.some((note) => typeof note.revision !== "number") ||
-          spacesResult.spaces.some(
-            (space) => typeof space.revision !== "number"
-          )
-        ) {
-          throw new Error(
-            "This notes plugin version does not support safe editing. Update the plugin."
-          )
-        }
-        for (const space of spacesResult.spaces)
-          spaceProjects.set(space.id, space.project?.id ?? null)
-        return {
-          notes: notes.map(toNote),
-          spaces: spacesResult.spaces.map(pluginSpaceToNotes),
-          projects: navProjects.map((project) => ({
-            id: project.id,
-            name: projectName(project),
-            directory: projectDirectory(project),
-          })),
-          workspaceDirectory: editingDirectory ?? directory ?? "",
-        }
-      },
-      createNote: (input) =>
-        call("create", {
-          title: input.title,
-          body: input.content,
-          status: input.status,
-          pinned: input.pinned,
-          spaceID: input.spaceID,
-        }),
-      updateNote: (noteID, input, revision) =>
-        call("update", {
-          noteID,
-          title: input.title,
-          body: input.content,
-          status: input.status,
-          pinned: input.pinned,
-          spaceID: input.spaceID,
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        }),
-      deleteNote: (noteID, revision) =>
-        call("delete", {
-          noteID,
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        }),
-      createSpace: (input) =>
-        call("createSpace", {
-          name: input.name,
-          kind: "planning",
-          project: input.projectID ? { id: input.projectID } : null,
-        }),
-      updateSpace: (spaceID, input, revision) => {
-        if (!spaceProjects.has(spaceID))
-          return Promise.reject(
-            new Error("Refresh the space before editing it.")
-          )
-        return call("updateSpace", {
-          spaceID,
-          name: input.name,
-          ...(spaceProjects.get(spaceID) !== input.projectID
-            ? { project: input.projectID ? { id: input.projectID } : null }
-            : {}),
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        })
-      },
-      deleteSpace: (spaceID, revision) =>
-        call("deleteSpace", {
-          spaceID,
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        }),
-      async createAttachment(noteID, input, revision) {
-        const output = (await call("createAttachment", {
-          noteID,
-          name: input.name,
-          mime: input.mime,
-          data: input.data,
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        })) as { note?: PluginNote; attachment?: PluginAttachment }
-        if (!output?.note || !output.attachment)
-          throw new Error("Invalid attachment response")
-        return {
-          note: toNote(output.note),
-          attachment: toAttachment(output.attachment),
-        }
-      },
-      async readAttachment(noteID, attachmentID) {
-        const output = (await call("readAttachment", {
-          noteID,
-          attachmentID,
-        })) as { attachment?: PluginAttachment; data?: string }
-        if (!output?.attachment || typeof output.data !== "string")
-          throw new Error("Invalid attachment response")
-        return {
-          attachment: toAttachment(output.attachment),
-          data: output.data,
-        }
-      },
-      async deleteAttachment(noteID, attachmentID, revision) {
-        const output = (await call("deleteAttachment", {
-          noteID,
-          attachmentID,
-          ...(typeof revision === "number"
-            ? { expectedRevision: revision }
-            : {}),
-        })) as { note?: PluginNote }
-        if (!output?.note) throw new Error("Invalid attachment response")
-        return { note: toNote(output.note) }
-      },
-      subscribe(onChange) {
-        const controller = new AbortController()
-        void (async () => {
-          try {
-            for await (const event of openCode.event.subscribe({
-              signal: controller.signal,
-            })) {
-              if (
-                event.type === "rpc.opencode-notes.changed" ||
-                event.type === "server.connected"
-              ) {
-                changeCounter++
-                onChange()
-              }
-            }
-          } catch {
-            /* The next connection refresh reloads the snapshot. */
-          }
-        })()
-        return () => controller.abort()
-      },
-    }
-  }, [directory, editingDirectory, navProjects])
-
-  const available = Boolean(
-    directory &&
-    availableDirectory === directory &&
-    nav.connection === "connected"
-  )
-  const openNotes = useCallback(
-    (id: string | null = null) => {
-      if (!available || !directory) {
-        if (!editingDirectory || id !== null) return false
-        setOpen(true)
-        return true
-      }
-      if (
-        editingDirectory &&
-        editingDirectory !== directory &&
-        !window.confirm(
-          "Switch notes project? Unsaved notes in the current workspace will be discarded."
-        )
-      )
-        return false
-      setEditingDirectory(directory)
-      setSelectedNoteID(id)
-      setSelectionRequest((request) => request + 1)
-      setOpen(true)
-      return true
-    },
-    [available, directory, editingDirectory]
-  )
-  const closeNotes = useCallback(() => setOpen(false), [])
-
-  useEffect(() => {
-    if (!available || !directory) return
-    let active = true
-    const controller = new AbortController()
-    const currentRequest = pinnedRequest
-    const refresh = async () => {
-      const token = ++currentRequest.current
+    let token = 0
+    const load = async () => {
+      const current = ++token
       try {
         const [listResult, spacesResult] = await Promise.allSettled([
-          openCode.rpc.call({
-            rpcID: "opencode-notes",
-            method: "list",
-            input: { pinned: true, limit: 5 },
-            location: { directory },
-          }),
-          openCode.rpc.call({
-            rpcID: "opencode-notes",
-            method: "spaces",
-            input: {},
-            location: { directory },
-          }),
+          listNotesScoped(directory, { pinned: true, limit: 5 }),
+          listSpacesScoped(directory),
         ])
         if (listResult.status === "rejected") throw listResult.reason
-        if (!active || token !== currentRequest.current) return
-        const output = listResult.value.output as {
-          notes?: PluginNote[]
-          total?: number
-        }
-        if (!Array.isArray(output?.notes) || typeof output.total !== "number")
-          throw new Error("Invalid notes response")
-        const spacesOutput =
-          spacesResult.status === "fulfilled"
-            ? (spacesResult.value.output as { spaces?: PluginSpace[] })
-            : null
-        const spaces = Array.isArray(spacesOutput?.spaces)
-          ? spacesOutput.spaces.map(pluginSpaceToNotes)
-          : []
+        if (!active || current !== token) return
         setPinnedSnapshot({
           directory,
-          notes: output.notes.map(pluginNoteToNotes),
-          spaces,
-          spacesError:
-            spacesResult.status !== "fulfilled" ||
-            !Array.isArray(spacesOutput?.spaces),
-          total: output.total,
+          notes: uniqueByID(listResult.value.notes),
+          spaces:
+            spacesResult.status === "fulfilled"
+              ? uniqueByID(spacesResult.value)
+              : [],
+          spacesError: spacesResult.status !== "fulfilled",
+          total: listResult.value.total,
           error: false,
         })
       } catch {
-        if (active && token === currentRequest.current)
+        if (active && current === token)
           setPinnedSnapshot({
             directory,
             notes: [],
@@ -471,28 +181,37 @@ export function NotesProvider({
           })
       }
     }
-    void refresh()
-    void (async () => {
-      try {
-        for await (const event of openCode.event.subscribe({
-          signal: controller.signal,
-        })) {
-          if (
-            event.type === "rpc.opencode-notes.changed" ||
-            event.type === "server.connected"
-          )
-            void refresh()
-        }
-      } catch {
-        /* Reconnect re-runs this effect. */
-      }
-    })()
+    void load()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const stop = subscribeNotesEvents(() => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        if (active) void load()
+      }, 250)
+    })
     return () => {
       active = false
-      currentRequest.current++
-      controller.abort()
+      token++
+      if (timer) clearTimeout(timer)
+      stop()
     }
-  }, [available, directory, nav.streamStatus])
+  }, [directory, pinnedRequest])
+
+  const available = Boolean(directory)
+  const openNotes = useCallback(
+    (id: string | null = null) => {
+      if (!directory) return false
+      // No prompt: drafts stay with their project's adapter and come back.
+      setEditingDirectory(directory)
+      setSelectedNoteID(id)
+      setSelectionRequest((request) => request + 1)
+      setOpen(true)
+      return true
+    },
+    [directory]
+  )
+  const closeNotes = useCallback(() => setOpen(false), [])
 
   const value: NotesContextValue = {
     available,
@@ -522,9 +241,17 @@ export function NotesProvider({
       editingDirectory && editingDirectory !== directory
     ),
     connected: nav.connection === "connected",
-    refreshKey: nav.streamStatus,
+    refreshKey: "",
+    refreshPinned,
   }
-  return <NotesContext.Provider value={value}>{children}</NotesContext.Provider>
+  return (
+    <NotesContext.Provider value={value}>
+      <OptionalAuthBoundary>
+        <NotesAuthBridge />
+      </OptionalAuthBoundary>
+      {children}
+    </NotesContext.Provider>
+  )
 }
 
 export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -547,6 +274,7 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
         note.revision
       )
       setUnpinTarget(null)
+      notes.refreshPinned()
     } catch (error) {
       setUnpinError(
         error instanceof Error && error.message.trim()
@@ -556,7 +284,7 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
     } finally {
       setUnpinning(false)
     }
-  }, [notes.adapter, unpinTarget, unpinning])
+  }, [notes, unpinTarget, unpinning])
 
   if (!notes.available && !notes.hasWorkspace) return null
 
@@ -614,12 +342,19 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 Loading pinned notes…
               </p>
             ) : notes.pinnedError ? (
-              <p
-                role="status"
-                className="px-2.5 py-2 text-xs text-muted-foreground"
-              >
-                Pinned notes unavailable.
-              </p>
+              <div className="grid gap-1 px-2.5 py-2">
+                <p role="status" className="text-xs text-muted-foreground">
+                  Pinned notes unavailable.
+                </p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-11 w-fit px-2 text-xs"
+                  onClick={() => notes.refreshPinned()}
+                >
+                  Retry
+                </Button>
+              </div>
             ) : notes.pinnedNotes.length === 0 ? (
               <p className="px-2.5 py-2 text-xs text-muted-foreground">
                 No pinned notes yet.
@@ -739,12 +474,6 @@ export function NotesWorkspace() {
   const notes = useNotesWorkspace()
   return (
     <>
-      {!notes.connected && (
-        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
-          Connection unavailable. Your open draft is retained; reconnect before
-          saving.
-        </p>
-      )}
       {notes.directoryChanged && (
         <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
           This workspace remains connected to the project where it was opened.

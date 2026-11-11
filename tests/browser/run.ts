@@ -37,7 +37,35 @@ const requests: ApiRequest[] = []
 const notFound: string[] = []
 const results: Result[] = []
 
-const syntheticNotes = [
+type FixtureSpace = {
+  id: string
+  name: string
+  projectDir: string | null
+  pinned: boolean
+  revision: number
+  createdAt: number
+  updatedAt: number
+}
+
+type FixtureNote = {
+  id: string
+  spaceID: string | null
+  title: string
+  body: string
+  status: "idea" | "todo" | "in-progress" | "blocked" | "finished" | "cancelled" | "archived"
+  pinned: boolean
+  attachments: { id: string; name: string; mime: string; size: number; createdAt: number }[]
+  revision: number
+  createdAt: number
+  updatedAt: number
+}
+
+const fixtureSpaces: FixtureSpace[] = [
+  { id: "space-ideas", name: "Ideas", projectDir: null, pinned: true, revision: 1, createdAt: 1, updatedAt: 1 },
+  { id: "space-work", name: "Work", projectDir: "/synthetic/notes", pinned: false, revision: 1, createdAt: 1, updatedAt: 1 },
+]
+
+const fixtureNotes: FixtureNote[] = [
   {
     id: "note-plan",
     spaceID: "space-work",
@@ -53,7 +81,7 @@ Ship the notes workspace with a container-aware layout, verified previews, and s
 - Deploy
 
 ${"Detail line. ".repeat(80)}`,
-    status: "in-progress" as const,
+    status: "in-progress",
     pinned: true,
     attachments: [],
     revision: 2,
@@ -65,7 +93,7 @@ ${"Detail line. ".repeat(80)}`,
     spaceID: "space-work",
     title: "Bugs",
     body: "Clicking the chevron twice should not be needed.\n\n**Fixed** in the row controls.",
-    status: "todo" as const,
+    status: "todo",
     pinned: false,
     attachments: [],
     revision: 1,
@@ -77,7 +105,19 @@ ${"Detail line. ".repeat(80)}`,
     spaceID: null,
     title: "Shipped",
     body: "# Shipped\n\nEverything verified end to end.",
-    status: "finished" as const,
+    status: "finished",
+    pinned: false,
+    attachments: [],
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    id: "note-idea",
+    spaceID: "space-ideas",
+    title: "Idea sketch",
+    body: "Field notes for the next iteration.",
+    status: "idea",
     pinned: false,
     attachments: [],
     revision: 1,
@@ -86,9 +126,153 @@ ${"Detail line. ".repeat(80)}`,
   },
 ]
 
-const syntheticSpaces = [
-  { id: "space-work", name: "Work", kind: "planning", project: null, pinned: false, revision: 1, createdAt: 1, updatedAt: 1 },
-]
+type NotesRequest = { method: string; input: Record<string, unknown> }
+const notesRequests: NotesRequest[] = []
+
+function spacesFor(directory: string | null): FixtureSpace[] {
+  if (!directory) return [...fixtureSpaces]
+  return fixtureSpaces.filter(
+    (space) => space.projectDir === null || space.projectDir === directory
+  )
+}
+
+function notesFor(directory: string | null): FixtureNote[] {
+  const visible = new Set(spacesFor(directory).map((space) => space.id))
+  return fixtureNotes.filter(
+    (note) => note.spaceID === null || visible.has(note.spaceID)
+  )
+}
+
+function notesMethodResponse(method: string, input: Record<string, unknown>) {
+  const directory = typeof input.directory === "string" ? input.directory : null
+  const spaces = spacesFor(directory)
+  const visibleNotes = notesFor(directory)
+  if (method === "list") {
+    const pinned = input.pinned === true
+    const status = typeof input.status === "string" ? input.status : null
+    const statuses = Array.isArray(input.statuses)
+      ? new Set(input.statuses.filter((value): value is string => typeof value === "string"))
+      : null
+    const spaceID = typeof input.spaceID === "string" ? input.spaceID : null
+    const unassigned = input.spaceID === null
+    const filtered = visibleNotes.filter(
+      (note) =>
+        (!pinned || note.pinned) &&
+        (!status || note.status === status) &&
+        (!statuses || statuses.has(note.status)) &&
+        (!spaceID || note.spaceID === spaceID) &&
+        (!unassigned || note.spaceID === null)
+    )
+    const offset = typeof input.offset === "number" ? input.offset : 0
+    const limit = typeof input.limit === "number" ? input.limit : 500
+    const page = filtered.slice(offset, offset + limit)
+    return json({
+      notes:
+        input.includeBodies === false
+          ? page.map((note) => ({ ...note, body: "" }))
+          : page,
+      total: filtered.length,
+    })
+  }
+  if (method === "spaces") {
+    // Global spaces are included unless a caller opts out.
+    const scoped =
+      input.includeGlobal === false
+        ? spaces.filter((space) => space.projectDir !== null)
+        : spaces
+    return json({ spaces: scoped, total: scoped.length })
+  }
+  if (method === "get") {
+    const note = fixtureNotes.find((item) => item.id === input.noteID)
+    return note ? json({ note }) : json({ error: { code: "note_not_found", message: "Note not found" } }, 404)
+  }
+  if (method === "create") {
+    const now = Date.now()
+    const note: FixtureNote = {
+      id: `note-${fixtureNotes.length + 1}`,
+      spaceID: typeof input.spaceID === "string" ? input.spaceID : null,
+      title: typeof input.title === "string" ? input.title : "Untitled",
+      body: typeof input.body === "string" ? input.body : "",
+      status: (typeof input.status === "string" ? input.status : "todo") as FixtureNote["status"],
+      pinned: input.pinned === true,
+      attachments: [],
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+    }
+    fixtureNotes.push(note)
+    return json({ note })
+  }
+  if (method === "update") {
+    const existing = fixtureNotes.find((note) => note.id === input.noteID)
+    if (!existing)
+      return json({ error: { code: "note_not_found", message: "Note not found" } }, 404)
+    const next: FixtureNote = {
+      ...existing,
+      ...(typeof input.title === "string" ? { title: input.title } : {}),
+      ...(typeof input.body === "string" ? { body: input.body } : {}),
+      ...(typeof input.status === "string" ? { status: input.status as FixtureNote["status"] } : {}),
+      ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}),
+      ...(input.spaceID === null || typeof input.spaceID === "string"
+        ? { spaceID: input.spaceID as string | null }
+        : {}),
+      revision: existing.revision + 1,
+      updatedAt: Date.now(),
+    }
+    fixtureNotes.splice(fixtureNotes.indexOf(existing), 1, next)
+    return json({ note: next })
+  }
+  if (method === "delete") {
+    const index = fixtureNotes.findIndex((note) => note.id === input.noteID)
+    if (index >= 0) fixtureNotes.splice(index, 1)
+    return json({ deleted: index >= 0 })
+  }
+  if (method === "createSpace") {
+    const now = Date.now()
+    const space: FixtureSpace = {
+      id: `space-${fixtureSpaces.length + 1}`,
+      name: typeof input.name === "string" ? input.name : "Space",
+      projectDir: typeof input.projectDir === "string" ? input.projectDir : null,
+      pinned: input.pinned === true,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+    }
+    fixtureSpaces.push(space)
+    return json(space)
+  }
+  if (method === "updateSpace") {
+    const existing = fixtureSpaces.find((space) => space.id === input.spaceID)
+    if (!existing)
+      return json({ error: { code: "space_not_found", message: "Space not found" } }, 404)
+    const next: FixtureSpace = {
+      ...existing,
+      ...(typeof input.name === "string" ? { name: input.name } : {}),
+      ...(input.projectDir === null || typeof input.projectDir === "string"
+        ? { projectDir: input.projectDir as string | null }
+        : {}),
+      ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}),
+      revision: existing.revision + 1,
+      updatedAt: Date.now(),
+    }
+    fixtureSpaces.splice(fixtureSpaces.indexOf(existing), 1, next)
+    return json(next)
+  }
+  if (method === "deleteSpace") {
+    const existing = fixtureSpaces.find((space) => space.id === input.spaceID)
+    if (!existing)
+      return json({ error: { code: "space_not_found", message: "Space not found" } }, 404)
+    const count = fixtureNotes.filter((note) => note.spaceID === existing.id).length
+    if (count > 0)
+      return json(
+        { error: { code: "space_not_empty", message: `Space has ${count} notes` } },
+        409
+      )
+    fixtureSpaces.splice(fixtureSpaces.indexOf(existing), 1)
+    return json({ deleted: true, deletedNotes: 0 })
+  }
+  return json({ error: { code: "invalid", message: `Unsupported notes method ${method}` } }, 400)
+}
 
 const syntheticDiff = {
   data: [
@@ -132,60 +316,29 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     const pathname = decodeURIComponent(url.pathname)
-    if (pathname === "/api/plugin") {
-      if (url.search.includes("synthetic%2Fnotes") || url.search.includes("synthetic/notes"))
-        return json({
-          location: { directory: "/synthetic/notes" },
-          data: [
-            {
-              id: "opencode-notes",
-              source: { type: "local", path: "/synthetic/plugin" },
-              features: { server: true, rpc: true },
-              state: { status: "active" },
-            },
-          ],
-        })
-      return json({ location: { directory: "/synthetic/alpha" }, data: [] })
-    }
-    if (pathname === "/api/rpc/opencode-notes/list") {
-      const body = await request.json().catch(() => ({}))
-      const input = (body as { input?: Record<string, unknown> }).input ?? {}
-      const pinned = input.pinned === true
-      const status = typeof input.status === "string" ? input.status : null
-      const filtered = syntheticNotes.filter(
-        (note) => (!pinned || note.pinned) && (!status || note.status === status)
-      )
-      const offset = typeof input.offset === "number" ? input.offset : 0
-      const limit = typeof input.limit === "number" ? input.limit : 500
-      const page = filtered.slice(offset, offset + limit)
-      return json({
-        output: {
-          notes:
-            input.includeBodies === false
-              ? page.map((note) => ({ ...note, body: "" }))
-              : page,
-          total: filtered.length,
+    if (pathname === "/api/ui/notes/events") {
+      // A short-lived SSE reply: EventSource retries in a minute, so the
+      // fixture stays quiet while checks run.
+      return new Response("retry: 60000\n\n", {
+        headers: {
+          "cache-control": "no-store",
+          "content-type": "text/event-stream",
         },
       })
     }
-    if (pathname === "/api/rpc/opencode-notes/spaces") {
-      return json({ output: { spaces: syntheticSpaces, total: syntheticSpaces.length } })
+    if (pathname.startsWith("/api/ui/notes/")) {
+      const method = pathname.slice("/api/ui/notes/".length)
+      if (request.method !== "POST")
+        return json({ error: { code: "invalid", message: "Use POST." } }, 405)
+      const body: unknown = await request.json().catch(() => ({}))
+      const input =
+        typeof body === "object" && body !== null
+          ? (body as Record<string, unknown>)
+          : {}
+      notesRequests.push({ method, input })
+      return notesMethodResponse(method, input)
     }
-    if (pathname === "/api/rpc/opencode-notes/update") {
-      const body = await request.json().catch(() => ({}))
-      const input = (body as { input?: Record<string, unknown> }).input ?? {}
-      const existing = syntheticNotes.find((note) => note.id === input.noteID)
-      return json({
-        output: {
-          note: {
-            ...(existing ?? syntheticNotes[0]),
-            ...input,
-            revision: (existing?.revision ?? 1) + 1,
-            updatedAt: (existing?.updatedAt ?? 1) + 1,
-          },
-        },
-      })
-    }
+
     if (pathname === "/api/worktree") {
       requests.push({
         method: request.method,
@@ -2020,7 +2173,25 @@ if (browser) {
           }),
         }
       })
-      check("all four status filters render", chips?.buttons.length === 4, JSON.stringify(chips))
+      check("all seven status filters plus All render", chips?.buttons.length === 8, JSON.stringify(chips))
+      const groups = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>('[role="group"][aria-label$=" statuses"]')].map(
+          (group) => ({
+            label: group.getAttribute("aria-label"),
+            chips: group.querySelectorAll("button").length,
+            header: group.querySelector("span")?.textContent ?? "",
+          })
+        )
+      )
+      check(
+        "status filters are grouped under Backlog, Active and Done",
+        groups.length === 3 &&
+          groups.map((group) => group.label).join(",") ===
+            "Backlog statuses,Active statuses,Done statuses" &&
+          groups.map((group) => group.chips).join(",") === "2,2,3" &&
+          groups.map((group) => group.header).join(",") === "Backlog,Active,Done",
+        JSON.stringify(groups)
+      )
       check(
         "no status filter is clipped by the column",
         Boolean(
@@ -2094,6 +2265,146 @@ if (browser) {
         "list remains visible beside the detail",
         await region.getByRole("button", { name: "Open Bugs" }).isVisible()
       )
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("notes spaces render once with Global and project badges", async ({ check }) => {
+    const opened = await openPage({ width: 1440, height: 900 }, "notes-wide")
+    const page = opened.page
+    try {
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      const rows = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>("[data-notes-spaces] > li")].map((row) => ({
+          id: row.dataset.spaceId,
+          name: row.querySelector("p")?.textContent?.trim() ?? "",
+          scope: row.querySelector<HTMLElement>("[data-space-scope]")?.dataset.spaceScope ?? "",
+          badge: row.querySelector("[data-space-scope]")?.textContent?.trim() ?? "",
+        }))
+      )
+      check("each space is listed exactly once", rows.length === 2 && new Set(rows.map((row) => row.id)).size === 2, JSON.stringify(rows))
+      const ideas = rows.find((row) => row.name === "Ideas")
+      const work = rows.find((row) => row.name === "Work")
+      check("the Global space carries a Global badge", ideas?.scope === "global" && ideas.badge === "Global", JSON.stringify(ideas))
+      check(
+        "the project space carries its directory basename",
+        work?.scope === "project" && work.badge === "notes",
+        JSON.stringify(work)
+      )
+
+      const trigger = page.getByRole("combobox", { name: "Filter by space" })
+      await trigger.click()
+      const options = page.getByRole("option")
+      await options.first().waitFor({ state: "visible" })
+      const texts = await options.allTextContents()
+      check(
+        "the space picker lists each space once",
+        texts.filter((text) => text.includes("Ideas")).length === 1 &&
+          texts.filter((text) => text.includes("Work")).length === 1,
+        JSON.stringify(texts)
+      )
+      check(
+        "the picker shows the space scope",
+        texts.some((text) => text.includes("Ideas") && text.includes("Global")) &&
+          texts.some((text) => text.includes("Work") && text.includes("notes")),
+        JSON.stringify(texts)
+      )
+      await page.keyboard.press("Escape")
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("notes status menu groups all seven statuses", async ({ check }) => {
+    const opened = await openPage({ width: 1440, height: 900 }, "notes-wide")
+    const page = opened.page
+    try {
+      await page.getByRole("button", { name: "Open Bugs" }).click()
+      await page.getByRole("button", { name: "Edit", exact: true }).click()
+      await page.getByRole("button", { name: "Status: To do" }).click()
+      const items = page.getByRole("menuitemradio")
+      await items.first().waitFor({ state: "visible" })
+      check("the status menu lists all seven statuses", (await items.count()) === 7)
+      const menu = await page.locator('[data-slot="dropdown-menu-content"]').innerText()
+      for (const group of ["Backlog", "Active", "Done"])
+        check(`the status menu labels the ${group} group`, menu.includes(group), menu)
+      check(
+        "the menu names every status",
+        ["Idea", "To do", "In progress", "Blocked", "Finished", "Cancelled", "Archived"].every(
+          (label) => menu.includes(label)
+        ),
+        menu
+      )
+      await page.keyboard.press("Escape")
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("switching notes projects never shows a confirm dialog", async ({ check }) => {
+    const opened = await openPage({ width: 1024, height: 800 }, "notes")
+    const page = opened.page
+    const dialogs: string[] = []
+    page.on("dialog", (dialog) => {
+      dialogs.push(dialog.message())
+      void dialog.dismiss()
+    })
+    try {
+      await page.getByRole("button", { name: /^Notes\s*\d/ }).click()
+      await page.getByRole("button", { name: "All notes" }).click()
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+
+      await page.locator("[data-qa-switch-project]").click()
+      await page.getByRole("button", { name: "All notes" }).click()
+      await page.getByRole("button", { name: "Open Idea sketch" }).waitFor({ state: "visible" })
+      check("the workspace follows the newly selected project", true)
+      check("switching projects fires no window.confirm", dialogs.length === 0, dialogs.join(" | "))
+
+      await page.locator("[data-qa-switch-project]").click()
+      await page.getByRole("button", { name: "All notes" }).click()
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      check("returning to a project restores it without a prompt", dialogs.length === 0, dialogs.join(" | "))
+      check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+    } finally {
+      await opened.context.close()
+    }
+  })
+
+  await run("new spaces offer exactly Global and This project", async ({ check }) => {
+    const opened = await openPage({ width: 1440, height: 900 }, "notes-wide")
+    const page = opened.page
+    try {
+      await page.getByRole("button", { name: "Open Release plan" }).waitFor({ state: "visible" })
+      await page.getByRole("button", { name: "New space" }).click()
+      await page.getByRole("textbox", { name: "Name", exact: true }).fill("Scoped")
+      await page.getByRole("combobox", { name: "Scope" }).click()
+      const options = page.getByRole("option")
+      await options.first().waitFor({ state: "visible" })
+      const labels = await options.allTextContents()
+      check(
+        "only Global and This project are offered",
+        labels.filter((label) => label.includes("Global")).length === 1 &&
+          labels.filter((label) => label.includes("This project")).length === 1 &&
+          !labels.some((label) => /planning|global space|kind/i.test(label)),
+        JSON.stringify(labels)
+      )
+      await page.getByRole("option", { name: /This project/ }).click()
+      await page.getByRole("button", { name: "Save space" }).click()
+      const created = await poll(
+        async () => notesRequests.filter((entry) => entry.method === "createSpace").at(-1),
+        "the space was not saved"
+      )
+      check(
+        "saving writes the workspace directory as projectDir",
+        created?.input.name === "Scoped" && created?.input.projectDir === "/synthetic/notes",
+        JSON.stringify(created)
+      )
+      await page.locator("[data-notes-spaces]").getByText("Scoped").waitFor({ state: "visible" })
+      check("the new space appears once", (await page.locator("[data-notes-spaces]").getByText("Scoped").count()) === 1)
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
     } finally {
       await opened.context.close()
