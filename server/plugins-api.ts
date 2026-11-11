@@ -136,7 +136,7 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
   async function enable(): Promise<Response> {
     const config = {
       type: "local" as const,
-      command: ["bun", mainPath],
+      command: [process.execPath, mainPath],
       disabled: false,
       codemode: false,
     }

@@ -119,7 +119,7 @@ describe("Plugins HTTP API", () => {
     expect(add.body).toEqual({
       config: {
         type: "local",
-        command: ["bun", resolve(repoRoot, "plugins/notes/src/mcp/main.ts")],
+        command: [process.execPath, resolve(repoRoot, "plugins/notes/src/mcp/main.ts")],
         disabled: false,
         codemode: false,
       },

@@ -288,7 +288,7 @@ Plugins section does this through the engine HTTP API):
 ```jsonc
 {
   "type": "local",
-  "command": ["bun", "/path/to/opencode-ui/plugins/notes/src/mcp/main.ts"],
+  "command": ["/absolute/path/to/bun", "/path/to/opencode-ui/plugins/notes/src/mcp/main.ts"],
   "disabled": false,
   "codemode": false
 }

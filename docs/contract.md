@@ -127,7 +127,8 @@ credential and never writes engine configuration files.
   `engineAvailable: false` and `registered: false`.
 - `POST /api/ui/plugins/notes/enable` → registers the local MCP server with
   `PUT /api/experimental/mcp/notes` and body
-  `{ "config": { "type": "local", "command": ["bun", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false } }`.
+  `{ "config": { "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false } }`
+  (the bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH).
   If it is registered but not connected, the server then calls
   `POST /api/experimental/mcp/notes/connect` and re-reads status. Response
   `{ registered: true, connected, restartRequired: !connected }`. Engine crash → 502
