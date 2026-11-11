@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 const navigation = await readFile("src/components/session-nav.tsx", "utf8")
 const dialogs = await readFile("src/components/integration-command-dialogs.tsx", "utf8")
 const browser = await readFile("src/components/directory-browser.tsx", "utf8")
+const shell = await readFile("src/components/session-command-dialogs.tsx", "utf8")
 
 test("selecting a session closes Notes and the guarded Settings workspace in both surfaces", () => {
   // Desktop sidebar: inline handler on the shared session list.
@@ -49,6 +50,14 @@ test("the worktree dialog delegates to the shared focus-gated directory browser"
   expect(browser).toContain("onBlur={(event) => {")
   expect(browser).toContain("event.relatedTarget as Node | null")
   expect(browser).toContain("max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border")
+})
+
+test("the worktree dialog opens without focusing the directory input and keeps options above the keyboard", () => {
+  expect(shell).toContain("initialFocusContent = false")
+  expect(shell).toContain("const initialFocus = initialFocusContent ? contentRef : undefined")
+  expect(dialogs).toContain("initialFocusContent")
+  expect(browser).toContain("window.visualViewport")
+  expect(browser).toContain("optionsMaxHeight ? { maxHeight: optionsMaxHeight } : undefined")
 })
 
 test("picking an option keeps the list mounted", () => {

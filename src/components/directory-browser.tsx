@@ -122,6 +122,39 @@ export function DirectoryBrowser({
   const hintID = `${id}-hint`
   const fieldRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [optionsMaxHeight, setOptionsMaxHeight] = useState<number | null>(null)
+
+  // Keep the options list between the input and an on-screen keyboard: cap its
+  // height to the visible viewport below the input and keep the input in view.
+  useEffect(() => {
+    if (!open) return
+    if (typeof window === "undefined") return
+    const update = () => {
+      const input = inputRef.current
+      if (!input || typeof input.getBoundingClientRect !== "function") return
+      const viewport = window.visualViewport
+      const visibleBottom = viewport ? viewport.height + viewport.offsetTop : window.innerHeight
+      const available = visibleBottom - input.getBoundingClientRect().bottom - 12
+      setOptionsMaxHeight(Math.max(96, Math.min(208, Math.floor(available))))
+      if (typeof input.scrollIntoView === "function") input.scrollIntoView({ block: "nearest" })
+    }
+    const frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(update) : 0
+    const viewport = window.visualViewport
+    const canListen = typeof window.addEventListener === "function"
+    if (canListen) {
+      viewport?.addEventListener("resize", update)
+      viewport?.addEventListener("scroll", update)
+      window.addEventListener("resize", update)
+    }
+    return () => {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(frame)
+      if (!canListen) return
+      viewport?.removeEventListener("resize", update)
+      viewport?.removeEventListener("scroll", update)
+      window.removeEventListener("resize", update)
+    }
+  }, [open])
   const [internalBrowse, setInternalBrowse] = useState(() =>
     canonicalDirectory(initialBrowse ?? browseDirectory(value)) || "/"
   )
@@ -209,6 +242,7 @@ export function DirectoryBrowser({
       </label>
       <Input
         id={id}
+        ref={inputRef}
         className="h-11"
         dir="ltr"
         type="text"
@@ -244,6 +278,7 @@ export function DirectoryBrowser({
           id={optionsID}
           data-directory-options
           className="max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border"
+          style={optionsMaxHeight ? { maxHeight: optionsMaxHeight } : undefined}
         >
           <ul aria-label={optionsLabel} className="min-w-0 divide-y divide-border">
             {showGlobalRow && (

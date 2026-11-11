@@ -534,6 +534,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
         description="Choose a project directory, then browse, manage, and start a session in its worktrees."
         pending={busy}
         onClose={onClose}
+        initialFocusContent
         footer={
           <>
             <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={busy}>

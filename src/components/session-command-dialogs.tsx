@@ -73,6 +73,7 @@ export function CommandDialogShell({
   onClose,
   footer,
   children,
+  initialFocusContent = false,
 }: {
   title: string
   description: string
@@ -80,15 +81,20 @@ export function CommandDialogShell({
   onClose: () => void
   footer: ReactNode
   children: ReactNode
+  /** Focus the scrollable content instead of the first control (e.g. a text
+   *  input that would open its options list and the mobile keyboard). */
+  initialFocusContent?: boolean
 }) {
   const isDesktop = useIsDesktop()
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const initialFocus = initialFocusContent ? contentRef : undefined
   const content = (
     <>
       <DialogHeader className="shrink-0 border-b border-border px-4 py-3 pe-12">
         {isDesktop ? <DialogTitle className="text-[17px] font-semibold tracking-tight">{title}</DialogTitle> : <SheetTitle className="text-[17px] font-semibold tracking-tight">{title}</SheetTitle>}
         {isDesktop ? <DialogDescription className="text-[12px]">{description}</DialogDescription> : <SheetDescription className="text-[12px]">{description}</SheetDescription>}
       </DialogHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
+      <div ref={contentRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none">{children}</div>
       <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {footer}
       </DialogFooter>
@@ -106,13 +112,14 @@ export function CommandDialogShell({
         showCloseButton={!pending}
         className="flex w-[min(44rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0 sm:max-w-none"
         style={fixedDesktopSettingsStyle()}
+        {...(initialFocus ? { initialFocus } : {})}
       >
         {content}
       </DialogContent>
     </Dialog>
   ) : (
     <Sheet open onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" showCloseButton={!pending} className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl p-0" style={fixedMobileDrawerStyle()}>
+      <SheetContent side="bottom" showCloseButton={!pending} className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl p-0" style={fixedMobileDrawerStyle()} {...(initialFocus ? { initialFocus } : {})}>
         {content}
       </SheetContent>
     </Sheet>
