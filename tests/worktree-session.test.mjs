@@ -7,6 +7,9 @@ const dialogs = await readFile("src/components/integration-command-dialogs.tsx",
 const dialog = await readFile("src/components/new-session-dialog.tsx", "utf8")
 
 test("the worktree browser starts a session in the resolved project or worktree path", () => {
+  expect(dialogs).toContain('from "@/components/directory-browser"')
+  expect(dialogs).toContain("<DirectoryBrowser")
+  expect(dialogs).toContain('label="Project or worktree directory"')
   expect(dialogs).toContain("const target = useMemo(")
   expect(dialogs).toContain('const result = await createWorktreeSession(\n        target.directory,\n        target.projectID,')
   expect(dialogs).toContain("onClick={() => void startSession()}")
@@ -38,9 +41,16 @@ test("worktree rows show a derived name, the full path, and an icon-only 44px re
     /size="icon-lg"\s*className="size-11 shrink-0"\s*aria-label=\{`Remove \$\{row\.directory\}`\}/
   )
   expect(dialogs).toContain("data-worktree-worktree={row.directory}")
-  expect(dialogs).toContain("data-worktree-project={project.directory}")
-  expect(dialogs).toContain("data-worktree-base={browsedProject.directory}")
-  expect(dialogs).toContain('data-worktree-back=""')
+  expect(dialogs).toContain("openCode.worktree.list({ projectID: activeSourceProjectID })")
+  expect(dialogs).toContain("No worktrees for this directory.")
+  expect(dialogs).toContain("No saved worktrees.")
+  expect(dialogs).toContain("Create worktree")
+  // The old two-level projects→worktrees navigation is gone.
+  expect(dialogs).not.toContain("data-worktree-project")
+  expect(dialogs).not.toContain("data-worktree-base")
+  expect(dialogs).not.toContain('data-worktree-back=""')
+  expect(dialogs).not.toContain("Back to projects")
+  expect(dialogs).not.toContain("browsedProjectID")
 })
 
 function fixture(

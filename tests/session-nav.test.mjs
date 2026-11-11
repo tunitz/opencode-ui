@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 
 const navigation = await readFile("src/components/session-nav.tsx", "utf8")
 const dialogs = await readFile("src/components/integration-command-dialogs.tsx", "utf8")
+const browser = await readFile("src/components/directory-browser.tsx", "utf8")
 
 test("selecting a session closes Notes and the guarded Settings workspace in both surfaces", () => {
   // Desktop sidebar: inline handler on the shared session list.
@@ -38,39 +39,34 @@ test("the pinned sessions group starts expanded and stays user-collapsible", () 
   expect(pinned).not.toContain("onValueChange")
 })
 
-test("the worktree browser hides its option list until the directory field is used", () => {
-  expect(dialogs).toContain("const [optionsOpen, setOptionsOpen] = useState(false)")
-  expect(dialogs).toContain("onFocus={openOptions}")
-  expect(dialogs).toContain("onClick={openOptions}")
-  expect(dialogs).toContain("onBlur={(event) => {")
-  expect(dialogs).toContain("event.currentTarget.contains(event.relatedTarget as Node | null)")
-  expect(dialogs).toContain("setOptionsOpen(false)")
-  expect(dialogs).toContain("{optionsOpen ? (")
-  expect(dialogs).toContain("max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border")
-  expect(dialogs).toContain("Project or worktree directory")
+test("the worktree dialog delegates to the shared focus-gated directory browser", () => {
+  expect(dialogs).toContain("<DirectoryBrowser")
+  expect(dialogs).toContain('id="worktree-browser-directory"')
+  expect(dialogs).toContain('label="Project or worktree directory"')
   expect(dialogs).toContain('placeholder="Search or type an absolute path"')
+  expect(browser).toContain("const [open, setOpen] = useState(false)")
+  expect(browser).toContain("onFocus={() => setOpen(true)}")
+  expect(browser).toContain("onBlur={(event) => {")
+  expect(browser).toContain("event.relatedTarget as Node | null")
+  expect(browser).toContain("max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border")
 })
 
 test("picking an option keeps the list mounted", () => {
-  expect(dialogs.match(/onMouseDown=\{\(event\) => event\.preventDefault\(\)\}/g)).toHaveLength(3)
-  expect(dialogs).toContain("holdOptionsOpen.current = true")
+  expect(browser.match(/onMouseDown=\{\(event\) => event\.preventDefault\(\)\}/g)?.length ?? 0).toBeGreaterThanOrEqual(3)
 })
 
-test("the worktree browser lists projects then the browsed project's worktrees", () => {
-  expect(dialogs).toContain("data-worktree-project={project.directory}")
-  expect(dialogs).toContain('data-worktree-back=""')
-  expect(dialogs).toContain("<ArrowUpIcon")
-  expect(dialogs).toContain("Back to projects")
-  expect(dialogs).toContain("data-worktree-base={browsedProject.directory}")
+test("the dialog is plain directory navigation with contextual worktrees", () => {
+  expect(dialogs).toContain("function resolveNearestProject(")
+  expect(dialogs).toContain("openCode.worktree.list({ projectID: activeSourceProjectID })")
   expect(dialogs).toContain("data-worktree-worktree={row.directory}")
-  expect(dialogs).toMatch(
-    /setBrowser\(\{\s*query: project\.directory,\s*level: "worktrees",\s*browsedProjectID: project\.id,\s*\}\)/
-  )
+  expect(dialogs).toContain("No worktrees for this directory.")
+  expect(dialogs).not.toContain("Back to projects")
+  expect(dialogs).not.toContain('level: "projects"')
 })
 
 test("the create, refresh, remove, and session actions stay reachable for the browsed project", () => {
   expect(dialogs).toContain("openCode.worktree.create({")
-  expect(dialogs).toContain("openCode.worktree.refresh({ projectID: browser.browsedProjectID })")
+  expect(dialogs).toContain("openCode.worktree.refresh({ projectID: activeProject.id })")
   expect(dialogs).toContain("openCode.worktree.remove({")
   expect(dialogs).toContain("<AlertDialogTitle>Remove worktree?</AlertDialogTitle>")
   expect(dialogs).toContain("const result = await createWorktreeSession(")

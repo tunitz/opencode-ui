@@ -40,9 +40,12 @@ import {
   subscribeNotesEvents,
 } from "@/lib/notes-api"
 import { uniqueByID } from "@/lib/notes-types"
+import { useNotesPluginState } from "@/lib/notes-plugin-state"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 export type NotesContextValue = {
+  /** Notes surfaces are allowed: true while the plugin state is unknown. */
+  notesEnabled: boolean
   available: boolean
   open: boolean
   hasWorkspace: boolean
@@ -105,7 +108,11 @@ function NotesAuthBridge() {
   return null
 }
 
-/** Notes are served by the UI server: initialize eagerly, no plugin gate. */
+/**
+ * Notes are served by the UI server, but the Notes plugin registry decides
+ * whether the surfaces are offered. Only a definitive `registered: false`
+ * hides them; an unreadable registry stays optimistic.
+ */
 export function NotesProvider({
   nav,
   children,
@@ -113,6 +120,8 @@ export function NotesProvider({
   nav: OpenCodeController
   children: ReactNode
 }) {
+  const pluginState = useNotesPluginState()
+  const notesEnabled = pluginState.registered !== false
   const directory = nav.activeSession?.location.directory ?? nav.directory
   const [open, setOpen] = useState(false)
   const [editingDirectory, setEditingDirectory] = useState<string | null>(null)
@@ -146,7 +155,7 @@ export function NotesProvider({
   )
 
   useEffect(() => {
-    if (!directory) return
+    if (!directory || !notesEnabled) return
     let active = true
     let token = 0
     const load = async () => {
@@ -196,12 +205,12 @@ export function NotesProvider({
       if (timer) clearTimeout(timer)
       stop()
     }
-  }, [directory, pinnedRequest])
+  }, [directory, pinnedRequest, notesEnabled])
 
-  const available = Boolean(directory)
+  const available = notesEnabled && Boolean(directory)
   const openNotes = useCallback(
     (id: string | null = null) => {
-      if (!directory) return false
+      if (!directory || !notesEnabled) return false
       // No prompt: drafts stay with their project's adapter and come back.
       setEditingDirectory(directory)
       setSelectedNoteID(id)
@@ -209,14 +218,26 @@ export function NotesProvider({
       setOpen(true)
       return true
     },
-    [directory]
+    [directory, notesEnabled]
   )
   const closeNotes = useCallback(() => setOpen(false), [])
 
+  // Disabling the plugin closes the workspace on the same transition, so no
+  // Notes pane or header title can outlive the registry state.
+  useEffect(() => {
+    if (notesEnabled) return
+    /* eslint-disable react-hooks/set-state-in-effect -- reconcile external workspace state with the plugin registry */
+    closeNotes()
+    setEditingDirectory(null)
+    setSelectedNoteID(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [closeNotes, notesEnabled])
+
   const value: NotesContextValue = {
+    notesEnabled,
     available,
-    open,
-    hasWorkspace: editingDirectory !== null,
+    open: notesEnabled && open,
+    hasWorkspace: notesEnabled && editingDirectory !== null,
     workspaceKey: editingDirectory ?? "",
     selectedNoteID,
     selectionRequest,
@@ -286,6 +307,7 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }, [notes, unpinTarget, unpinning])
 
+  if (!notes.notesEnabled) return null
   if (!notes.available && !notes.hasWorkspace) return null
 
   function pinnedSpaceName(note: NotesNote): string {
@@ -472,6 +494,7 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
 
 export function NotesWorkspace() {
   const notes = useNotesWorkspace()
+  if (!notes.notesEnabled) return null
   return (
     <>
       {notes.directoryChanged && (

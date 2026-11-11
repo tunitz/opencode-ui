@@ -616,13 +616,13 @@ async function renderDirectoryField(props) {
 const directoryRows = (root) =>
   root.root
     .findAllByType("button")
-    .filter((node) => typeof node.props["data-space-directory"] === "string")
+    .filter((node) => typeof node.props["data-directory"] === "string")
 
 const directoryPaths = (root) =>
-  directoryRows(root).map((row) => row.props["data-space-directory"])
+  directoryRows(root).map((row) => row.props["data-directory"])
 
 const optionsOpen = (root) =>
-  root.root.findAllByProps({ "data-space-directory-options": true }).length > 0
+  root.root.findAllByProps({ "data-directory-options": true }).length > 0
 
 /** The drill-down fetches one level behind a small debounce. */
 const settle = () =>
@@ -680,7 +680,7 @@ test("the space editor hides options until used and browses one level at a time"
 
     await act(async () =>
       directoryRows(root)
-        .find((row) => row.props["data-space-directory"] === "/synthetic")
+        .find((row) => row.props["data-directory"] === "/synthetic")
         .props.onClick()
     )
     expect(changes.at(-1)).toBe("/synthetic")
@@ -689,7 +689,7 @@ test("the space editor hides options until used and browses one level at a time"
     expect(directoryPaths(root)).toEqual(["", "/synthetic/alpha", "/synthetic/notes"])
     const up = root.root
       .findAllByType("button")
-      .find((node) => node.props["data-space-directory-parent"] === "/")
+      .find((node) => node.props["data-directory-parent"] === "/")
     expect(up).toBeDefined()
 
     await act(async () => up.props.onClick())
@@ -699,7 +699,7 @@ test("the space editor hides options until used and browses one level at a time"
     expect(directoryPaths(root)).toEqual(["", "/home", "/synthetic"])
     expect(
       root.root.findAllByType("button").some(
-        (node) => node.props["data-space-directory-parent"] !== undefined
+        (node) => node.props["data-directory-parent"] !== undefined
       )
     ).toBe(false)
 
@@ -735,12 +735,12 @@ test("editing a space starts browsing its parent and keeps siblings visible", as
       "/synthetic/notes",
     ])
     const notes = directoryRows(root).find(
-      (row) => row.props["data-space-directory"] === "/synthetic/notes"
+      (row) => row.props["data-directory"] === "/synthetic/notes"
     )
     expect(notes.props["aria-pressed"]).toBe(true)
     expect(
       root.root.findAllByType("button").filter(
-        (node) => node.props["data-space-directory-custom"] !== undefined
+        (node) => node.props["data-directory-custom"] !== undefined
       )
     ).toHaveLength(0)
   } finally {
@@ -770,7 +770,7 @@ test("typing filters the current level and offers an exact custom path", async (
     expect(directoryPaths(root)).toEqual(["", "/synthetic/alpha"])
     expect(
       root.root.findAllByType("button").some(
-        (node) => node.props["data-space-directory-custom"] === "/synthetic/alp"
+        (node) => node.props["data-directory-custom"] === "/synthetic/alp"
       )
     ).toBe(true)
     await act(async () => root.unmount())
@@ -806,14 +806,14 @@ test("typing filters the current level and offers an exact custom path", async (
     await settle()
     expect(
       root.root.findAllByType("button").some(
-        (node) => node.props["data-space-directory-custom"] === "/synthetic/not-built-yet"
+        (node) => node.props["data-directory-custom"] === "/synthetic/not-built-yet"
       )
     ).toBe(true)
     const custom = root.root
       .findAllByType("button")
       .find(
         (node) =>
-          node.props["data-space-directory-custom"] === "/synthetic/not-built-yet"
+          node.props["data-directory-custom"] === "/synthetic/not-built-yet"
       )
     await act(async () => custom.props.onClick())
     expect(changes.at(-1)).toBe("/synthetic/not-built-yet")
@@ -843,7 +843,7 @@ test("a failed directory listing keeps Global and custom paths usable", async ()
     const custom = root.root
       .findAllByType("button")
       .find(
-        (node) => node.props["data-space-directory-custom"] === "/synthetic/new-space"
+        (node) => node.props["data-directory-custom"] === "/synthetic/new-space"
       )
     await act(async () => custom.props.onClick())
     expect(changes.at(-1)).toBe("/synthetic/new-space")

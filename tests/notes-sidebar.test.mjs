@@ -9,6 +9,9 @@ let updateCalls = []
 let updateGate = null
 let requested = []
 let confirmCalls = 0
+// null renders a registry without a Notes entry (unknown); "fail" is a 502.
+let pluginRegistered = null
+let pluginReads = 0
 const spaces = [
   { id: "space-1", name: "Work", projectDir: "/project", pinned: false, revision: 1 },
   { id: "space-global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
@@ -36,6 +39,25 @@ const mockFetch = async (request, init) => {
     if (updateFail)
       return json({ error: { code: "revision_conflict", message: "Someone changed this note." } }, 409)
     return json({ note: { ...pinnedNote, pinned: false, revision: 2 } })
+  }
+  if (url.endsWith("/api/ui/plugins")) {
+    pluginReads += 1
+    if (pluginRegistered === "fail")
+      return json({ error: { code: "engine_unavailable", message: "down" } }, 502)
+    return json({
+      engineAvailable: true,
+      plugins:
+        pluginRegistered === null
+          ? []
+          : [
+              {
+                id: "notes",
+                registered: pluginRegistered,
+                connected: pluginRegistered,
+                restartRequired: false,
+              },
+            ],
+    })
   }
   if (url.endsWith("/api/ui/notes/events"))
     return new Response("", { headers: { "content-type": "text/event-stream" } })
@@ -92,7 +114,10 @@ function setup() {
   updateGate = null
   requested = []
   confirmCalls = 0
+  pluginRegistered = null
+  pluginReads = 0
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  const events = new EventTarget()
   globalThis.window = {
     location: { origin: "http://example.test" },
     matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
@@ -100,6 +125,9 @@ function setup() {
       confirmCalls += 1
       return false
     },
+    addEventListener: (...args) => events.addEventListener(...args),
+    removeEventListener: (...args) => events.removeEventListener(...args),
+    dispatchEvent: (event) => events.dispatchEvent(event),
   }
   globalThis.fetch = mockFetch
   return () => {
@@ -120,7 +148,7 @@ const nav = (overrides = {}) => ({
   ...overrides,
 })
 
-test("notes appear for the directory without an engine plugin gate", async () => {
+test("notes appear while the plugin registry is unknown", async () => {
   const restore = setup()
   pinnedTotal = 1
   spacesFail = false
@@ -358,6 +386,114 @@ test("switching notes projects reuses each project's adapter and never prompts",
     // Same adapter instance: drafts keyed by it survive the round trip.
     expect(current.adapter).toBe(firstAdapter)
     expect(confirmCalls).toBe(0)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+const workspaceTree = (provider, sidebar, observer) =>
+  React.createElement(
+    provider,
+    { nav: nav() },
+    React.createElement(sidebar),
+    React.createElement(observer)
+  )
+
+test("an enabled plugin shows the Notes section and opens the workspace", async () => {
+  const restore = setup()
+  pluginRegistered = true
+  pinnedTotal = 1
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(workspaceTree(NotesProvider, NotesSidebar, Observer)) })
+    await flush()
+    expect(current.notesEnabled).toBe(true)
+    expect(JSON.stringify(root.toJSON())).toContain('"aria-label":"Notes"')
+    expect(current.available).toBe(true)
+    await act(async () => { expect(current.openNotes()).toBe(true) })
+    expect(current.open).toBe(true)
+    expect(current.hasWorkspace).toBe(true)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("a disabled plugin renders no Notes section and refuses to open it", async () => {
+  const restore = setup()
+  pluginRegistered = false
+  pinnedTotal = 1
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(workspaceTree(NotesProvider, NotesSidebar, Observer)) })
+    await flush()
+    expect(current.notesEnabled).toBe(false)
+    expect(current.available).toBe(false)
+    expect(current.hasWorkspace).toBe(false)
+    expect(root.toJSON()).toBeNull()
+    await act(async () => { expect(current.openNotes()).toBe(false) })
+    expect(current.open).toBe(false)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("disabling the plugin closes an open workspace on the change event", async () => {
+  const restore = setup()
+  pluginRegistered = true
+  pinnedTotal = 1
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    const { NOTES_PLUGINS_CHANGED } = await import("../src/lib/notes-plugin-state")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(workspaceTree(NotesProvider, NotesSidebar, Observer)) })
+    await flush()
+    await act(async () => { expect(current.openNotes()).toBe(true) })
+    expect(current.open).toBe(true)
+    expect(current.hasWorkspace).toBe(true)
+    expect(pluginReads).toBe(1)
+
+    pluginRegistered = false
+    await act(async () => { globalThis.window.dispatchEvent(new Event(NOTES_PLUGINS_CHANGED)) })
+    await flush()
+    expect(pluginReads).toBe(2)
+    expect(current.notesEnabled).toBe(false)
+    expect(current.open).toBe(false)
+    expect(current.hasWorkspace).toBe(false)
+    expect(root.toJSON()).toBeNull()
+    expect(current.openNotes()).toBe(false)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("an unreadable plugin registry keeps the Notes surfaces visible", async () => {
+  const restore = setup()
+  pluginRegistered = "fail"
+  pinnedTotal = 1
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(workspaceTree(NotesProvider, NotesSidebar, Observer)) })
+    await flush()
+    expect(pluginReads).toBe(1)
+    expect(current.notesEnabled).toBe(true)
+    expect(JSON.stringify(root.toJSON())).toContain('"aria-label":"Notes"')
+    await act(async () => { expect(current.openNotes()).toBe(true) })
+    expect(current.open).toBe(true)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()

@@ -1,4 +1,4 @@
-import { afterAll, expect, mock, test } from "bun:test"
+import { afterAll, beforeEach, expect, mock, test } from "bun:test"
 import { act, createElement } from "react"
 
 const previousWindow = globalThis.window
@@ -75,17 +75,50 @@ function nav() {
   }
 }
 
-const textOf = (node) =>
-  [].concat(node.children ?? []).map((child) => (typeof child === "string" ? child : "")).join("")
+const textOf = (node) => {
+  if (typeof node === "string") return node
+  if (!node || typeof node !== "object") return ""
+  return [].concat(node.children ?? []).map(textOf).join("")
+}
 
 const hostButton = (node) => node.type === "button"
 const optionsList = (root) =>
-  root.root.findAll((node) => node.type === "div" && node.props["data-worktree-options"] === "")
+  root.root.findAll(
+    (node) => node.type === "div" && node.props["data-directory-options"] === true
+  )
+const directoryRows = (root) =>
+  root.root.findAll(
+    (node) => hostButton(node) && typeof node.props["data-directory"] === "string"
+  )
+const worktreeRow = (root, directory) =>
+  root.root.findAll(
+    (node) => hostButton(node) && node.props["data-worktree-worktree"] === directory
+  )[0]
 
 async function settle(times = 3) {
   for (let index = 0; index < times; index += 1) {
     await act(async () => {})
   }
+}
+
+/** The browser fetches one level behind a small debounce. */
+async function settleList() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 260))
+  })
+}
+
+const treeFetch = (trees) => {
+  const requests = []
+  const fetch = async (url) => {
+    const parsed = new URL(String(url), "http://localhost")
+    const location = parsed.searchParams.get("location[directory]") ?? "/"
+    requests.push(location)
+    return new Response(JSON.stringify({ data: trees[location] ?? [] }), {
+      headers: { "content-type": "application/json" },
+    })
+  }
+  return { requests, fetch }
 }
 
 async function mountDialog(props = {}) {
@@ -109,6 +142,16 @@ async function mountDialog(props = {}) {
   return { root, onClose, onSessionCreated }
 }
 
+beforeEach(() => {
+  worktree.list.mockClear()
+  worktree.list.mockImplementation(async () => [])
+  worktree.create.mockClear()
+  worktree.remove.mockClear()
+  worktree.refresh.mockClear()
+  createWorktreeSession.mockClear()
+  createWorktreeSession.mockImplementation(async () => ({ created: true, error: null }))
+})
+
 afterAll(() => {
   mock.restore()
   if (previousActEnvironment === undefined) Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT")
@@ -117,7 +160,13 @@ afterAll(() => {
   else globalThis.window = previousWindow
 })
 
-test("project options stay hidden until the directory field is focused or clicked", async () => {
+test("the shared browser stays hidden until used and the contextual worktrees follow the project", async () => {
+  const previousFetch = globalThis.fetch
+  const { requests, fetch } = treeFetch({
+    "/repo/alpha": [{ path: "src", type: "directory" }],
+    "/repo/alpha/.wt/one": [{ path: "packages", type: "directory" }],
+  })
+  globalThis.fetch = fetch
   worktree.list.mockImplementation(async ({ projectID }) =>
     projectID === "p-alpha"
       ? [
@@ -131,70 +180,109 @@ test("project options stay hidden until the directory field is focused or clicke
     const input = root.root.findByType("input")
     expect(input.props.value).toBe("/repo/alpha")
     expect(input.props.placeholder).toBe("Search or type an absolute path")
+    expect(root.root.findAllByType("label")[0].children).toContain(
+      "Project or worktree directory"
+    )
     expect(optionsList(root)).toHaveLength(0)
+
+    // Worktrees are contextual, visible before the browser is opened, and the
+    // browsed project's own directory is never a worktree row.
+    expect(worktreeRow(root, "/repo/alpha/.wt/one")).toBeDefined()
+    expect(worktreeRow(root, "/repo/alpha")).toBeUndefined()
+    expect(worktree.list).toHaveBeenLastCalledWith({ projectID: "p-alpha" })
 
     await act(async () => input.props.onFocus())
     expect(optionsList(root)).toHaveLength(1)
+    await settleList()
+    expect(requests.at(-1)).toBe("/repo/alpha")
+    expect(directoryRows(root).map((row) => row.props["data-directory"])).toEqual([
+      "/repo/alpha/src",
+    ])
 
-    // The browsed project's base directory is its own row, never duplicated by
-    // the native worktree inventory.
-    expect(root.root.findAll((node) => hostButton(node) && node.props["data-worktree-base"] === "/repo/alpha")).toHaveLength(1)
-    expect(root.root.findAll((node) => hostButton(node) && node.props["data-worktree-worktree"] === "/repo/alpha")).toHaveLength(0)
-    const worktreeRow = root.root.findAll(
-      (node) => hostButton(node) && node.props["data-worktree-worktree"] === "/repo/alpha/.wt/one"
-    )[0]
-    expect(worktreeRow).toBeDefined()
-    // Picking an option keeps the list mounted: its mousedown never blurs the
-    // field.
-    let prevented = false
-    worktreeRow.props.onMouseDown({ preventDefault: () => { prevented = true } })
-    expect(prevented).toBe(true)
-    await act(async () => worktreeRow.props.onClick())
+    // Picking the worktree row fills the input and drills.
+    const row = worktreeRow(root, "/repo/alpha/.wt/one")
+    await act(async () => row.props.onClick())
     expect(root.root.findByType("input").props.value).toBe("/repo/alpha/.wt/one")
     expect(optionsList(root)).toHaveLength(1)
+    await settleList()
+    expect(requests.at(-1)).toBe("/repo/alpha/.wt/one")
+    expect(directoryRows(root).map((row) => row.props["data-directory"])).toEqual([
+      "/repo/alpha/.wt/one/packages",
+    ])
+    // The selected worktree still belongs to the project, so its siblings remain.
+    expect(worktreeRow(root, "/repo/alpha/.wt/one")).toBeDefined()
 
     // Blur outside the field closes the options.
     const wrapper = root.root.findAll(
       (node) => node.type === "div" && typeof node.props.onBlur === "function"
     )[0]
-    await act(async () =>
-      wrapper.props.onBlur({ currentTarget: { contains: () => false }, relatedTarget: null })
-    )
+    await act(async () => wrapper.props.onBlur({ relatedTarget: null }))
     expect(optionsList(root)).toHaveLength(0)
   } finally {
     await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
   }
 })
 
-test("back returns to a de-duplicated project level and selecting a project drills in", async () => {
-  worktree.list.mockImplementation(async () => [])
+test("the directory browser drills through folders and up rows with no project level", async () => {
+  const previousFetch = globalThis.fetch
+  const { requests, fetch } = treeFetch({
+    "/repo/alpha": [{ path: "src", type: "directory" }],
+    "/repo": [
+      { path: "alpha", type: "directory" },
+      { path: "beta", type: "directory" },
+    ],
+    "/repo/beta": [{ path: "packages", type: "directory" }],
+  })
+  globalThis.fetch = fetch
+  worktree.list.mockImplementation(async ({ projectID }) =>
+    projectID === "p-alpha"
+      ? [{ directory: "/repo/alpha/.wt/one", strategy: "worktree" }]
+      : [{ directory: "/repo/beta/.wt/two", strategy: "worktree" }]
+  )
   const { root } = await mountDialog()
   try {
     const input = root.root.findByType("input")
     await act(async () => input.props.onFocus())
-    await act(async () => root.root.findByProps({ "data-worktree-back": "" }).props.onClick())
+    await settleList()
+    const up = root.root
+      .findAllByType("button")
+      .find((node) => node.props["data-directory-parent"] === "/repo")
+    expect(up).toBeDefined()
+    expect(root.root.findAllByProps({ "data-worktree-back": "" })).toHaveLength(0)
+    expect(root.root.findAllByProps({ "data-worktree-project": "/repo/beta" })).toHaveLength(0)
 
-    expect(root.root.findByType("input").props.value).toBe("")
-    const projectRows = root.root.findAll(
-      (node) => hostButton(node) && typeof node.props["data-worktree-project"] === "string"
-    )
-    expect(projectRows.map((row) => row.props["data-worktree-project"])).toEqual([
+    await act(async () => up.props.onClick())
+    expect(root.root.findByType("input").props.value).toBe("/repo")
+    await settleList()
+    expect(requests.at(-1)).toBe("/repo")
+    expect(directoryRows(root).map((row) => row.props["data-directory"])).toEqual([
       "/repo/alpha",
       "/repo/beta",
     ])
-
-    const beta = projectRows.find((row) => row.props["data-worktree-project"] === "/repo/beta")
+    expect(
+      root.root.findAllByType("button").find(
+        (node) => node.props["data-directory-parent"] === "/"
+      )
+    ).toBeDefined()
+    const beta = root.root
+      .findAllByType("button")
+      .find((node) => node.props["data-directory"] === "/repo/beta")
     await act(async () => beta.props.onClick())
     expect(root.root.findByType("input").props.value).toBe("/repo/beta")
+    await settle()
     expect(worktree.list).toHaveBeenLastCalledWith({ projectID: "p-beta" })
-    expect(optionsList(root)).toHaveLength(1)
+    expect(worktreeRow(root, "/repo/beta/.wt/two")).toBeDefined()
+    expect(worktreeRow(root, "/repo/alpha/.wt/one")).toBeUndefined()
   } finally {
     await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
   }
 })
 
 test("a custom path resolves to the nearest known project and gates the session action", async () => {
-  worktree.list.mockImplementation(async () => [])
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
   const { root, onClose, onSessionCreated } = await mountDialog()
   try {
     let input = root.root.findByType("input")
@@ -210,11 +298,13 @@ test("a custom path resolves to the nearest known project and gates the session 
     )
     expect(primaryButton().props.disabled).toBe(true)
     expect(JSON.stringify(root.toJSON())).toContain("No project matches this path.")
+    expect(JSON.stringify(root.toJSON())).toContain("No worktrees for this directory.")
 
     await act(async () =>
       input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
     )
     expect(primaryButton().props.disabled).toBe(false)
+    expect(JSON.stringify(root.toJSON())).toContain("No worktrees for this directory.")
 
     await act(async () => primaryButton().props.onClick())
     await settle(4)
@@ -228,8 +318,44 @@ test("a custom path resolves to the nearest known project and gates the session 
     )
     expect(onSessionCreated).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
-    expect(worktree.list.mock.calls.length).toBeGreaterThan(0)
   } finally {
     await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+  }
+})
+
+test("removing a contextual worktree keeps the confirmation and force opt-in", async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  worktree.list.mockImplementation(async () => [
+    { directory: "/repo/alpha/.wt/one", strategy: "worktree" },
+  ])
+  const { root } = await mountDialog()
+  try {
+    const remove = root.root.findByProps({
+      "aria-label": "Remove /repo/alpha/.wt/one",
+    })
+    await act(async () => remove.props.onClick())
+    expect(JSON.stringify(root.toJSON())).toContain("Remove worktree?")
+
+    const checkbox = root.root
+      .findAllByType("input")
+      .find((node) => node.props.type === "checkbox")
+    await act(async () => checkbox.props.onCheckedChange(true))
+
+    const confirm = root.root
+      .findAllByType("button")
+      .find((button) => textOf(button).includes("Remove worktree"))
+    await act(async () => confirm.props.onClick())
+    await settle(4)
+    expect(worktree.remove).toHaveBeenCalledWith({
+      projectID: "p-alpha",
+      directory: "/repo/alpha/.wt/one",
+      force: true,
+    })
+    expect(worktree.list.mock.calls.length).toBeGreaterThan(1)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
   }
 })

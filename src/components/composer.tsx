@@ -95,6 +95,7 @@ import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
 import { Markdown } from "@/components/markdown"
 import { NoteReferencePicker } from "@/components/note-reference-picker"
+import { useOptionalNotesWorkspace } from "@/components/notes-sidebar"
 import type { NotesSnapshot } from "@/components/notes-panel"
 import { noteReferenceAttachment } from "@/lib/note-reference"
 import { fileQueryRange, fileReference } from "@/lib/file-references"
@@ -107,6 +108,18 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 import type { PromptSkillAttachment } from "@/lib/opencode"
 
 type SelectedSkill = PromptSkillAttachment & { key: string }
+
+/**
+ * The composer offers "Reference note" only with a project directory and an
+ * enabled Notes plugin. An unreadable registry stays optimistic; isolated
+ * fixtures without a NotesProvider let the `notes` prop decide.
+ */
+export function canReferenceNotes(
+  notes: { available: boolean } | null | undefined,
+  notesEnabled: boolean
+): boolean {
+  return Boolean(notes?.available && notesEnabled)
+}
 
 function decodeInlineText(uri: string): string | null {
   const comma = uri.indexOf(",")
@@ -323,6 +336,10 @@ export function Composer({
   const formRef = useRef<HTMLFormElement>(null)
   const [composerWidth, setComposerWidth] = useState(0)
   const isDesktop = useIsDesktop()
+  // Disabling the Notes plugin must remove its composer entry. An unknown
+  // registry state (or no NotesProvider, as in isolated fixtures) stays
+  // optimistic; `notes.available` still gates on a project directory.
+  const notesEnabled = useOptionalNotesWorkspace()?.notesEnabled ?? true
   const inlineModelSettings = isDesktop && composerWidth >= 760
 
   useLayoutEffect(() => {
@@ -354,6 +371,13 @@ export function Composer({
   const citationSequence = useRef(0)
   const [stashMenuOpen, setStashMenuOpen] = useState(false)
   const [notePickerOpen, setNotePickerOpen] = useState(false)
+  // Disabling Notes closes the picker so re-enabling cannot reopen it.
+  useEffect(() => {
+    if (notesEnabled) return
+    /* eslint-disable react-hooks/set-state-in-effect -- registry state drives external picker state */
+    setNotePickerOpen(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [notesEnabled])
   const [stashVersion, setStashVersion] = useState(0)
   const [feedbackSession, setFeedbackSession] = useState(draftKey)
   if (feedbackSession !== draftKey) {
@@ -1913,7 +1937,7 @@ export function Composer({
                 <FolderOpenIcon aria-hidden="true" className="size-4" />
                 Project files
               </DropdownMenuItem>
-              {notes?.available ? (
+              {canReferenceNotes(notes, notesEnabled) ? (
                 <DropdownMenuItem
                   className="min-h-11"
                   disabled={!activeSession}
@@ -2206,7 +2230,7 @@ export function Composer({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {notes?.available ? (
+      {notes && canReferenceNotes(notes, notesEnabled) ? (
         <NoteReferencePicker
           open={notePickerOpen}
           onOpenChange={setNotePickerOpen}

@@ -28,7 +28,13 @@ function setup(handler) {
   const previousAct = globalThis.IS_REACT_ACT_ENVIRONMENT
   const previousWindow = globalThis.window
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
-  globalThis.window = { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) }
+  const events = new EventTarget()
+  globalThis.window = {
+    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+    addEventListener: (...args) => events.addEventListener(...args),
+    removeEventListener: (...args) => events.removeEventListener(...args),
+    dispatchEvent: (event) => events.dispatchEvent(event),
+  }
   const calls = []
   globalThis.fetch = async (request, init) => {
     const url = typeof request === "string" ? request : String(request?.url ?? request)
@@ -236,6 +242,75 @@ test("a failed plugin read offers a retry", async () => {
     await act(async () => retry.props.onClick())
     await flush()
     expect(JSON.stringify(root.toJSON())).toContain("Connected")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("a successful disable announces the plugin change once", async () => {
+  let disabled = false
+  const env = setup(async (url) => {
+    if (url.endsWith("/disable")) {
+      disabled = true
+      return json({ registered: false })
+    }
+    return json(
+      disabled
+        ? {
+            engineAvailable: true,
+            plugins: [
+              {
+                id: "notes",
+                name: "Notes",
+                description: "Notes",
+                registered: false,
+                connected: false,
+                restartRequired: false,
+              },
+            ],
+          }
+        : connected
+    )
+  })
+  const { NOTES_PLUGINS_CHANGED } = await import("../src/lib/notes-plugin-state")
+  const seen = []
+  globalThis.window.addEventListener(NOTES_PLUGINS_CHANGED, (event) => seen.push(event.type))
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    await act(async () => button(root, "Disable Notes").props.onClick())
+    await flush()
+    expect(seen).toEqual([NOTES_PLUGINS_CHANGED])
+    expect(JSON.stringify(root.toJSON())).toContain("Not registered")
+    // The section re-reads once for its own change, not twice.
+    expect(env.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET /api/ui/plugins",
+      "POST /api/ui/plugins/notes/disable",
+      "GET /api/ui/plugins",
+    ])
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("a change from elsewhere refreshes the section", async () => {
+  const env = setup(async () => json(connected))
+  const { NOTES_PLUGINS_CHANGED } = await import("../src/lib/notes-plugin-state")
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    expect(env.calls.filter((call) => call.url === "/api/ui/plugins")).toHaveLength(1)
+    await act(async () => {
+      globalThis.window.dispatchEvent(new Event(NOTES_PLUGINS_CHANGED))
+    })
+    await flush()
+    expect(env.calls.filter((call) => call.url === "/api/ui/plugins")).toHaveLength(2)
   } finally {
     if (root) await act(async () => root.unmount())
     env.restore()

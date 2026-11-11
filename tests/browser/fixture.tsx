@@ -166,7 +166,15 @@ function useSyntheticNav(initialInspectorOpen = false) {
     pendingPermissions: [],
     pendingForms: [],
     models: [],
-    agents: [],
+    agents: [
+      {
+        id: "build",
+        name: "Build",
+        mode: "primary",
+        hidden: false,
+        model: { providerID: "synthetic", id: "synthetic-model" },
+      },
+    ],
     configEntries: [],
     attachments: [],
     inspectorOpen,

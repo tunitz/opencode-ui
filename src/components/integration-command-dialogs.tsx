@@ -5,7 +5,6 @@ import "@openuidev/react-ui/styles/metricIndicator.css"
 import "@openuidev/react-ui/styles/tag.css"
 import "./openui-selective.css"
 import {
-  ArrowUpIcon,
   CheckCircle2Icon,
   CircleAlertIcon,
   LoaderCircleIcon,
@@ -16,6 +15,10 @@ import {
 } from "lucide-react"
 
 import { ConnectDialog } from "@/components/connect-dialog"
+import {
+  canonicalDirectory,
+  DirectoryBrowser,
+} from "@/components/directory-browser"
 import { StatsTokenChart } from "@/components/stats-token-chart"
 import {
   CommandDialogShell,
@@ -258,20 +261,25 @@ function McpsDialog({ nav, onClose }: Props) {
   )
 }
 
-/** One canonical form per directory so the browser never repeats a path. */
-function canonicalWorktreeDirectory(path: string): string {
-  const normalized = path.trim().replace(/\\/g, "/")
-  if (normalized.length <= 1) return normalized
-  return normalized.replace(/\/+$/, "")
-}
-
 type KnownProject = { id: string; directory: string; name: string }
 
-type WorktreeBrowser = {
-  /** Raw input text: a filter over the listed rows or an absolute path. */
-  query: string
-  level: "projects" | "worktrees"
-  browsedProjectID: string | null
+/** Longest known project that contains this directory, if any. */
+function resolveNearestProject(
+  projects: KnownProject[],
+  directory: string
+): KnownProject | null {
+  if (!directory.startsWith("/")) return null
+  return (
+    projects
+      .filter(
+        (project) =>
+          project.directory === "/" ||
+          directory === project.directory ||
+          directory.startsWith(`${project.directory}/`)
+      )
+      .toSorted((left, right) => right.directory.length - left.directory.length)[0] ??
+    null
+  )
 }
 
 function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionCreated }: Props) {
@@ -282,7 +290,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     const seen = new Set<string>()
     const rows: KnownProject[] = []
     for (const project of nav.projects) {
-      const directory = canonicalWorktreeDirectory(project.canonical)
+      const directory = canonicalDirectory(project.canonical)
       if (!directory || seen.has(directory)) continue
       seen.add(directory)
       rows.push({ id: project.id, directory, name: projectBasename(directory) })
@@ -295,22 +303,17 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }, [nav.projects])
   const preferredProjectID =
     worktreeProjectID ?? nav.activeSession?.projectID ?? nav.location?.project.id ?? null
+  const preferredProject =
+    projects.find((project) => project.id === preferredProjectID) ?? null
 
-  const [browser, setBrowser] = useState<WorktreeBrowser>(() => {
-    const project = projects.find((row) => row.id === preferredProjectID) ?? null
-    return {
-      query: project?.directory ?? "",
-      level: project ? "worktrees" : "projects",
-      browsedProjectID: project?.id ?? null,
-    }
-  })
-  const [optionsOpen, setOptionsOpen] = useState(false)
-  // A remove confirmation takes focus out of the browser; keep its rows mounted
-  // so focus can return to the remove control when the dialog is dismissed.
-  const holdOptionsOpen = useRef(false)
+  const [directoryValue, setDirectoryValue] = useState(
+    () => preferredProject?.directory ?? ""
+  )
+  const [browse, setBrowse] = useState(() => preferredProject?.directory ?? "/")
   const [entries, setEntries] = useState<WorktreeDirectory[]>([])
+  const [entriesProjectID, setEntriesProjectID] = useState<string | null>(null)
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
-    browser.level === "worktrees" ? "loading" : "idle"
+    preferredProject ? "loading" : "idle"
   )
   const [error, setError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -320,7 +323,10 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   const [directoryDraft, setDirectoryDraft] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [refreshBusy, setRefreshBusy] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<WorktreeDirectory | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{
+    directory: string
+    projectID: string
+  } | null>(null)
   const [sessionDirectory, setSessionDirectory] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [sessionCreateFailed, setSessionCreateFailed] = useState(false)
@@ -328,21 +334,39 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   const [force, setForce] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const request = useRef(0)
+  const [sourceProjectID, setSourceProjectID] = useState<string | null>(
+    preferredProject?.id ?? null
+  )
+
+  const trimmed = directoryValue.trim()
+  const typedDirectory = canonicalDirectory(directoryValue)
+  const absolute = trimmed.length > 0 && isAbsoluteDirectory(trimmed)
+  const invalidAbsolute = trimmed.length > 0 && !isAbsoluteDirectory(trimmed)
+
+  // The contextual list follows whichever project the input resolves to; a
+  // selected worktree keeps its project when the path sits outside that prefix.
+  const resolvedProject = useMemo(
+    () => resolveNearestProject(projects, typedDirectory),
+    [projects, typedDirectory]
+  )
+  const activeSourceProjectID = resolvedProject?.id ?? sourceProjectID
 
   useEffect(() => {
-    const projectID = browser.browsedProjectID
-    if (!projectID) return
+    if (!activeSourceProjectID) return
     const token = ++request.current
     void Promise.resolve().then(async () => {
       setStatus("loading")
       setError(null)
       try {
-        const list = await openCode.worktree.list({ projectID })
+        const list = await openCode.worktree.list({ projectID: activeSourceProjectID })
         if (token !== request.current) return
         setEntries(list)
+        setEntriesProjectID(activeSourceProjectID)
         setStatus("ready")
       } catch (failure) {
         if (token !== request.current) return
+        setEntries([])
+        setEntriesProjectID(activeSourceProjectID)
         setError(errorMessage(failure))
         setStatus("error")
       }
@@ -350,38 +374,26 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     return () => {
       request.current += 1
     }
-  }, [browser.browsedProjectID, reloadKey])
+  }, [activeSourceProjectID, reloadKey])
 
-  const browsedProject =
-    projects.find((project) => project.id === browser.browsedProjectID) ?? null
-  const trimmed = browser.query.trim()
-  const typedDirectory = canonicalWorktreeDirectory(browser.query)
-  const absolute = trimmed.length > 0 && isAbsoluteDirectory(trimmed)
-  const invalidAbsolute = trimmed.length > 0 && !isAbsoluteDirectory(trimmed)
+  const sourceProject =
+    projects.find((project) => project.id === activeSourceProjectID) ?? null
+  // Entries from a previous project must never be shown for the current one.
+  const entriesMatch =
+    activeSourceProjectID !== null && entriesProjectID === activeSourceProjectID
+  const worktreeStatus =
+    activeSourceProjectID && !entriesMatch ? "loading" : status
 
-  // An exact match is the current selection, so every alternative stays in
-  // reach; any other text is a case-insensitive search over the listed rows.
-  const projectOptions = useMemo(() => {
-    if (!trimmed || projects.some((project) => project.directory === typedDirectory)) {
-      return projects
-    }
-    const needle = trimmed.toLocaleLowerCase()
-    return projects.filter(
-      (project) =>
-        project.directory.toLocaleLowerCase().includes(needle) ||
-        project.name.toLocaleLowerCase().includes(needle)
-    )
-  }, [projects, trimmed, typedDirectory])
-
-  // The base directory is rendered as its own row, and duplicate API rows are
+  // The base directory is rendered by the browser, and duplicate API rows are
   // dropped so the list never repeats a path.
   const worktreeRows = useMemo(() => {
+    if (!sourceProject || !entriesMatch) return []
     const seen = new Set<string>()
     const rows: { directory: string; name: string }[] = []
     for (const entry of entries) {
       if (!entry.directory) continue
-      const canonical = canonicalWorktreeDirectory(entry.directory)
-      if (browsedProject && canonical === browsedProject.directory) continue
+      const canonical = canonicalDirectory(entry.directory)
+      if (canonical === sourceProject.directory) continue
       if (seen.has(canonical)) continue
       seen.add(canonical)
       rows.push({
@@ -390,89 +402,44 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
       })
     }
     return rows
-  }, [browsedProject, entries])
+  }, [entries, entriesMatch, sourceProject])
 
-  const worktreeOptions = useMemo(() => {
-    if (
-      !trimmed ||
-      (browsedProject && canonicalWorktreeDirectory(browsedProject.directory) === typedDirectory) ||
-      worktreeRows.some((row) => canonicalWorktreeDirectory(row.directory) === typedDirectory)
-    ) {
-      return worktreeRows
-    }
-    const needle = trimmed.toLocaleLowerCase()
-    return worktreeRows.filter(
-      (row) =>
-        row.directory.toLocaleLowerCase().includes(needle) ||
-        row.name.toLocaleLowerCase().includes(needle)
-    )
-  }, [trimmed, typedDirectory, worktreeRows, browsedProject])
+  const inputIsProject =
+    sourceProject !== null && typedDirectory === sourceProject.directory
+  const inputIsWorktree = worktreeRows.some(
+    (row) => canonicalDirectory(row.directory) === typedDirectory
+  )
+  const activeProject =
+    sourceProject && trimmed && (inputIsProject || inputIsWorktree)
+      ? sourceProject
+      : null
 
   // createWorktreeSession resolves a directory to its own project and rejects a
   // mismatch, so a custom path is bound to the nearest known project prefix.
   const target = useMemo(() => {
     if (!absolute) return null
-    const exactProject = projects.find((project) => project.directory === typedDirectory)
-    if (exactProject) return { projectID: exactProject.id, directory: exactProject.directory }
-    const exactWorktree = entries.find(
-      (entry) => canonicalWorktreeDirectory(entry.directory) === typedDirectory
-    )
-    if (exactWorktree && browser.browsedProjectID) {
-      return { projectID: browser.browsedProjectID, directory: typedDirectory }
-    }
-    const nearest = projects
-      .filter(
-        (project) =>
-          typedDirectory === project.directory ||
-          typedDirectory.startsWith(`${project.directory}/`)
-      )
-      .toSorted((left, right) => right.directory.length - left.directory.length)[0]
-    return nearest ? { projectID: nearest.id, directory: typedDirectory } : null
-  }, [absolute, browser.browsedProjectID, entries, projects, typedDirectory])
+    const nearest = resolveNearestProject(projects, typedDirectory)
+    return nearest
+      ? { projectID: nearest.id, directory: typedDirectory }
+      : null
+  }, [absolute, projects, typedDirectory])
 
   const unbrowsedTarget =
     absolute && !target ? "No project matches this path." : null
 
-  function openOptions() {
-    setOptionsOpen(true)
-  }
-
-  function chooseProject(project: KnownProject) {
-    setEntries([])
-    setStatus("loading")
-    setBrowser({
-      query: project.directory,
-      level: "worktrees",
-      browsedProjectID: project.id,
-    })
-    setOptionsOpen(true)
-  }
-
-  function chooseDirectory(directory: string) {
-    setBrowser((current) => ({ ...current, query: directory, level: "worktrees" }))
-    setOptionsOpen(true)
-  }
-
-  function backToProjects() {
-    setBrowser({ query: "", level: "projects", browsedProjectID: null })
-    setEntries([])
-    setStatus("idle")
-    setOptionsOpen(true)
-  }
-
   function openCreate() {
+    if (!activeProject) return
     setDirectoryDraft(null)
-    setOptionsOpen(false)
     setMode("create")
   }
 
   async function create() {
-    if (!browser.browsedProjectID || creating || invalidDirectory) return
+    if (!activeProject || creating || invalidDirectory) return
     setCreating(true)
     setError(null)
     try {
       await openCode.worktree.create({
-        projectID: browser.browsedProjectID,
+        projectID: activeProject.id,
         ...(name.trim() ? { name: name.trim() } : {}),
         ...(branch.trim() ? { branch: branch.trim() } : {}),
         ...(directory.trim() ? { directory: directory.trim() } : {}),
@@ -491,11 +458,11 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }
 
   async function refresh() {
-    if (!browser.browsedProjectID || refreshBusy) return
+    if (!activeProject || refreshBusy) return
     setRefreshBusy(true)
     setError(null)
     try {
-      await openCode.worktree.refresh({ projectID: browser.browsedProjectID })
+      await openCode.worktree.refresh({ projectID: activeProject.id })
       setReloadKey((current) => current + 1)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -505,18 +472,17 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   }
 
   async function remove() {
-    if (!browser.browsedProjectID || !deleteTarget || deleting) return
+    if (!deleteTarget || deleting) return
     setDeleting(true)
     setError(null)
     try {
       await openCode.worktree.remove({
-        projectID: browser.browsedProjectID,
+        projectID: deleteTarget.projectID,
         directory: deleteTarget.directory,
         force,
       })
       setDeleteTarget(null)
       setForce(false)
-      holdOptionsOpen.current = false
       setReloadKey((current) => current + 1)
       onResult("Worktree removed by the native backend.")
     } catch (failure) {
@@ -559,14 +525,13 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
 
   const directory = directoryDraft ?? ""
   const invalidDirectory = directory.trim().length > 0 && !isAbsoluteDirectory(directory)
-  const browsingWorktrees = browser.level === "worktrees" && browsedProject !== null
   const busy = creating || refreshBusy || Boolean(sessionDirectory)
 
   return (
     <>
       <CommandDialogShell
         title="Worktrees"
-        description="Browse projects and worktrees, then start a session in one."
+        description="Choose a project directory, then browse, manage, and start a session in its worktrees."
         pending={busy}
         onClose={onClose}
         footer={
@@ -574,39 +539,17 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
             <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={busy}>
               Close
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 px-4"
-              onClick={() => void refresh()}
-              disabled={!browsedProject || refreshBusy || creating || Boolean(sessionDirectory)}
-              aria-busy={refreshBusy}
-            >
-              {refreshBusy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
-              Refresh
-            </Button>
             {mode === "list" ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-11 px-4"
-                  onClick={openCreate}
-                  disabled={!browsedProject || creating || Boolean(sessionDirectory)}
-                >
-                  Create worktree
-                </Button>
-                <Button
-                  type="button"
-                  className="h-11 px-4"
-                  onClick={() => void startSession()}
-                  disabled={!target || creating || Boolean(sessionDirectory) || nav.creating || nav.connection !== "connected"}
-                  aria-busy={sessionDirectory !== null}
-                >
-                  {sessionDirectory ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <PlusIcon aria-hidden="true" className="size-4" />}
-                  New session here
-                </Button>
-              </>
+              <Button
+                type="button"
+                className="h-11 px-4"
+                onClick={() => void startSession()}
+                disabled={!target || creating || Boolean(sessionDirectory) || nav.creating || nav.connection !== "connected"}
+                aria-busy={sessionDirectory !== null}
+              >
+                {sessionDirectory ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                New session here
+              </Button>
             ) : null}
           </>
         }
@@ -639,184 +582,120 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
             <ErrorNotice error={error} />
           </div>
         ) : (
-          <div className="space-y-3">
-            <div
-              className="grid min-w-0 gap-1.5"
-              onBlur={(event) => {
-                if (holdOptionsOpen.current) return
-                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
-                setOptionsOpen(false)
-              }}
-            >
-              <Label htmlFor="worktree-browser-directory">Project or worktree directory</Label>
-              <Input
-                id="worktree-browser-directory"
-                className="h-11"
-                dir="ltr"
-                type="text"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="Search or type an absolute path"
-                value={browser.query}
-                disabled={creating}
-                aria-invalid={invalidAbsolute || undefined}
-                aria-describedby={invalidAbsolute || unbrowsedTarget ? "worktree-browser-hint" : undefined}
-                onChange={(event) => {
-                  const value = event.target.value
-                  setBrowser((current) => ({ ...current, query: value }))
-                  setOptionsOpen(true)
-                }}
-                onFocus={openOptions}
-                onClick={openOptions}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape" && optionsOpen) {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    setOptionsOpen(false)
-                  }
-                }}
-              />
-              {invalidAbsolute ? (
-                <p id="worktree-browser-hint" role="alert" className="text-xs text-destructive">Use an absolute path starting with /.</p>
-              ) : null}
-              {unbrowsedTarget ? (
-                <p id="worktree-browser-hint" className="text-xs text-muted-foreground">{unbrowsedTarget}</p>
-              ) : null}
-              {optionsOpen ? (
-                <div
-                  className="max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border"
-                  data-worktree-options=""
-                >
-                  {browsingWorktrees ? (
-                    <ul aria-label="Project worktrees" className="min-w-0 divide-y divide-border">
-                      <li>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto min-h-11 w-full justify-start gap-2 rounded-none px-3 py-2 text-start font-normal whitespace-normal"
-                          disabled={creating}
-                          data-worktree-back=""
-                          onClick={backToProjects}
-                        >
-                          <ArrowUpIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 truncate text-sm font-medium">Back to projects</span>
-                        </Button>
-                      </li>
-                      <li>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
-                          disabled={creating}
-                          aria-pressed={typedDirectory === browsedProject.directory}
-                          data-worktree-base={browsedProject.directory}
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => chooseDirectory(browsedProject.directory)}
-                        >
-                          <span className="flex min-w-0 flex-col gap-0.5">
-                            <span className="truncate text-sm font-medium" dir="auto">
-                              {browsedProject.name}
-                            </span>
-                            <span className="truncate text-xs text-muted-foreground" dir="auto" title={browsedProject.directory}>
-                              {browsedProject.directory}
-                            </span>
-                          </span>
-                        </Button>
-                      </li>
-                      {worktreeOptions.map((row) => (
-                        <li key={row.directory} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
-                            disabled={creating}
-                            aria-pressed={typedDirectory === canonicalWorktreeDirectory(row.directory)}
-                            data-worktree-worktree={row.directory}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => chooseDirectory(row.directory)}
-                          >
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                              <span className="truncate text-sm font-medium" dir="auto">
-                                {row.name}
-                              </span>
-                              <span className="truncate text-xs text-muted-foreground" dir="auto" title={row.directory}>
-                                {row.directory}
-                              </span>
-                            </span>
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="destructive"
-                            size="icon-lg"
-                            className="size-11 shrink-0"
-                            aria-label={`Remove ${row.directory}`}
-                            disabled={Boolean(sessionDirectory) || deleting}
-                            onClick={() => {
-                              holdOptionsOpen.current = true
-                              setForce(false)
-                              setDeleteTarget({ directory: row.directory })
-                            }}
-                          >
-                            <Trash2Icon aria-hidden="true" className="size-4" />
-                          </Button>
-                        </li>
-                      ))}
-                      {status === "loading" ? (
-                        <li role="status" className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-                          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-                          Loading worktrees…
-                        </li>
-                      ) : null}
-                      {status === "error" ? (
-                        <li role="alert" className="space-y-2 px-3 py-2 text-xs text-destructive">
-                          <p className="break-words">{error}</p>
-                          <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>
-                            Retry
-                          </Button>
-                        </li>
-                      ) : null}
-                      {status === "ready" && worktreeOptions.length === 0 ? (
-                        <li className="px-3 py-2 text-xs text-muted-foreground">
-                          {worktreeRows.length === 0 ? "No saved worktrees." : "No worktrees match this path."}
-                        </li>
-                      ) : null}
-                    </ul>
-                  ) : (
-                    <ul aria-label="Projects" className="min-w-0 divide-y divide-border">
-                      {projectOptions.map((project) => (
-                        <li key={project.id}>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
-                            disabled={creating}
-                            aria-pressed={typedDirectory === project.directory}
-                            data-worktree-project={project.directory}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => chooseProject(project)}
-                          >
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                              <span className="truncate text-sm font-medium" dir="auto">
-                                {project.name}
-                              </span>
-                              <span className="truncate text-xs text-muted-foreground" dir="auto" title={project.directory}>
-                                {project.directory}
-                              </span>
-                            </span>
-                          </Button>
-                        </li>
-                      ))}
-                      {projects.length === 0 ? (
-                        <li className="px-3 py-2 text-xs text-muted-foreground">No projects loaded.</li>
-                      ) : null}
-                      {projects.length > 0 && projectOptions.length === 0 ? (
-                        <li className="px-3 py-2 text-xs text-muted-foreground">No projects match this path.</li>
-                      ) : null}
-                    </ul>
-                  )}
+          <div className="space-y-4">
+            <DirectoryBrowser
+              id="worktree-browser-directory"
+              label="Project or worktree directory"
+              value={directoryValue}
+              onChange={setDirectoryValue}
+              initialBrowse={browse}
+              browse={browse}
+              onBrowseChange={setBrowse}
+              placeholder="Search or type an absolute path"
+              disabled={creating || Boolean(sessionDirectory)}
+              error={
+                invalidAbsolute
+                  ? "Use an absolute path starting with /."
+                  : null
+              }
+              hint={unbrowsedTarget ?? undefined}
+              optionsLabel="Directories"
+            />
+
+            <section className="space-y-2" aria-label="Worktrees">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-[12px] font-medium">Worktrees</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 px-3 text-xs"
+                    onClick={() => void refresh()}
+                    disabled={!activeProject || refreshBusy || creating || Boolean(sessionDirectory)}
+                    aria-busy={refreshBusy}
+                  >
+                    {refreshBusy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
+                    Refresh
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 px-3 text-xs"
+                    onClick={openCreate}
+                    disabled={!activeProject || creating || Boolean(sessionDirectory)}
+                  >
+                    Create worktree
+                  </Button>
                 </div>
-              ) : null}
-            </div>
+              </div>
+
+              {!activeProject ? (
+                <p className="text-xs text-muted-foreground">
+                  No worktrees for this directory.
+                </p>
+              ) : worktreeStatus === "loading" ? (
+                <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+                  Loading worktrees…
+                </p>
+              ) : worktreeStatus === "error" ? (
+                <div role="alert" className="space-y-2 text-xs text-destructive">
+                  <p className="break-words">{error}</p>
+                  <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>
+                    Retry
+                  </Button>
+                </div>
+              ) : worktreeRows.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No saved worktrees.</p>
+              ) : (
+                <ul aria-label="Project worktrees" className="min-w-0 divide-y divide-border rounded-lg border border-border">
+                  {worktreeRows.map((row) => (
+                    <li key={row.directory} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
+                        disabled={creating || Boolean(sessionDirectory)}
+                        aria-pressed={typedDirectory === canonicalDirectory(row.directory)}
+                        data-worktree-worktree={row.directory}
+                        onClick={() => {
+                          setSourceProjectID(activeProject.id)
+                          setDirectoryValue(row.directory)
+                          setBrowse(canonicalDirectory(row.directory))
+                        }}
+                      >
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <span className="truncate text-sm font-medium" dir="auto">
+                            {row.name}
+                          </span>
+                          <span className="truncate text-xs text-muted-foreground" dir="auto" title={row.directory}>
+                            {row.directory}
+                          </span>
+                        </span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon-lg"
+                        className="size-11 shrink-0"
+                        aria-label={`Remove ${row.directory}`}
+                        disabled={Boolean(sessionDirectory) || deleting}
+                        onClick={() => {
+                          setForce(false)
+                          setDeleteTarget({
+                            directory: row.directory,
+                            projectID: activeProject.id,
+                          })
+                        }}
+                      >
+                        <Trash2Icon aria-hidden="true" className="size-4" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
             {sessionDirectory ? <p role="status" className="text-xs text-muted-foreground">Creating session…</p> : null}
             {!sessionDirectory && nav.connection !== "connected" ? <p role="status" className="text-xs text-muted-foreground">Reconnect to create a session.</p> : null}
             {sessionError ? <p role="alert" className="text-xs break-words text-destructive">{sessionCreateFailed ? nav.createError ?? sessionError : sessionError}</p> : null}
@@ -829,7 +708,6 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
         open={deleteTarget !== null}
         onOpenChange={(open) => {
           if (open) return
-          holdOptionsOpen.current = false
           if (!deleting) setDeleteTarget(null)
         }}
       >

@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { useKeybindings } from "@/lib/use-keybindings"
 import {
   findKeybindingConflicts,
-  keybindingSignature,
   type Keybinding,
   type KeybindingCommand,
 } from "@/lib/keybindings"
@@ -38,11 +37,13 @@ const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"])
 
 /**
  * Rows share one grid template so the header and every row line up in columns
- * once the Settings container is wide enough. Below that the row stacks the
- * shortcut above a right-aligned scope + keys line.
+ * once the Settings container is wide enough. Below that each shortcut stays a
+ * single compact line: label + description on the left, scope + key cell on the
+ * right. The third mobile column keeps the scope and key cells side by side so
+ * every row keeps its three table cells at both widths.
  */
 const ROW_CLASS =
-  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-3 @min-[40rem]:grid-cols-[minmax(0,1fr)_minmax(0,7rem)_auto] @min-[40rem]:gap-x-4 @min-[40rem]:py-2"
+  "grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-2 py-2.5 @min-[40rem]:grid-cols-[minmax(0,1fr)_minmax(0,7rem)_auto] @min-[40rem]:gap-x-4 @min-[40rem]:py-2"
 
 // The header only has meaning once the columns line up; below that it stays
 // available to assistive technology without pretending to label stacked rows.
@@ -60,6 +61,7 @@ export function KeybindingsSettings() {
   const [capturing, setCapturing] = useState<KeybindingCommand | null>(null)
   const [draft, setDraft] = useState<readonly Keybinding[]>(bindings)
   const [saved, setSaved] = useState<string | null>(null)
+  const [announcement, setAnnouncement] = useState<string | null>(null)
   const captureCellRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
@@ -69,11 +71,13 @@ export function KeybindingsSettings() {
   // A new combo persists immediately. A conflicting combo stays a pending draft
   // (the same policy as the old explicit save, which refused to write it).
   const commit = useCallback(
-    (next: readonly Keybinding[]) => {
+    (next: readonly Keybinding[]): boolean => {
       setDraft(next)
       setSaved(null)
-      if (findKeybindingConflicts(next).length > 0) return
-      if (save(next)) setSaved("Keybindings saved in this browser.")
+      if (findKeybindingConflicts(next).length > 0) return false
+      if (!save(next)) return false
+      setSaved("Keybindings saved in this browser.")
+      return true
     },
     [save]
   )
@@ -111,7 +115,11 @@ export function KeybindingsSettings() {
         shift: event.shiftKey,
       }
       cancel()
-      commit(draft.map((binding) => (binding.command === command ? next : binding)))
+      if (commit(draft.map((binding) => (binding.command === command ? next : binding)))) {
+        setAnnouncement(
+          `Saved ${keyLabel(next)} for ${COMMAND_LABELS[command]}.`
+        )
+      }
     }
     function onMouseDown(event: MouseEvent) {
       // Any press outside the capturing cell cancels without saving.
@@ -184,14 +192,11 @@ export function KeybindingsSettings() {
                 role="row"
                 className={`${ROW_CLASS} px-3`}
               >
-                <div
-                  role="cell"
-                  className="min-w-0 col-span-2 @min-[40rem]:col-span-1"
-                >
+                <div role="cell" className="min-w-0">
                   <p className="text-[13px] font-medium">
                     {COMMAND_LABELS[binding.command]}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11px] leading-tight text-muted-foreground">
                     {COMMAND_DESCRIPTIONS[binding.command]}
                   </p>
                   {conflict ? (
@@ -208,7 +213,7 @@ export function KeybindingsSettings() {
                 </div>
                 <div
                   role="cell"
-                  className="justify-self-end text-end text-[10px] text-muted-foreground"
+                  className="justify-self-end whitespace-nowrap text-end text-[11px] text-muted-foreground"
                 >
                   {binding.when}
                 </div>
@@ -221,9 +226,10 @@ export function KeybindingsSettings() {
                         ? `Press keys for ${COMMAND_LABELS[binding.command]}`
                         : `Change keybind for ${COMMAND_LABELS[binding.command]}, currently ${keyLabel(binding)}`
                     }
-                    onClick={() =>
+                    onClick={() => {
+                      setAnnouncement(null)
                       setCapturing(capturingThis ? null : binding.command)
-                    }
+                    }}
                     onBlur={() => {
                       if (capturingThis) setCapturing(null)
                     }}
@@ -252,7 +258,7 @@ export function KeybindingsSettings() {
       <p role="status" className="sr-only">
         {capturing
           ? `Press keys for ${COMMAND_LABELS[capturing]}. Escape cancels.`
-          : ""}
+          : announcement ?? ""}
       </p>
       {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       {saved ? <p role="status" className="text-xs text-muted-foreground">{saved}</p> : null}
@@ -274,6 +280,7 @@ export function KeybindingsSettings() {
           onClick={() => {
             const next = reset()
             setDraft(next)
+            setAnnouncement(null)
             setSaved("Keybindings reset to defaults.")
           }}
         >
@@ -286,9 +293,6 @@ export function KeybindingsSettings() {
           Resolve duplicate shortcuts before saving.
         </p>
       ) : null}
-      <p className="text-[10px] text-muted-foreground">
-        {draft.map((binding) => keybindingSignature(binding)).join(" · ")}
-      </p>
     </div>
   )
 }

@@ -339,6 +339,40 @@ const server = Bun.serve({
       notesRequests.push({ method, input })
       return notesMethodResponse(method, input)
     }
+    if (pathname === "/api/ui/plugins") {
+      return json({
+        engineAvailable: true,
+        plugins: [
+          {
+            id: "notes",
+            registered: true,
+            connected: true,
+            restartRequired: false,
+          },
+        ],
+      })
+    }
+    if (pathname === "/api/location") {
+      const requested =
+        url.searchParams.get("location[directory]") ??
+        url.searchParams.get("location") ??
+        ""
+      const project = requested.startsWith("/synthetic/worktrees/alpha")
+        ? "p-alpha"
+        : requested.startsWith("/synthetic/alpha")
+          ? "p-alpha"
+          : requested.startsWith("/synthetic/notes")
+            ? "p-notes"
+            : requested.startsWith("/synthetic/location")
+              ? "p-location"
+              : null
+      if (!project)
+        return json(
+          { error: { code: "location_not_found", message: "Unknown synthetic location." } },
+          404
+        )
+      return json({ project: { id: project }, directory: requested })
+    }
 
     if (pathname === "/api/worktree") {
       requests.push({
@@ -847,13 +881,14 @@ if (browser) {
     const page = opened.page
     try {
       requests.length = 0
+      fsListRequests.length = 0
       const entry = page.getByRole("button", { name: "Project worktrees" })
       await entry.waitFor({ state: "visible" })
       const entryBox = await entry.boundingBox()
       check("desktop worktrees entry is at least 44px tall", (entryBox?.height ?? 0) >= 44, `height=${entryBox?.height}`)
       await entry.click()
 
-      const heading = page.getByRole("heading", { name: "Worktrees" })
+      const heading = page.getByRole("heading", { name: "Worktrees", level: 2 })
       await heading.waitFor({ state: "visible" })
       const dialog = page.locator('[data-slot="dialog-content"]').filter({ has: heading })
       check("desktop worktrees surface is a centered dialog", await dialog.isVisible())
@@ -872,11 +907,32 @@ if (browser) {
         requests.every((entryRequest) => entryRequest.method === "GET"),
         JSON.stringify(requests)
       )
+
+      // The worktrees subsection is contextual and visible without opening the
+      // directory options.
+      const worktreeRow = dialog.locator(
+        '[data-worktree-worktree="/synthetic/worktrees/alpha"]'
+      )
+      await worktreeRow.waitFor({ state: "visible" })
+      const worktreeRowBox = await worktreeRow.boundingBox()
+      check(
+        "contextual worktree rows remain 44px touch targets",
+        (worktreeRowBox?.height ?? 0) >= 44,
+        `height=${worktreeRowBox?.height}`
+      )
+      check(
+        "the old two-level project list is gone",
+        (await page.locator("[data-worktree-project], [data-worktree-back]").count()) === 0
+      )
+
+      // The shared directory browser is the only navigation.
       await page.getByLabel("Project or worktree directory").click()
-      if ((await page.getByRole("button", { name: "Back to projects" }).count()) === 0) {
-        await page.getByText("/synthetic/alpha", { exact: true }).first().click()
-      }
-      await page.getByText("/synthetic/worktrees/alpha").waitFor({ state: "visible" })
+      await page.locator('[data-directory="/synthetic/alpha/src"]').waitFor({ state: "visible" })
+      check(
+        "the prefilled project directory lists its children through /api/fs/list",
+        fsListRequests.includes("/synthetic/alpha"),
+        JSON.stringify(fsListRequests)
+      )
 
       await page.getByRole("button", { name: "Close", exact: true }).first().click()
       await dialog.waitFor({ state: "detached" })
@@ -891,7 +947,7 @@ if (browser) {
       await page.getByRole("button", { name: "Set project scope" }).click()
       await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
       await page.getByRole("button", { name: "Project worktrees" }).click()
-      await page.getByRole("heading", { name: "Worktrees" }).waitFor({ state: "visible" })
+      await page.getByRole("heading", { name: "Worktrees", level: 2 }).waitFor({ state: "visible" })
       const scopedRequest = await poll(
         async () => requests.find((entryRequest) => entryRequest.path === "/api/worktree"),
         "scoped worktree request was not observed"
@@ -901,8 +957,22 @@ if (browser) {
         scopedRequest.projectID === "p-location",
         `projectID=${scopedRequest.projectID}`
       )
-      await page.getByRole("button", { name: "Close", exact: true }).first().click()
-      await page.getByRole("heading", { name: "Worktrees" }).waitFor({ state: "detached" })
+      const scopedDialog = page.locator('[data-slot="dialog-content"]').filter({
+        has: page.getByRole("heading", { name: "Worktrees", level: 2 }),
+      })
+      check(
+        "project scope prefills its canonical directory",
+        (await page.getByLabel("Project or worktree directory").inputValue()) ===
+          "/synthetic/location"
+      )
+      await page.getByRole("button", { name: "New session here" }).click()
+      await scopedDialog.waitFor({ state: "detached" })
+      const sessionCalls = await qaCalls(page)
+      check(
+        "New session here creates a session in the chosen directory",
+        sessionCalls.some((call) => call.kind === "createSession"),
+        JSON.stringify(sessionCalls)
+      )
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
       mergeDiagnostics(
         results.find((result) => result.name.startsWith("desktop project worktrees"))!,
@@ -1011,7 +1081,7 @@ if (browser) {
       await worktreesEntry.click()
       await sessionsSheet.waitFor({ state: "hidden" })
 
-      const heading = page.getByRole("heading", { name: "Worktrees" })
+      const heading = page.getByRole("heading", { name: "Worktrees", level: 2 })
       await heading.waitFor({ state: "visible" })
       const order = await page.evaluate(
         () =>
@@ -2512,16 +2582,16 @@ if (browser) {
       check("a new space starts empty, meaning Global", (await directory.inputValue()) === "")
       check(
         "the directory options stay hidden until the field is used",
-        (await page.locator("[data-space-directory-options]").count()) === 0
+        (await page.locator("[data-directory-options]").count()) === 0
       )
 
       await directory.click()
-      await page.locator("[data-space-directory-options]").waitFor({ state: "visible" })
-      await page.locator('[data-space-directory="/synthetic"]').waitFor({ state: "visible" })
+      await page.locator("[data-directory-options]").waitFor({ state: "visible" })
+      await page.locator('[data-directory="/synthetic"]').waitFor({ state: "visible" })
 
-      const rootRows = await page.locator("[data-space-directory]").evaluateAll((nodes) =>
+      const rootRows = await page.locator("[data-directory]").evaluateAll((nodes) =>
         nodes.map((node) => ({
-          path: node.getAttribute("data-space-directory") ?? "",
+          path: node.getAttribute("data-directory") ?? "",
           text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
         }))
       )
@@ -2551,15 +2621,15 @@ if (browser) {
         JSON.stringify(rootRows)
       )
 
-      await page.locator('[data-space-directory="/synthetic"]').click()
+      await page.locator('[data-directory="/synthetic"]').click()
       check(
         "drilling into a row fills the input with its path",
         (await directory.inputValue()) === "/synthetic"
       )
-      await page.locator('[data-space-directory="/synthetic/alpha"]').waitFor({ state: "visible" })
+      await page.locator('[data-directory="/synthetic/alpha"]').waitFor({ state: "visible" })
       const childRows = await page
-        .locator("[data-space-directory]")
-        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-space-directory") ?? ""))
+        .locator("[data-directory]")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-directory") ?? ""))
       check(
         "the browser lists the drilled directory's children",
         ["/synthetic/alpha", "/synthetic/notes", "/synthetic/secret"].every((path) =>
@@ -2573,24 +2643,24 @@ if (browser) {
         JSON.stringify(fsListRequests)
       )
 
-      await page.locator('[data-space-directory-parent="/"]').click()
+      await page.locator('[data-directory-parent="/"]').click()
       check(
         "the up row fills the input with the parent path",
         (await directory.inputValue()) === "/"
       )
       check(
         "the up row disappears at the filesystem root",
-        (await page.locator("[data-space-directory-parent]").count()) === 0
+        (await page.locator("[data-directory-parent]").count()) === 0
       )
-      await page.locator('[data-space-directory="/synthetic"]').waitFor({ state: "visible" })
+      await page.locator('[data-directory="/synthetic"]').waitFor({ state: "visible" })
 
-      await page.locator('[data-space-directory="/synthetic"]').click()
-      await page.locator('[data-space-directory="/synthetic/alpha"]').click()
+      await page.locator('[data-directory="/synthetic"]').click()
+      await page.locator('[data-directory="/synthetic/alpha"]').click()
       check(
         "drilling again follows the second level",
         (await directory.inputValue()) === "/synthetic/alpha"
       )
-      await page.locator('[data-space-directory-parent="/synthetic"]').click()
+      await page.locator('[data-directory-parent="/synthetic"]').click()
       check(
         "the up row returns to the previous level",
         (await directory.inputValue()) === "/synthetic"
@@ -2611,7 +2681,7 @@ if (browser) {
       await page.getByRole("textbox", { name: "Name", exact: true }).click()
       check(
         "leaving the field hides the directory options",
-        (await page.locator("[data-space-directory-options]").count()) === 0
+        (await page.locator("[data-directory-options]").count()) === 0
       )
 
       await page.getByRole("button", { name: "Save space" }).click()

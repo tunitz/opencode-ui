@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { PlugIcon, RefreshCwIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { NOTES_PLUGINS_CHANGED } from "@/lib/notes-plugin-state"
 
 type PluginStatus = {
   id: string
@@ -97,6 +98,9 @@ export function SettingsPluginsSection() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const request = useRef(0)
+  // Distinguishes this section's own event from one raised elsewhere, so an
+  // action re-reads once instead of twice.
+  const selfChange = useRef(false)
 
   const load = useCallback(async () => {
     const token = ++request.current
@@ -130,6 +134,37 @@ export function SettingsPluginsSection() {
     }
   }, [])
 
+  const notifyChanged = useCallback(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.dispatchEvent !== "function"
+    )
+      return
+    selfChange.current = true
+    try {
+      window.dispatchEvent(new Event(NOTES_PLUGINS_CHANGED))
+    } finally {
+      selfChange.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.addEventListener !== "function"
+    )
+      return
+    const onChange = () => {
+      if (selfChange.current) return
+      void load()
+    }
+    window.addEventListener(NOTES_PLUGINS_CHANGED, onChange)
+    return () => {
+      if (typeof window.removeEventListener === "function")
+        window.removeEventListener(NOTES_PLUGINS_CHANGED, onChange)
+    }
+  }, [load])
+
   useEffect(() => {
     let active = true
     void Promise.resolve().then(() => {
@@ -144,6 +179,7 @@ export function SettingsPluginsSection() {
     async (plugin: PluginStatus, enable: boolean) => {
       setBusyId(plugin.id)
       setActionError(null)
+      let succeeded = false
       try {
         const response = await fetch(
           `/api/ui/plugins/${encodeURIComponent(plugin.id)}/${enable ? "enable" : "disable"}`,
@@ -156,15 +192,18 @@ export function SettingsPluginsSection() {
         )
         const body: unknown = await response.json().catch(() => null)
         if (!response.ok) throw new Error(errorMessage(body, response.status))
+        succeeded = true
       } catch (failure) {
         setActionError(failureMessage(failure))
       } finally {
         setBusyId(null)
+        // Let open Notes surfaces react before the engine state is re-read.
+        if (succeeded) notifyChanged()
         // Always re-read: the engine is the source of truth after a change.
         await load()
       }
     },
-    [load]
+    [load, notifyChanged]
   )
 
   const engineAvailable = state?.engineAvailable !== false

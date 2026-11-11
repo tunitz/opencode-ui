@@ -619,3 +619,134 @@ describe("keybindings table", () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Settings → Keys layout: one compact line per shortcut on narrow containers,
+// no debug signature line, and a live announcement when a combo auto-saves.
+// ---------------------------------------------------------------------------
+
+const renderedText = (node) => {
+  if (node === null || node === undefined) return ""
+  if (typeof node === "string") return node
+  return (node.children ?? []).map(renderedText).join("")
+}
+
+const statusTexts = (root) =>
+  root.root.findAllByProps({ role: "status" }).map(nodeText)
+
+describe("keybindings layout", () => {
+  test("renders no debug signature line anywhere", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const text = renderedText(mounted.root.toJSON())
+      expect(text).not.toContain('["')
+      expect(text).not.toContain("·")
+      // The stored signature format starts with the command key, e.g. ["k",…
+      expect(text).not.toMatch(/\["\w+","(global|conversation|composer)"/)
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("keeps every shortcut on one compact line below 40rem", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root } = mounted
+      const rows = root.root.findAllByProps({ role: "row" }).slice(1)
+      expect(rows).toHaveLength(4)
+
+      const expected = [
+        ["Open inspector Command", "Works anywhere outside a dialog.", "global"],
+        ["Find in conversation", "Works when the conversation or inspector has focus.", "conversation"],
+        ["Stash draft", "In the composer; empty composer opens the stash menu.", "composer"],
+        [
+          "Send and start a fresh draft",
+          "In the composer; sends and leaves a fresh draft (same admission as Send).",
+          "composer",
+        ],
+      ]
+
+      rows.forEach((row, index) => {
+        const className = row.props.className
+        // Mobile: three columns on one line, tight vertical padding.
+        expect(className).toContain("grid-cols-[minmax(0,1fr)_auto_auto]")
+        expect(className).toContain("items-center")
+        expect(className).toContain("py-2.5")
+        expect(className).not.toContain("gap-y")
+        // Desktop keeps the aligned header columns.
+        expect(className).toContain(
+          "@min-[40rem]:grid-cols-[minmax(0,1fr)_minmax(0,7rem)_auto]"
+        )
+
+        const cells = row.findAllByProps({ role: "cell" })
+        expect(cells).toHaveLength(3)
+        // The label cell no longer spans both columns, so nothing stacks under it.
+        expect(cells[0].props.className).not.toContain("col-span")
+        expect(nodeText(cells[0])).toContain(expected[index][0])
+        expect(nodeText(cells[0])).toContain(expected[index][1])
+        // Scope and key sit beside each other at the end of the same line.
+        expect(nodeText(cells[1])).toBe(expected[index][2])
+        expect(nodeText(cells[2])).toMatch(/^Mod\+/)
+
+        const button = cells[2].findByType("button")
+        expect(button.props.className).toContain("min-h-11")
+      })
+
+      const source = await Bun.file(
+        new URL("../src/components/keybindings-settings.tsx", import.meta.url)
+      ).text()
+      expect(source).not.toContain("keybindingSignature")
+      expect(source).not.toContain("·")
+      expect(source).toContain("grid-cols-[minmax(0,1fr)_auto_auto]")
+      expect(source).toContain("py-2.5")
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("announces the saved combo and command without visible signature text", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser, storageKey } = mounted
+      expect(statusTexts(root)).not.toContain(
+        "Saved Mod+P for Open inspector Command."
+      )
+
+      await act(async () => keyCells(root)[0].props.onClick())
+      expect(statusTexts(root)).toContain(
+        "Press keys for Open inspector Command. Escape cancels."
+      )
+
+      await dispatchKey(browser, act, { key: "p", metaKey: true })
+      expect(statusTexts(root)).toContain(
+        "Saved Mod+P for Open inspector Command."
+      )
+      expect(storedBindings(browser, storageKey)[0].key).toBe("p")
+      // The announcement lives in the sr-only live region, not as visible text.
+      const announcement = root.root
+        .findAllByProps({ role: "status" })
+        .find((node) => nodeText(node) === "Saved Mod+P for Open inspector Command.")
+      expect(announcement.props.className).toContain("sr-only")
+    } finally {
+      await mounted.restore()
+    }
+  })
+
+  test("does not announce a save for a conflicting combo", async () => {
+    const mounted = await mountKeybindings()
+    try {
+      const { root, act, browser } = mounted
+      await act(async () => keyCells(root)[3].props.onClick())
+      await dispatchKey(browser, act, { key: "s", metaKey: true })
+
+      expect(
+        statusTexts(root).some((text) => text.startsWith("Saved "))
+      ).toBe(false)
+      expect(
+        root.root.findAllByProps({ role: "alert" }).map(nodeText)
+      ).toContain("Conflicts with Stash draft.")
+    } finally {
+      await mounted.restore()
+    }
+  })
+})
