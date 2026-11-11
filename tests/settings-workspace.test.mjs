@@ -501,3 +501,11 @@ test("RTL keeps wheel scrolling pointing at the end of the strip", async () => {
     else globalThis.document = previousDocument
   }
 })
+
+test("the app main pane can shrink below its content min-width", async () => {
+  const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text()
+  const main = app.slice(app.indexOf("<main"), app.indexOf("</main>"))
+  // Row-flex item: without min-w-0 the nowrap truncate rows in Settings >
+  // Agents push the pane's min-content past the viewport on mobile.
+  expect(main).toContain("min-w-0")
+})
