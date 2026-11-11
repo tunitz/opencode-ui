@@ -354,6 +354,17 @@ test("honours horizontal tablist semantics and 44px targets", async () => {
   expect(source).toContain("motion-reduce:transition-none")
 })
 
+test("the content grid cannot be widened by nowrap section rows", async () => {
+  const source = await Bun.file(
+    new URL("../src/components/settings-workspace.tsx", import.meta.url)
+  ).text()
+  // A bare `grid` uses an auto track whose min-content is the widest nowrap
+  // descendant, which pushes long agent cards past the mobile panel.
+  const gridClasses = source.match(/<div className="(grid [^"]*)">/)?.[1] ?? ""
+  expect(gridClasses).toContain("grid-cols-1")
+  expect(gridClasses).toContain("min-w-0")
+})
+
 test("both Settings entry points left-align their footer", async () => {
   const navigation = await Bun.file(
     new URL("../src/components/session-nav.tsx", import.meta.url)

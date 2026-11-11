@@ -302,6 +302,105 @@ const syntheticDiff = {
   ],
 }
 
+// Long agent identifiers, descriptions, and model slugs mirror a real global
+// catalog closely enough to stress the Settings workspace's layout without
+// reading anything from the machine running the test.
+const syntheticAgentName =
+  "Orchestrator with an extremely long multi-word identifier for mobile layouts that keeps going"
+const syntheticAgentID =
+  "orchestrator-with-an-extremely-long-multi-word-identifier-for-mobile-layouts-and-then-some-more"
+const syntheticAgentDescription =
+  "Coordinates repository-wide refactors, reviews every generated patch, verifies command output, " +
+  "and keeps synthetic browser fixtures aligned with the production Settings workspace layout across " +
+  "320px, 390px, and desktop widths without truncating important model selection context. ".repeat(3)
+
+function syntheticAgentSource(values: Record<string, unknown> = {}) {
+  return {
+    kind: "markdown",
+    relativePath: `agents/${syntheticAgentID}.md`,
+    label: `Global agents/${syntheticAgentID}.md`,
+    exists: true,
+    hash: "hash-source",
+    values,
+  }
+}
+
+function syntheticAgentEffective(overrides: Record<string, unknown> = {}) {
+  return {
+    model: {
+      providerID: "commandcode",
+      id: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
+    },
+    description: syntheticAgentDescription,
+    mode: "primary",
+    hidden: false,
+    steps: null,
+    disabled: null,
+    ...overrides,
+  }
+}
+
+const syntheticAgentCatalog = {
+  scope: "global",
+  project: null,
+  sourceLabel: "~/.config/opencode",
+  agents: [
+    {
+      id: syntheticAgentID,
+      name: syntheticAgentName,
+      effective: syntheticAgentEffective(),
+      source: syntheticAgentSource({
+        model: {
+          providerID: "commandcode",
+          id: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
+        },
+        description: syntheticAgentDescription,
+      }),
+      target: {
+        ...syntheticAgentSource(),
+        label: `Editable agents/${syntheticAgentID}.md`,
+      },
+      readonly: false,
+      permissionsReadOnly: false,
+      warnings: [],
+    },
+    {
+      id: "build",
+      name: "Build",
+      effective: syntheticAgentEffective({
+        description: "Implements changes and runs verification.",
+        mode: "primary",
+      }),
+      source: syntheticAgentSource({
+        description: "Implements changes and runs verification.",
+      }),
+      target: syntheticAgentSource(),
+      readonly: false,
+      permissionsReadOnly: false,
+      warnings: [],
+    },
+    {
+      id: "subagent-with-a-long-identifier-for-command-review-and-diff-analysis",
+      name: "Command review and diff analysis subagent with a long name",
+      effective: syntheticAgentEffective({
+        description:
+          "Reviews shell commands and diffs, then reports risk with file-level evidence. ".repeat(4),
+        mode: "subagent",
+        model: {
+          providerID: "anthropic",
+          id: "claude-sonnet-4-5-20250929-thinking-extended-context",
+        },
+      }),
+      source: null,
+      target: null,
+      readonly: true,
+      permissionsReadOnly: false,
+      warnings: [],
+    },
+  ],
+  warnings: [],
+}
+
 function json(body: unknown, status = 200) {
   return Response.json(body, {
     status,
@@ -351,6 +450,14 @@ const server = Bun.serve({
           },
         ],
       })
+    }
+    if (pathname === "/api/ui/agents") {
+      return request.method === "GET"
+        ? json(syntheticAgentCatalog)
+        : json({ error: { code: "read_only", message: "Synthetic agent catalog is read-only." } }, 405)
+    }
+    if (pathname === "/api/ui/auth/status") {
+      return json({ configured: true, required: true, authenticated: true })
     }
     if (pathname === "/api/location") {
       const requested =
@@ -2837,6 +2944,206 @@ if (browser) {
       check("no page errors", opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
     } finally {
       await opened.context.close()
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Settings > Agents fit
+// ---------------------------------------------------------------------------
+if (browser) {
+  await run("Settings > Agents keeps long agent cards inside the panel at 320, 390, and desktop", async ({ check }) => {
+    for (const width of [320, 390, 1280]) {
+      const height = width === 1280 ? 900 : 844
+      const opened = await openPage({ width, height }, "settings")
+      const page = opened.page
+      try {
+        await page.getByRole("heading", { name: "Agents", exact: true }).waitFor({ state: "visible" })
+        const longRow = page.getByRole("button", { name: new RegExp("Orchestrator with an extremely long") }).first()
+        await longRow.waitFor({ state: "visible" })
+
+        const list = await page.evaluate(() => {
+          const panel = document.querySelector('[role="tabpanel"]')
+          if (!(panel instanceof HTMLElement)) return null
+          const panelRect = panel.getBoundingClientRect()
+          const cards = [...panel.querySelectorAll('[data-slot="accordion-item"]')].map((element) => {
+            const rect = element.getBoundingClientRect()
+            return { left: rect.left, right: rect.right, width: rect.width }
+          })
+          const rows = [...panel.querySelectorAll("li button")].map((element) => {
+            const rect = element.getBoundingClientRect()
+            return { right: rect.right, width: rect.width }
+          })
+          // Any visible element wholly outside the panel means a child escaped
+          // the panel, even when the document itself still clips the page.
+          const offenders = [...panel.querySelectorAll("*")]
+            .filter((element) => {
+              const rect = element.getBoundingClientRect()
+              // Skip visually hidden 1px controls and unpainted boxes.
+              if (rect.width <= 1 || rect.height <= 1) return false
+              return rect.right > panelRect.right + 1 || rect.left < panelRect.left - 1
+            })
+            .slice(0, 5)
+            .map((element) => ({
+              tag: element.tagName,
+              text: (element.textContent ?? "").trim().slice(0, 40),
+              right: element.getBoundingClientRect().right,
+            }))
+          return {
+            panelLeft: panelRect.left,
+            panelRight: panelRect.right,
+            panelClientWidth: panel.clientWidth,
+            panelScrollWidth: panel.scrollWidth,
+            cards,
+            rows,
+            offenders,
+          }
+        })
+        check(
+          `${width}px: tabpanel has no horizontal overflow`,
+          Boolean(list && list.panelScrollWidth <= list.panelClientWidth + 1),
+          JSON.stringify(list && { client: list.panelClientWidth, scroll: list.panelScrollWidth })
+        )
+        const listLeft = list?.panelLeft ?? 0
+        const listRight = list?.panelRight ?? 0
+        check(
+          `${width}px: every agent card stays inside the panel`,
+          Boolean(
+            list &&
+              list.cards.length >= 2 &&
+              list.cards.every(
+                (card) => card.left >= listLeft - 1 && card.right <= listRight + 1
+              )
+          ),
+          JSON.stringify(list?.cards)
+        )
+        check(
+          `${width}px: agent rows stay inside the card`,
+          Boolean(
+            list &&
+              list.rows.length >= 2 &&
+              list.rows.every((row) => row.right <= listRight + 1)
+          ),
+          JSON.stringify(list?.rows)
+        )
+        check(
+          `${width}px: no descendant escapes the panel`,
+          Boolean(list && list.offenders.length === 0),
+          JSON.stringify(list?.offenders)
+        )
+        const pageOverflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth
+        )
+        check(`${width}px: page has no horizontal overflow`, pageOverflow <= 0, `overflow=${pageOverflow}`)
+
+        // The long identifier must stay inside its row, truncating where the
+        // row is too narrow and simply fitting on a wide desktop card.
+        const modelFit = await longRow.evaluate((element) => {
+          const spans = [...element.querySelectorAll("span")]
+          const model = spans.find((span) => span.textContent?.includes("commandcode/"))
+          if (!model) return null
+          return {
+            fits: model.scrollWidth <= model.clientWidth + 1,
+            clips: getComputedStyle(model).overflow === "hidden",
+            inside:
+              model.getBoundingClientRect().right <= element.getBoundingClientRect().right + 1,
+          }
+        })
+        check(
+          `${width}px: long model id stays inside its row`,
+          Boolean(modelFit && (modelFit.fits || modelFit.clips) && modelFit.inside),
+          JSON.stringify(modelFit)
+        )
+        if (width < 500) {
+          check(
+            `${width}px: long model id is truncated, not widened`,
+            Boolean(modelFit && !modelFit.fits && modelFit.clips),
+            JSON.stringify(modelFit)
+          )
+        }
+
+        await page.screenshot({
+          path: join(shotDir, `settings-agents-list-${width}.png`),
+          fullPage: true,
+        })
+
+        await longRow.click()
+        await page.getByRole("button", { name: "Back to all agents" }).waitFor({ state: "visible" })
+        const detail = await page.evaluate(() => {
+          const panel = document.querySelector('[role="tabpanel"]')
+          if (!(panel instanceof HTMLElement)) return null
+          const panelRect = panel.getBoundingClientRect()
+          const offenders = [...panel.querySelectorAll("*")]
+            .filter((element) => {
+              const rect = element.getBoundingClientRect()
+              // Skip visually hidden 1px controls and unpainted boxes.
+              if (rect.width <= 1 || rect.height <= 1) return false
+              return rect.right > panelRect.right + 1 || rect.left < panelRect.left - 1
+            })
+            .slice(0, 5)
+            .map((element) => ({
+              tag: element.tagName,
+              text: (element.textContent ?? "").trim().slice(0, 40),
+              right: element.getBoundingClientRect().right,
+            }))
+          const fieldsets = [...panel.querySelectorAll("fieldset")].map((element) => {
+            const rect = element.getBoundingClientRect()
+            return { left: rect.left, right: rect.right }
+          })
+          return {
+            panelLeft: panelRect.left,
+            panelRight: panelRect.right,
+            panelClientWidth: panel.clientWidth,
+            panelScrollWidth: panel.scrollWidth,
+            fieldsets,
+            offenders,
+          }
+        })
+        check(
+          `${width}px: detail tabpanel has no horizontal overflow`,
+          Boolean(detail && detail.panelScrollWidth <= detail.panelClientWidth + 1),
+          JSON.stringify(detail && { client: detail.panelClientWidth, scroll: detail.panelScrollWidth })
+        )
+        const detailLeft = detail?.panelLeft ?? 0
+        const detailRight = detail?.panelRight ?? 0
+        check(
+          `${width}px: detail fields stay inside the panel`,
+          Boolean(
+            detail &&
+              detail.fieldsets.length >= 1 &&
+              detail.fieldsets.every(
+                (fieldset) =>
+                  fieldset.left >= detailLeft - 1 && fieldset.right <= detailRight + 1
+              )
+          ),
+          JSON.stringify(detail?.fieldsets)
+        )
+        check(
+          `${width}px: no detail descendant escapes the panel`,
+          Boolean(detail && detail.offenders.length === 0),
+          JSON.stringify(detail?.offenders)
+        )
+        const detailPageOverflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth
+        )
+        check(
+          `${width}px: detail page has no horizontal overflow`,
+          detailPageOverflow <= 0,
+          `overflow=${detailPageOverflow}`
+        )
+
+        await page.screenshot({
+          path: join(shotDir, `settings-agents-detail-${width}.png`),
+          fullPage: true,
+        })
+        check(`${width}px: no page errors`, opened.pageErrors.length === 0, opened.pageErrors.join(" | "))
+        mergeDiagnostics(
+          results.find((result) => result.name.startsWith("Settings > Agents keeps"))!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
     }
   })
 }

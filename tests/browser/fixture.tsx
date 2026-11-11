@@ -10,6 +10,7 @@ import { StrictMode, useEffect, useState, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { AppDirection } from "@/components/app-direction"
+import { AuthGateProvider } from "@/components/auth-context"
 import { AppHeader } from "@/components/app-header"
 import { CommandCenter } from "@/components/command-center"
 import { Composer } from "@/components/composer"
@@ -18,6 +19,8 @@ import { ChangesPanel } from "@/components/files-panel"
 import { ModelSettingsDrawer } from "@/components/model-settings"
 import { NotesProvider, NotesSidebar, NotesWorkspace } from "@/components/notes-sidebar"
 import { PendingInbox } from "@/components/pending-inbox"
+import { SettingsProvider, useSettingsWorkspace } from "@/components/settings-context"
+import { SettingsWorkspace } from "@/components/settings-workspace"
 import { SessionInspector, SessionInspectorPanel } from "@/components/session-inspector"
 import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -25,6 +28,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import type { FormInfo, SessionInfo, SessionMessageInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
+import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
 
 type QACall = { kind: string; value?: string }
 type QAWindow = Window & {
@@ -689,6 +693,101 @@ function PendingFixture() {
   )
 }
 
+// Long synthetic identifiers exercise the same min-content pressure as real
+// provider slugs and markdown agent ids without reading any live catalog.
+const settingsModels = [
+  {
+    id: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
+    modelID: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
+    providerID: "commandcode",
+    name: "DeepSeek V4.1 Flash Extended Context Preview",
+    variants: [{ id: "high" }, { id: "low" }],
+    enabled: true,
+    status: "active",
+    capabilities: {},
+    cost: [],
+    limit: { context: 1000000, output: 64000 },
+    time: { released: now },
+  },
+  {
+    id: "claude-sonnet-4-5-20250929-thinking-extended-context",
+    modelID: "claude-sonnet-4-5-20250929-thinking-extended-context",
+    providerID: "anthropic",
+    name: "Claude Sonnet 4.5 Thinking Extended Context",
+    variants: [{ id: "high" }],
+    enabled: true,
+    status: "active",
+    capabilities: {},
+    cost: [],
+    limit: { context: 200000, output: 64000 },
+    time: { released: now },
+  },
+] as unknown as OpenCodeController["models"]
+
+function useSettingsNav() {
+  const nav = useSyntheticNav()
+  return {
+    ...nav,
+    models: settingsModels,
+    modelsStatus: "ready",
+    modelsError: null,
+    agents: [
+      {
+        id: "orchestrator-with-an-extremely-long-multi-word-identifier-for-mobile-layouts",
+        name: "Orchestrator with an extremely long multi-word identifier for mobile layouts",
+        mode: "primary",
+        hidden: false,
+      },
+    ],
+    agentsStatus: "ready",
+    agentsError: null,
+  } as unknown as OpenCodeController
+}
+
+function SettingsShell({ nav }: { nav: OpenCodeController }) {
+  useAppViewportHeight()
+  const settings = useSettingsWorkspace()
+  useEffect(() => {
+    settings.openSettings("agents")
+    // Open once for this fixture; the workspace layout is the subject.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Render the shell only once Settings is the active pane; the header's
+  // closed-state controls are covered by other fixtures.
+  if (!settings.open) return null
+  return (
+    <div className="app-height app-viewport bg-background md:flex md:h-svh md:overflow-hidden">
+      <div className="app-height flex min-w-0 flex-1 flex-col md:h-svh">
+        <AppHeader nav={nav} onOpenSettings={() => undefined} onOpenWorktrees={() => undefined} />
+        <main
+          id="chat-main"
+          tabIndex={-1}
+          className="flex min-h-0 w-full min-w-0 flex-1 flex-col focus:outline-none"
+        >
+          {settings.open ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
+              <SettingsWorkspace nav={nav} />
+            </div>
+          ) : null}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+function SettingsFixture() {
+  const nav = useSettingsNav()
+  return (
+    <AuthGateProvider>
+      <Providers nav={nav}>
+        <SettingsProvider>
+          <SettingsShell nav={nav} />
+        </SettingsProvider>
+      </Providers>
+    </AuthGateProvider>
+  )
+}
+
 function Fixture() {
   const fixture = new URLSearchParams(window.location.search).get("fixture")
   switch (fixture) {
@@ -712,6 +811,8 @@ function Fixture() {
       return <InspectorFixture />
     case "pending":
       return <PendingFixture />
+    case "settings":
+      return <SettingsFixture />
     case "nav":
     default:
       return <NavFixture />
@@ -722,7 +823,12 @@ const root = document.getElementById("root")
 if (!root) throw new Error("Missing #root")
 createRoot(root).render(
   <StrictMode>
-    <div data-fixture={new URLSearchParams(window.location.search).get("fixture") ?? "nav"}>
+    {/* The fixed app shell does not contribute height to this wrapper, but the
+        browser runner waits for the fixture marker to be visible. */}
+    <div
+      data-fixture={new URLSearchParams(window.location.search).get("fixture") ?? "nav"}
+      style={{ minHeight: "100svh" }}
+    >
       <Fixture />
     </div>
   </StrictMode>

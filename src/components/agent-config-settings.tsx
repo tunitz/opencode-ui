@@ -836,7 +836,10 @@ export function AgentConfigSettings({
             </Button>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span dir="ltr" className="text-[15px] font-medium">
+                <span
+                  dir="ltr"
+                  className="min-w-0 break-words text-[15px] font-medium"
+                >
                   {selected.name && selected.name !== selected.id
                     ? selected.name
                     : selected.id}
@@ -848,7 +851,7 @@ export function AgentConfigSettings({
                 ) : null}
               </div>
               {selected.effective?.description ? (
-                <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 break-words text-muted-foreground">
                   {selected.effective.description}
                 </p>
               ) : null}

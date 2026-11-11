@@ -245,7 +245,9 @@ export function SettingsWorkspace({ nav }: { nav: OpenCodeController }) {
         tabIndex={0}
         className="min-h-0 min-w-0 flex-1 overflow-y-auto pt-4 pb-2 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring/40"
       >
-        <div className="grid gap-4">
+        {/* An explicit minmax(0,1fr) track keeps long, nowrap agent rows from
+            sizing this grid (and the cards inside it) past the panel width. */}
+        <div className="grid min-w-0 grid-cols-1 gap-4">
           <div className="space-y-1">
             <h2 className="text-xl font-semibold tracking-tight">
               {active.label}
