@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { join, resolve } from "node:path"
 import { parse as parseJsonc } from "jsonc-parser"
 import { createPluginsApi } from "../server/plugins-api.ts"
 
@@ -116,6 +116,9 @@ function notesConfig(repoRoot = BASE_REPO) {
 function mediaConfig(repoRoot = BASE_REPO, env) {
   return {
     type: "local",
+    command: [
+      process.execPath,
+    ],
     disabled: false,
     codemode: false,
     ...(env === undefined ? {} : { env }),
@@ -173,26 +176,26 @@ function apiFor(url, configDirectory, repoRoot = BASE_REPO, extra = {}) {
   })
 }
 
-const MEDIA_BRIDGE_FILES = [
-  "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js",
-  "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js",
-  "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
-]
-
-async function writeMediaBridge(dir, files = MEDIA_BRIDGE_FILES) {
-  for (const relative of files) {
-    const path = join(dir, relative)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, "// synthetic SDK module\n")
-  }
-}
-
-async function repoRootWith(pluginIds, { mediaBridge = true } = {}) {
+async function repoRootWith(pluginIds) {
   const dir = await configDir()
   for (const id of pluginIds) {
-    const entry = join(dir, "plugins", id, "src", "mcp")
-    await mkdir(entry, { recursive: true })
-    await writeFile(join(entry, "main.ts"), "// synthetic test entry\n")
+    if (id === "notes") {
+      const entry = join(dir, "plugins", "notes", "src", "mcp")
+      await mkdir(entry, { recursive: true })
+      await writeFile(join(entry, "main.ts"), "// synthetic test entry\n")
+      continue
+    }
+      const entry = join(packageRoot, "src", "mcp")
+      await mkdir(entry, { recursive: true })
+      await writeFile(
+        join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          version: "0.1.0",
+          exports: { "./mcp/main": "./src/mcp/main.ts" },
+        }, null, 2)}\n`
+      )
+      await writeFile(join(entry, "main.ts"), "// synthetic test entry\n")
+    }
   }
   return dir
 }
@@ -598,27 +601,6 @@ describe("Plugins HTTP API", () => {
   })
 
     const dir = await configDir()
-    const payload = await (await get(apiFor(engine.url, dir, repoRoot))).json()
-    expect(payload.plugins[1]).toEqual(pluginStatus(MEDIA_PLUGIN, { configured: true }))
-
-    const before = await readFile(path, "utf8")
-    expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe("plugin_not_installed")
-    expect(await readFile(path, "utf8")).toBe(before)
-    expect(engine.state.calls.some((call) => call.method === "PUT")).toBe(false)
-  })
-
-    const dir = await configDir()
-    await unlink(join(repoRoot, MEDIA_BRIDGE_FILES[2]))
-    const engine = fakeEngine({})
-    const payload = await (await get(apiFor(engine.url, dir, repoRoot))).json()
-    expect(payload.plugins[1]).toMatchObject({ installed: false, registered: false })
-
-    expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe("plugin_not_installed")
-  })
-
-    const dir = await configDir()
     const engine = fakeEngine({ connectOnAdd: true })
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe("plugin_not_installed")
@@ -667,7 +649,6 @@ describe("Plugins HTTP API", () => {
     await writeFile(real, "// real entry\n")
     await mkdir(entryDir, { recursive: true })
     await symlink(real, join(entryDir, "main.ts"))
-    await writeMediaBridge(repoRoot)
 
     const payload = await (await get(apiFor(engine.url, dir, repoRoot))).json()
     expect(payload.plugins[1]).toEqual(pluginStatus(MEDIA_PLUGIN, { configured: true }))

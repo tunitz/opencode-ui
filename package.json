@@ -22,14 +22,16 @@
   "type": "module",
   "packageManager": "bun@1.4.4",
   "workspaces": [
-    "plugins/notes"
+    "plugins/notes",
   ],
   "engines": {
     "bun": "1.4.4"
   },
   "bin": {
-    "opencode-ui": "bin/opencode-ui.ts"
+    "opencode-ui": "bin/opencode-ui.ts",
   },
+  "bundledDependencies": [
+  ],
   "files": [
     "bin/opencode-ui.ts",
     "server/bun-server.ts",
@@ -83,6 +85,7 @@
     "@lexical/react": "^0.53.0",
     "@opencode/client": "2.1.4",
     "@openuidev/react-ui": "0.18.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@tunitz/opencode-notes": "workspace:*",
     "@tanstack/react-virtual": "^3.14.22",
     "@xterm/addon-fit": "^0.11.0",
@@ -125,5 +128,7 @@
     "react-test-renderer": "19.3.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.0"
+  },
+  "optionalDependencies": {
   }
 }

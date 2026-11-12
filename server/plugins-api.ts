@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { link, lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises"
+import { createRequire } from "node:module"
 import { homedir, hostname } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 import {
@@ -38,8 +39,8 @@ type PluginDescriptor = {
   /** Canonical `mcp.servers.<id>` entry; may throw when trusted launch env is invalid. */
   mcpConfig: (entryPath: string, env: NodeJS.ProcessEnv) => Record<string, unknown>
   /**
-   * Extra absolute files the entry needs at runtime. Used to fail closed when a
-   * installed package, even though the entry file itself was packed.
+   * Extra absolute files the entry needs at runtime, for descriptors whose
+   * and resolves it normally, so it uses only the entry check.
    */
   requiredRuntimeFiles?: (repoRoot: string) => string[]
   /** Compare the entry's env exactly so a stale data directory is rewritten. */
@@ -63,6 +64,7 @@ const PLUGINS: readonly PluginDescriptor[] = [
   {
     id: MEDIA_PLUGIN_ID,
     description: "Sonarr, Radarr, Prowlarr, Seerr and Jellyfin management for agents.",
+    entryPath: mediaEntryPath,
     mcpConfig: (entryPath, env) => {
       const dataDir = mediaDataDir(env)
       return {
@@ -73,28 +75,27 @@ const PLUGINS: readonly PluginDescriptor[] = [
         ...(dataDir === undefined ? {} : { env: { [MEDIA_DATA_DIR_ENV]: dataDir } }),
       }
     },
-    // the Notes workspace's SDK install, so the packed entry only works when
-    // declares the SDK dependency (and imports it by package name) this stays
-    // fail-closed instead of advertising a broken registration.
-    requiredRuntimeFiles: (repoRoot) => [
-      resolve(
-        repoRoot,
-        "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js"
-      ),
-      resolve(
-        repoRoot,
-        "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js"
-      ),
-      resolve(
-        repoRoot,
-        "plugins/notes/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js"
-      ),
-    ],
     managesEnv: true,
   },
 ]
 
 const PLUGINS_BY_ID = new Map(PLUGINS.map((plugin) => [plugin.id, plugin]))
+
+/**
+ * rooted at the installation, not this module, so a workspace link and a
+ * bundled dependency resolve identically. The fallback is still a
+ * `node_modules` path, so a missing package fails the `lstat` installation
+ * check instead of falling back to a checkout-relative entry.
+ */
+function mediaEntryPath(repoRoot: string): string {
+  try {
+    const requireFromRoot = createRequire(join(repoRoot, "package.json"))
+  } catch {
+    return resolve(
+      repoRoot,
+    )
+  }
+}
 
 /**
  * resolved, non-secret path to the MCP child; never an arbitrary request value.

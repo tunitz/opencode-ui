@@ -138,13 +138,14 @@ and an engine restart may be required.
 - `POST /api/ui/plugins/<id>/enable` → sets `mcp.servers.<id>` to the descriptor's canonical entry.
   For Notes that is
   `{ "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false }`.
+  dependency resolved with `createRequire`, with a `node_modules` fail-closed fallback), plus
   `"env": { "OPENCODE_MEDIA_DATA_DIR": "<absolute path>" }` only when the trusted launch environment
   supplies an absolute, control-character-free override; a relative or invalid override fails
-  requires the checkout-only MCP SDK runtime files, so a packed install without them is not
-  `installed`.
+  only its installed entry, because the package declares and bundles its MCP SDK dependency and
+  no longer uses checkout-only runtime files.
   The bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH.
-  The plugin's entry file and every descriptor-required runtime file must exist in the installation
-  root, matching what `GET` reports as `installed`; otherwise 409
+  The plugin's entry file must exist in the installation root, matching what `GET` reports as
+  `installed`; otherwise 409
   `{ error: { code: "plugin_not_installed" } }` and nothing is persisted.
   The global config directory follows `$OPENCODE_CONFIG_DIR` → `$XDG_CONFIG_HOME/opencode` →
   `~/.config/opencode`; `opencode.jsonc` is preferred when present, else `opencode.json`. The edit
