@@ -218,15 +218,16 @@ become `{}`. Those fields are therefore already within the projection's closed v
 effects are re-sanitized here rather than trusted from the row.
 
 
-`POST /connection-candidates` and `POST /instances` answer `501 unavailable` with
-`"Connection setup is disabled: this build cannot verify an explicit human target review and Save
-confirmation."` before any session check, DNS lookup, body parse or store access. The application
-reports `connectionSetupKind: "legacy" | "trusted"`; production composition
-(`server/bun-server.ts`) passes no `connectionTrust`, so the kind is `legacy` and both routes stay
-closed. The compiled-but-disabled trusted path returns a one-use review token in the review response
-body and requires `{ candidateID, reviewToken }` at save; the legacy path requires only
-`{ candidateID }`. Neither token nor cookie is human proof, and the trusted path is still blocked
-because the `connections/trust` verifier has no per-request evidence channel (see
+`POST /connection-candidates`, `POST /connection-step-up` and `POST /instances` answer `501
+unavailable` with `"Connection setup is disabled: this build cannot verify an explicit human target
+review and Save confirmation."` before any session check, DNS lookup, body parse, password check or
+store access. The application reports `connectionSetupKind: "legacy" | "trusted"`; production
+composition (`server/bun-server.ts`) passes no `connectionTrust`, so the kind is `legacy` and all
+three routes stay closed. The compiled-but-disabled trusted path returns a one-use review token in
+the review response body, mints a one-use step-up ticket after re-checking the access password, and
+requires `{ candidateID, reviewToken, stepUpTicket }` at save; the legacy path requires only
+`{ candidateID }`. Neither token, ticket nor cookie is human proof; the trusted composition is
+blocked until the browser surface and its confirmation evidence are reviewed (see
 
 ## Dispatch order [app layer]
 

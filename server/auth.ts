@@ -217,6 +217,22 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     return result
   }
 
+  /**
+   * Run a read-only check on the same serialization queue as `mutate`.
+   *
+   * A password re-check must not write the state file, but it must still be
+   * ordered against `login` so the shared failure counter and the session list
+   * cannot drift under concurrency.
+   */
+  function serialized<T>(change: (target: AuthState) => Promise<T> | T): Promise<T> {
+    const result = queue.then(async () => change(await load()))
+    queue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   function validSession(target: AuthState, token: string | null): boolean {
     if (!token) return false
     const tokenHash = hashSessionToken(token)
@@ -303,6 +319,36 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     })
   }
 
+  /**
+   * Re-verify the access password without minting a session.
+   *
+   * This exists for a step-up check on an already-authenticated request (the
+   * *and* the password before a sensitive action. It shares login's failed-attempt
+   * counter and failure delay, so it is not a cheaper brute-force oracle than
+   * login: the same per-remote window and ceiling apply, a failure is counted
+   * identically, and a failure is delayed identically. It deliberately does not
+   * clear the counter on success, because it does not create a session; login
+   * remains the only place a successful password check resets the window.
+   *
+   * Nothing is persisted: a successful check mutates no state, so this cannot be
+   * used to probe or change the stored hash.
+   */
+  async function verifyPassword(password: unknown, remote: string): Promise<void> {
+    if (typeof password !== "string") throw new AuthError(400, "invalid")
+    await serialized(async (target) => {
+      if (recentFailures(remote).length >= AUTH_MAX_FAILED_ATTEMPTS)
+        throw new AuthError(429, "too_many_attempts")
+      if (target.passwordHash === null) throw new AuthError(409, "not_configured")
+      if (!(await passwordHasher().verify(password, target.passwordHash))) {
+        const attempts = recentFailures(remote)
+        attempts.push(now())
+        failures.set(remote, attempts)
+        if (failureDelayMs > 0) await delay(failureDelayMs)
+        throw new AuthError(401, "invalid_credentials")
+      }
+    })
+  }
+
   async function logout(request: Request): Promise<void> {
     const token = sessionTokenFrom(request)
     if (!token) return
@@ -344,6 +390,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     status,
     setup,
     login,
+    verifyPassword,
     logout,
     changePassword,
   }
