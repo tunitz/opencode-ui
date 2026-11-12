@@ -5,6 +5,9 @@ import { createAgentConfigService } from "./agent-config.ts"
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createAuthService } from "./auth.ts"
 import { createNotesApi } from "./notes-api.ts"
+import {
+  createMediaUiConfirmationStore,
+  createMediaUiConnectionVerifier,
 import { createPluginsApi } from "./plugins-api.ts"
 import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
@@ -207,7 +210,22 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const notes = createNotesApi()
-    application: createMediaApplication(),
+  const connectionConfirmations = createMediaUiConfirmationStore()
+    application: createMediaApplication({
+      // This is the production trusted setup composition. The application builds
+      // its review-token and step-up-ticket registries from these options; the
+      // verifier redeems only confirmations recorded by this same process.
+      connectionTrust: {
+        confirmations: connectionConfirmations,
+        verify: createMediaUiConnectionVerifier(connectionConfirmations),
+        evidence: { kind: "required", channels: ["ui"] },
+      },
+      // Step-up shares the login failure counter and delay. The password never
+      // leaves the body-only step-up request or becomes a stored connection
+      // credential.
+      verifyStepUpPassword: (password, remote) =>
+        auth.verifyPassword(password, remote),
+    }),
     // Credential-bearing routes need a provable human session, not just a
     // loopback connection: `createMediaHumanGate` refuses when no password-backed
     // session exists instead of claiming the caller is authenticated.

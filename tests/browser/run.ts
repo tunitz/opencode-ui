@@ -43,6 +43,13 @@ const fsListRequests: string[] = []
 const notFound: string[] = []
 const mediaRequests: string[] = []
 const mediaInstanceRequests: string[] = []
+type MediaSetupRequest = {
+  method: string
+  path: string
+  search: string
+  body: Record<string, unknown>
+}
+const mediaSetupRequests: MediaSetupRequest[] = []
 const results: Result[] = []
 
 type FixtureSpace = {
@@ -246,6 +253,12 @@ const fixtureMediaDiagnostics: FixtureMediaDiagnostic[] = [
   { id: "future-instance", reason: "service_invalid" },
   { id: null, reason: "id_invalid" },
 ]
+
+const FIXTURE_CONNECTION_CANDIDATE = "c".repeat(64)
+const FIXTURE_REVIEW_TOKEN = "a".repeat(64)
+const FIXTURE_STEP_UP_TICKET = "b".repeat(64)
+let fixtureAddedMediaInstance: FixtureMediaInstance | null = null
+let fixtureReviewedMediaName: string | null = null
 
 function spacesFor(directory: string | null): FixtureSpace[] {
   if (!directory) return [...fixtureSpaces]
@@ -603,6 +616,105 @@ const server = Bun.serve({
         reason: "not_implemented",
       })
     }
+      if (request.method !== "POST")
+        return json({ error: { code: "method_not_allowed" } }, 405)
+      const body = (await request.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >
+      mediaSetupRequests.push({
+        method: request.method,
+        path: pathname,
+        search: url.search,
+        body,
+      })
+      const now = Date.now()
+      fixtureReviewedMediaName = name
+      const service =
+        typeof body.service === "string" ? body.service : "sonarr"
+      return json({
+        candidateID: FIXTURE_CONNECTION_CANDIDATE,
+        service,
+        name,
+        target: {
+          urlBase: "/sonarr",
+        },
+        addresses: ["203.0.113.15", "203.0.113.16"],
+        createdAt: now,
+        expiresAt: now + 180_000,
+        verification: {
+          state: "unverified",
+          reason: "no-upstream-request-performed",
+        },
+        review: {
+          reviewID: `connrev_${"d".repeat(32)}`,
+          materialHash: "e".repeat(64),
+          token: FIXTURE_REVIEW_TOKEN,
+          issuedAt: now,
+          expiresAt: now + 120_000,
+          reviewExpiresAt: now + 150_000,
+        },
+      })
+    }
+      if (request.method !== "POST")
+        return json({ error: { code: "method_not_allowed" } }, 405)
+      const body = (await request.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >
+      mediaSetupRequests.push({
+        method: request.method,
+        path: pathname,
+        search: url.search,
+        body,
+      })
+      return json({
+        ticket: FIXTURE_STEP_UP_TICKET,
+        expiresAt: Date.now() + 60_000,
+      })
+    }
+      if (request.method === "POST") {
+        const body = (await request.json().catch(() => ({}))) as Record<
+          string,
+          unknown
+        >
+        mediaSetupRequests.push({
+          method: request.method,
+          path: pathname,
+          search: url.search,
+          body,
+        })
+        fixtureAddedMediaInstance = {
+          id: "sonarr-added",
+          service: "sonarr",
+          name: fixtureReviewedMediaName ?? "Added Sonarr",
+          disabled: false,
+          configError: null,
+          verifiedVersion: null,
+          profile: null,
+          revision: 1,
+          credentials: { apiKey: false, userToken: false },
+          actorConfigured: false,
+          approvedAddressCount: 2,
+          importRootCount: 0,
+          readiness: "missing-credential",
+        }
+        return json(
+          {
+            instanceID: fixtureAddedMediaInstance.id,
+            service: fixtureAddedMediaInstance.service,
+            name: fixtureAddedMediaInstance.name,
+            revision: 1,
+            approvedAddressCount: 2,
+            writePolicy: { ui: false, mcp: false, cli: false, sdk: false },
+            verification: {
+              state: "unverified",
+              reason: "no-connection-test-performed",
+            },
+          },
+          201
+        )
+      }
       if (request.method !== "GET")
         return json({ error: { code: "method_not_allowed" } }, 405)
       mediaRequests.push(pathname)
@@ -616,15 +728,24 @@ const server = Bun.serve({
         diagnosticsCursor !== "diagnostics-next"
       )
         return json({ error: { code: "invalid" } }, 400)
-      const instances =
-        cursor === "instances-next"
-          ? fixtureMediaInstances.slice(2)
-          : fixtureMediaInstances.slice(0, 2)
+      const allInstances = fixtureAddedMediaInstance
+        ? [...fixtureMediaInstances, fixtureAddedMediaInstance]
+        : fixtureMediaInstances
+      const instances = fixtureAddedMediaInstance
+        ? allInstances
+        : cursor === "instances-next"
+          ? allInstances.slice(2)
+          : allInstances.slice(0, 2)
       const diagnostics =
         diagnosticsCursor === "diagnostics-next"
           ? fixtureMediaDiagnostics.slice(1)
           : fixtureMediaDiagnostics.slice(0, 1)
-      const nextInstances = cursor === null ? "instances-next" : null
+      const nextInstances =
+        fixtureAddedMediaInstance !== null
+          ? null
+          : cursor === null
+            ? "instances-next"
+            : null
       const nextDiagnostics =
         diagnosticsCursor === null ? "diagnostics-next" : null
       return json({
@@ -632,7 +753,7 @@ const server = Bun.serve({
         diagnostics,
         limit: 50,
         counts: {
-          instances: fixtureMediaInstances.length,
+          instances: allInstances.length,
           diagnostics: fixtureMediaDiagnostics.length,
         },
         truncated: {
@@ -4893,6 +5014,226 @@ if (browser) {
           )
           check(
             `${width}px: no console errors`,
+            opened.consoleErrors.length === 0,
+            opened.consoleErrors.join(" | ")
+          )
+          mergeDiagnostics(
+            results.find((result) =>
+            )!,
+            opened
+          )
+        } finally {
+          await opened.context.close()
+        }
+      }
+    }
+  )
+}
+
+if (browser) {
+  await run(
+    async ({ check }) => {
+      const scenarios = [
+        {
+          width: 1280,
+          height: 900,
+          theme: "light" as const,
+          dir: "ltr" as const,
+          reducedMotion: "no-preference" as const,
+        },
+        {
+          width: 390,
+          height: 844,
+          theme: "dark" as const,
+          dir: "rtl" as const,
+          reducedMotion: "reduce" as const,
+        },
+        {
+          width: 390,
+          height: 844,
+          theme: "system" as const,
+          dir: "ltr" as const,
+          reducedMotion: "reduce" as const,
+        },
+      ]
+      for (const scenario of scenarios) {
+        const { width, height } = scenario
+        mediaRequests.length = 0
+        mediaInstanceRequests.length = 0
+        mediaSetupRequests.length = 0
+        fixtureAddedMediaInstance = null
+        fixtureReviewedMediaName = null
+        const opened = await openPage(
+          { width, height },
+          scenario.theme === "system" ? undefined : { theme: scenario.theme },
+          { dir: scenario.dir, reducedMotion: scenario.reducedMotion }
+        )
+        const page = opened.page
+        try {
+          const themePreference = await page.evaluate(() =>
+            window.localStorage.getItem("theme")
+          )
+          const direction = await page.evaluate(
+            () => getComputedStyle(document.documentElement).direction
+          )
+          const reducedMotion = await page.evaluate(() =>
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          )
+          check(
+            `${width}px ${scenario.theme}: setup inherits the requested theme mode`,
+            scenario.theme === "system"
+              ? themePreference === null
+              : themePreference === scenario.theme,
+            `preference=${themePreference}`
+          )
+          check(
+            `${width}px ${scenario.dir}: setup follows document direction`,
+            direction === scenario.dir
+          )
+          check(
+            `${width}px: setup respects reduced-motion preference`,
+            reducedMotion === (scenario.reducedMotion === "reduce")
+          )
+            state: "visible",
+          })
+          await page
+            .click()
+          await page
+            .getByRole("heading", { name: "Configured instances", level: 4 })
+            .waitFor({ state: "visible" })
+
+          const addButton = page.getByRole("button", { name: "Add connection" })
+          const addBox = await addButton.boundingBox()
+          check(
+            `${width}px: Add connection has a 44px target`,
+            Boolean(addBox && addBox.height >= 44),
+            JSON.stringify(addBox)
+          )
+          await addButton.click()
+          await page.getByRole("dialog").waitFor({ state: "visible" })
+          await page.getByLabel("Display name").fill("Browser Sonarr")
+          await page
+            .getByLabel("Base URL")
+          await page.getByRole("button", { name: "Review target" }).click()
+          await page.getByRole("heading", { name: "Review summary" }).waitFor({
+            state: "visible",
+          })
+
+          const reviewText = await page.getByRole("dialog").innerText()
+          check(
+            `${width}px: review shows canonical target, hostname, URL base, resolved addresses and HTTP warning`,
+              reviewText.includes("/sonarr") &&
+              reviewText.includes("203.0.113.15") &&
+              reviewText.includes("203.0.113.16") &&
+              reviewText.includes("Plaintext HTTP") &&
+              reviewText.includes("Review expires in")
+          )
+          check(
+            `${width}px: review states no credential and disabled writes`,
+            reviewText.includes("No credential is sent now. Writes stay disabled.") &&
+              reviewText.includes("Reads are not yet available.")
+          )
+
+          await page.getByRole("button", { name: "Confirm password" }).click()
+          const passwordInput = page.getByLabel("Access password")
+          check(
+            `${width}px: password field uses current-password autocomplete`,
+            (await passwordInput.getAttribute("autocomplete")) ===
+              "current-password"
+          )
+          await passwordInput.fill("synthetic-browser-password")
+          await page.getByRole("button", { name: "Confirm password" }).click()
+          await page.getByRole("button", { name: "Save instance" }).waitFor({
+            state: "visible",
+          })
+          await page.getByRole("button", { name: "Save instance" }).click()
+          await page
+            .getByText("Added Sonarr · Browser Sonarr")
+            .waitFor({ state: "visible" })
+          await page
+            .getByText("Browser Sonarr")
+            .waitFor({ state: "visible" })
+
+          const row = page
+            .filter({ hasText: "Browser Sonarr" })
+          check(
+            `${width}px: refreshed row remains unverified and credential-free`,
+            (await row.innerText()).includes("Credential missing") &&
+              (await row.innerText()).includes("None")
+          )
+          check(
+            `${width}px: inventory refreshed after save`,
+            mediaInstanceRequests.length === 2 &&
+              mediaInstanceRequests.every((path) =>
+              ),
+            JSON.stringify(mediaInstanceRequests)
+          )
+
+          const reviewRequest = mediaSetupRequests.find(
+            (item) => item.path.endsWith("connection-candidates")
+          )
+          const stepUpRequest = mediaSetupRequests.find(
+            (item) => item.path.endsWith("connection-step-up")
+          )
+          const saveRequest = mediaSetupRequests.find(
+          )
+          check(
+            `${width}px: setup requests use body-only secret placement`,
+            reviewRequest?.method === "POST" &&
+              reviewRequest.search === "" &&
+              reviewRequest.body.name === "Browser Sonarr" &&
+              !JSON.stringify(reviewRequest.body).includes(
+                "synthetic-browser-password"
+              ) &&
+              stepUpRequest?.method === "POST" &&
+              stepUpRequest.search === "" &&
+              stepUpRequest.body.password === "synthetic-browser-password" &&
+              !JSON.stringify(stepUpRequest.body).includes(
+                FIXTURE_REVIEW_TOKEN
+              ) &&
+              !JSON.stringify(stepUpRequest.body).includes(
+                FIXTURE_STEP_UP_TICKET
+              ) &&
+              saveRequest?.method === "POST" &&
+              saveRequest.search === "" &&
+              saveRequest.body.candidateID === FIXTURE_CONNECTION_CANDIDATE &&
+              saveRequest.body.reviewToken === FIXTURE_REVIEW_TOKEN &&
+              saveRequest.body.stepUpTicket === FIXTURE_STEP_UP_TICKET &&
+              !JSON.stringify(saveRequest.body).includes(
+                "synthetic-browser-password"
+              )
+          )
+
+          const setupDialog = page.getByRole("dialog", {
+            name: "Add connection",
+          })
+          await setupDialog.waitFor({ state: "hidden" })
+          check(
+            `${width}px: completed setup closes the dialog`,
+            !(await setupDialog.isVisible())
+          )
+          const returnedFocus = await activeElement(page)
+          check(
+            `${width}px: completing setup returns focus to Add connection`,
+            returnedFocus.tag === "BUTTON" &&
+              (returnedFocus.text ?? "").includes("Add connection"),
+            JSON.stringify(returnedFocus)
+          )
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth - window.innerWidth
+          )
+          check(
+            `${width}px: setup journey has no horizontal page overflow`,
+            overflow <= 0,
+            `overflow=${overflow}`
+          )
+          check(
+            `${width}px: setup journey has no page errors`,
+            opened.pageErrors.length === 0,
+            opened.pageErrors.join(" | ")
+          )
+          check(
+            `${width}px: setup journey has no console errors`,
             opened.consoleErrors.length === 0,
             opened.consoleErrors.join(" | ")
           )

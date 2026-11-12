@@ -201,6 +201,22 @@ answers `501 unavailable` ("Configure an access password"). A missing or forged 
 password configured is `401 auth_required`; a non-loopback bind with no password is `401
 setup_required`. The gateway's own auth gate may answer `401` before the handler runs.
 
+read/test body is parsed or the store is opened. Credential reflection is **mitigated, not
+prevented**: closed DTO projections are combined with a best-effort echo filter for direct and
+commonly encoded forms. Bounded misses include key/value adjacency patterns beyond the inspected
+checks; splits beyond the 16,384 UTF-16-code-unit boundary window or 8 Mi-unit join budget; numeric
+JSON rounding above `2^53`; and unknown encodings, compression, encryption, derived values or
+multi-scalar packing. If the cross-field scan exhausts its budget, the internal inspection result
+reports `joinStatus: "skipped_budget"`: per-field checks still ran, but remaining cross-field
+boundaries were not scanned and a split there may be missed. `complete` means the bounded join pass
+finished, not that all possible encodings were covered.
+
+The primary controls remain the approved-address set, pinned transport, TLS verification, redirect
+refusal and narrow dispatch allowlist. `/read` and connection testing are human-session-only; the
+impact of a filter miss is disclosure to the operator's own authenticated browser, not to a third
+party. This is not an adequate control for any future agent/MCP read surface: such a surface must
+not rely on this guard as sufficient protection.
+
 
 `events` is newest first and each event is projected to `{ id, instanceID, operationID, channel,
 outcome, effects, effectsSanitized, effectsRedacted, sanitizedFields, redactedFields, createdAt }`.
@@ -511,7 +527,11 @@ Pins are not evidence of integration.
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests
   are not a vendor push receipt.
-  `501 read_security_unavailable` until credential reflection has a reviewed threat model, and
-  connection setup answers `501 unavailable` until a verifier can prove a per-request human target
-  review. `GET /audit` is a single bounded newest-first window because the store has no audit cursor.
-  writes `verified_version`/`profile` even though the unwired `promote-profile` primitive exists.
+  `/instances/:id/test` are served behind the human-session gate; the persisted-profile gate remains,
+  so reads without a promoted profile answer `501 profile_unverified` until the promotion UI exists.
+  Credential reflection is mitigated, not prevented, by closed projections and a best-effort echo
+  filter with bounded misses (see above); connection setup still answers `501 unavailable` until a
+  verifier can prove per-request human target review. The guard is not sufficient for any future
+  agent/MCP read surface. `GET /audit` is a single bounded newest-first window because the store has
+  production flow writes `verified_version`/`profile` even though the unwired `promote-profile`
+  primitive exists.
