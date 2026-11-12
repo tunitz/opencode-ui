@@ -395,8 +395,11 @@ test("the retired dialog and sidebar theme entry points are gone", async () => {
   expect(navigation).not.toContain("AppearanceDialog")
   expect(navigation).not.toContain("AppearanceTrigger")
   expect(header).toContain('aria-label="Back to conversation"')
-  expect(app).toContain("notes.open || settings.open")
-  expect(app).toContain("settings.open &&")
+  expect(app).toContain('workspace.active === "notes"')
+  expect(app).toContain('workspace.active === "settings"')
+  expect(app).toContain('data-workspace-focus="notes"')
+  expect(app).toContain('aria-label="Notes"')
+  expect(app).toContain("inert=")
 })
 
 // --- Tab strip wheel scrolling ---------------------------------------------

@@ -181,6 +181,7 @@ export function SettingsWorkspace({ nav }: { nav: OpenCodeController }) {
     <section
       ref={rootRef}
       tabIndex={-1}
+      data-workspace-focus="settings"
       aria-label="Settings"
       className="@container flex min-h-0 flex-1 flex-col focus:outline-none"
     >

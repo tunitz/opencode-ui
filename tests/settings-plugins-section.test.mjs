@@ -112,6 +112,120 @@ test("a registered but disconnected plugin asks for an engine restart", async ()
   }
 })
 
+test("a configured plugin missing from this build offers disable, not enable", async () => {
+  let configured = true
+  const env = setup(async (url) => {
+    if (url.endsWith("/disable")) {
+      configured = false
+      return json({ registered: false })
+    }
+    return json({
+      engineAvailable: true,
+      plugins: [
+        {
+          id: "notes",
+          name: "Notes",
+          description: "Notes",
+          configured,
+          installed: false,
+          registered: false,
+          connected: false,
+          restartRequired: false,
+        },
+      ],
+    })
+  })
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Not installed")
+    expect(text).toContain("Configured but not installed in this build.")
+    expect(button(root, "Enable Notes")).toBeUndefined()
+    const disable = button(root, "Disable Notes")
+    expect(disable).toBeDefined()
+    expect(disable.props.disabled).toBe(false)
+    await act(async () => disable.props.onClick())
+    await flush()
+    expect(env.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET /api/ui/plugins",
+      "POST /api/ui/plugins/notes/disable",
+      "GET /api/ui/plugins",
+    ])
+    const after = JSON.stringify(root.toJSON())
+    expect(after).toContain("Not installed in this build.")
+    expect(button(root, "Disable Notes")).toBeUndefined()
+    expect(button(root, "Enable Notes")).toBeUndefined()
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("an uninstalled plugin that is not configured offers no enable action", async () => {
+  const env = setup(async () =>
+    json({
+      engineAvailable: true,
+      plugins: [
+        {
+          configured: false,
+          installed: false,
+          registered: false,
+          connected: false,
+          restartRequired: false,
+        },
+      ],
+    })
+  )
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Not installed in this build.")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("configured and installed metadata keeps the registered action", async () => {
+  const env = setup(async () =>
+    json({
+      engineAvailable: true,
+      plugins: [
+        {
+          id: "notes",
+          name: "Notes",
+          description: "Notes",
+          configured: true,
+          installed: true,
+          registered: true,
+          connected: false,
+          restartRequired: true,
+        },
+      ],
+    })
+  )
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Registered")
+    expect(text).toContain("Restart the OpenCode engine to apply.")
+    expect(button(root, "Disable Notes")).toBeDefined()
+    expect(button(root, "Enable Notes")).toBeUndefined()
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
 test("enabling a plugin posts once and re-reads the engine state", async () => {
   let state = {
     engineAvailable: true,
@@ -291,6 +405,94 @@ test("a successful disable announces the plugin change once", async () => {
       "POST /api/ui/plugins/notes/disable",
       "GET /api/ui/plugins",
     ])
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("a disabled plugin the engine still runs is surfaced with a retry", async () => {
+  let disabled = false
+  const env = setup(async (url) => {
+    if (url.endsWith("/disable")) {
+      disabled = true
+      return json({ registered: false, connected: false, restartRequired: false, engineSynced: true })
+    }
+    return json({
+      engineAvailable: true,
+      plugins: [
+        {
+          id: "notes",
+          name: "Notes",
+          description: "Notes",
+          configured: false,
+          installed: true,
+          registered: false,
+          connected: !disabled,
+          restartRequired: false,
+          engineSynced: disabled,
+        },
+      ],
+    })
+  })
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Engine out of sync")
+    expect(text).not.toContain("Connected")
+    expect(text).toContain(
+      "The engine still has this entry. Retry Disable or restart the OpenCode engine."
+    )
+    const disable = button(root, "Disable Notes")
+    expect(disable).toBeDefined()
+    expect(disable.props.disabled).toBe(false)
+    await act(async () => disable.props.onClick())
+    await flush()
+    expect(env.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET /api/ui/plugins",
+      "POST /api/ui/plugins/notes/disable",
+      "GET /api/ui/plugins",
+    ])
+    expect(JSON.stringify(root.toJSON())).toContain("Not registered")
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
+test("a saved plugin missing from the engine asks for a restart", async () => {
+  const env = setup(async () =>
+    json({
+      engineAvailable: true,
+      plugins: [
+        {
+          id: "notes",
+          name: "Notes",
+          description: "Notes",
+          configured: true,
+          installed: true,
+          registered: true,
+          connected: false,
+          restartRequired: true,
+          engineSynced: false,
+        },
+      ],
+    })
+  )
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const text = JSON.stringify(root.toJSON())
+    expect(text).toContain("Engine out of sync")
+    expect(text).toContain(
+      "Saved, but the engine has no entry. Restart the OpenCode engine to apply."
+    )
+    expect(button(root, "Disable Notes")).toBeDefined()
   } finally {
     if (root) await act(async () => root.unmount())
     env.restore()

@@ -10,6 +10,7 @@ import {
 } from "react"
 
 import { useOptionalNotesWorkspace } from "@/components/notes-sidebar"
+import { useOptionalWorkspace } from "@/components/workspace-context"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,7 +44,7 @@ export type SettingsWorkspaceContextValue = {
   section: SettingsSectionID
   /** Open the workspace, optionally deep-linking to a section. Closes Notes. */
   openSettings: (section?: SettingsSectionID) => void
-  /** Close without the unsaved-agent-edits guard. */
+  /** Close through the shared transition; the shell's guard applies. */
   closeSettings: () => void
   /** Close, confirming first while agent edits are still saving. */
   requestClose: () => void
@@ -73,6 +74,7 @@ export function useOptionalSettingsWorkspace(): SettingsWorkspaceContextValue | 
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const notes = useOptionalNotesWorkspace()
+  const workspace = useOptionalWorkspace()
   const notesOpen = notes?.open ?? false
   const closeNotes = notes?.closeNotes
 
@@ -80,9 +82,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [section, setSection] = useState<SettingsSectionID>("appearance")
   const [agentDirty, setAgentDirtyState] = useState(false)
   const [pendingChange, setPendingChange] = useState<PendingChange | null>(null)
-  // Notes and Settings are mutually exclusive: Notes wins while it is open, so
-  // the settings pane disappears on the same render that Notes appears.
-  const open = openRequested && !notesOpen
+  // Inside the app shell the shared discriminator decides; standalone fixtures
+  // keep the local request so Settings can be tested on its own.
+  const open = workspace ? workspace.active === "settings" : openRequested && !notesOpen
 
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const agentDirtyRef = useRef(false)
@@ -106,48 +108,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const closeNow = useCallback(() => {
+    if (workspace) {
+      workspace.requestWorkspace("chat")
+      return
+    }
     setOpenRequested(false)
     setPendingChange(null)
     setAgentDirty(false)
     restoreFocus()
-  }, [restoreFocus, setAgentDirty])
-
-  const openSettings = useCallback(
-    (nextSection?: SettingsSectionID) => {
-      if (typeof document !== "undefined") {
-        const active = document.activeElement
-        if (active && typeof (active as HTMLElement).focus === "function") {
-          returnFocusRef.current = active as HTMLElement
-        }
-      }
-      closeNotes?.()
-      // A plain open always starts at Appearance; a deep link selects its section.
-      setSection(nextSection ?? "appearance")
-      setPendingChange(null)
-      setAgentDirty(false)
-      setOpenRequested(true)
-    },
-    [closeNotes, setAgentDirty]
-  )
-
-  // Notes takes over the main pane; drop the pending Settings request so it
-  // does not reappear when Notes closes.
-  useEffect(() => {
-    if (!notesOpen || !openRequested) return
-    /* eslint-disable react-hooks/set-state-in-effect -- reconcile against the Notes workspace, which is external state */
-    setOpenRequested(false)
-    setPendingChange(null)
-    setAgentDirty(false)
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [notesOpen, openRequested, setAgentDirty])
-
-  const requestClose = useCallback(() => {
-    if (agentDirtyRef.current) {
-      setPendingChange({ kind: "close" })
-      return
-    }
-    closeNow()
-  }, [closeNow])
+  }, [restoreFocus, setAgentDirty, workspace])
 
   const selectSection = useCallback(
     (next: SettingsSectionID) => {
@@ -160,6 +129,81 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     },
     [section]
   )
+
+  const openSettings = useCallback(
+    (nextSection?: SettingsSectionID) => {
+      // A pending departure owns the next transition; do not edit behind it.
+      if (workspace?.pendingTarget) return
+      // Already open: keep the current section and dirty state. A deep link is
+      // a section selection, so it goes through the same unsaved-edit guard.
+      if (open) {
+        if (nextSection) selectSection(nextSection)
+        return
+      }
+      const commit = () => {
+        // A fresh open always starts at Appearance; a deep link selects its section.
+        setSection(nextSection ?? "appearance")
+        setPendingChange(null)
+        setAgentDirty(false)
+      }
+      if (workspace) {
+        workspace.requestWorkspace("settings", { onCommit: commit })
+        return
+      }
+      if (typeof document !== "undefined") {
+        const active = document.activeElement
+        if (active && typeof (active as HTMLElement).focus === "function") {
+          returnFocusRef.current = active as HTMLElement
+        }
+      }
+      closeNotes?.()
+      commit()
+      setOpenRequested(true)
+    },
+    [closeNotes, open, selectSection, setAgentDirty, workspace]
+  )
+
+  // Without the shared coordinator Notes still wins the main pane; drop the
+  // pending Settings request so it does not reappear when Notes closes.
+  useEffect(() => {
+    if (workspace || !notesOpen || !openRequested) return
+    /* eslint-disable react-hooks/set-state-in-effect -- reconcile against the Notes workspace, which is external state */
+    setOpenRequested(false)
+    setPendingChange(null)
+    setAgentDirty(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [notesOpen, openRequested, setAgentDirty, workspace])
+
+  // The shell consults this before every transition away from Settings.
+  useEffect(() => {
+    if (!workspace) return
+    return workspace.registerGuard("settings", () => agentDirtyRef.current)
+  }, [workspace])
+
+  // A committed transition away from Settings ends any tab-switch prompt and
+  // releases the dirty flag; the user already chose to leave.
+  const wasOpen = useRef(open)
+  useEffect(() => {
+    if (wasOpen.current === open) return
+    wasOpen.current = open
+    if (open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- the shared workspace transition is external state */
+    setPendingChange(null)
+    setAgentDirty(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [open, setAgentDirty])
+
+  const requestClose = useCallback(() => {
+    if (workspace) {
+      workspace.requestWorkspace("chat")
+      return
+    }
+    if (agentDirtyRef.current) {
+      setPendingChange({ kind: "close" })
+      return
+    }
+    closeNow()
+  }, [closeNow, workspace])
 
   const keepEditing = useCallback(() => setPendingChange(null), [])
 

@@ -4,10 +4,14 @@
  * `GET /api/ui/plugins` is the source of truth: `registered === true` means the
  * Notes plugin is enabled. The notes API itself is served by this UI server,
  * independently of engine registration, so this module is deliberately
- * optimistic. `registered === false` is the only definitive "hide Notes"
- * signal. A transport or HTTP failure, a malformed response, or a registry that
- * omits the Notes entry yields `registered: null` (unknown), and consumers keep
- * the Notes surfaces visible rather than hiding them on a transient failure.
+ * optimistic. `registered === false` is a definitive "hide Notes" signal only
+ * when the running engine agrees (`engineSynced !== false`). When the config
+ * disables Notes but the engine still runs its MCP entry, the state is
+ * divergent: it yields `registered: null` (unknown) so the surfaces stay
+ * visible while Settings explains the pending engine removal. A transport or
+ * HTTP failure, a malformed response, or a registry that omits the Notes entry
+ * also yields `registered: null`, and consumers keep the Notes surfaces visible
+ * rather than hiding them on a transient failure.
  *
  * One module-level store backs every consumer, so a single registry read serves
  * all mounted Notes surfaces. Reads are coalesced while one is in flight, and
@@ -70,7 +74,13 @@ export async function fetchNotesPluginState(): Promise<NotesPluginState> {
     )
     // A registry without a Notes entry does not prove the plugin is disabled.
     if (!isRecord(notes)) return UNKNOWN
-    return { registered: notes.registered === true, available: true }
+    const registered = notes.registered === true
+    // A disabled config while the running engine still holds the entry is not
+    // a definitive "off" state; keep the surfaces visible until it converges.
+    if (!registered && notes.engineSynced === false) {
+      return { registered: null, available: true }
+    }
+    return { registered, available: true }
   } catch {
     return UNKNOWN
   }

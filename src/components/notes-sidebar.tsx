@@ -41,6 +41,7 @@ import {
 } from "@/lib/notes-api"
 import { uniqueByID } from "@/lib/notes-types"
 import { useNotesPluginState } from "@/lib/notes-plugin-state"
+import { useOptionalWorkspace } from "@/components/workspace-context"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 export type NotesContextValue = {
@@ -122,8 +123,11 @@ export function NotesProvider({
 }) {
   const pluginState = useNotesPluginState()
   const notesEnabled = pluginState.registered !== false
+  const workspace = useOptionalWorkspace()
   const directory = nav.activeSession?.location.directory ?? nav.directory
-  const [open, setOpen] = useState(false)
+  // Without an app-shell coordinator (isolated fixtures) Notes keeps its own
+  // open flag; inside the shell the shared discriminator is authoritative.
+  const [localOpen, setLocalOpen] = useState(false)
   const [editingDirectory, setEditingDirectory] = useState<string | null>(null)
   const [selectedNoteID, setSelectedNoteID] = useState<string | null>(null)
   const [selectionRequest, setSelectionRequest] = useState(0)
@@ -208,35 +212,60 @@ export function NotesProvider({
   }, [directory, pinnedRequest, notesEnabled])
 
   const available = notesEnabled && Boolean(directory)
+  const showWorkspace = notesEnabled && (workspace
+    ? workspace.active === "notes"
+    : localOpen)
   const openNotes = useCallback(
     (id: string | null = null) => {
       if (!directory || !notesEnabled) return false
       // No prompt: drafts stay with their project's adapter and come back.
-      setEditingDirectory(directory)
-      setSelectedNoteID(id)
-      setSelectionRequest((request) => request + 1)
-      setOpen(true)
+      const commit = () => {
+        setEditingDirectory(directory)
+        setSelectedNoteID(id)
+        setSelectionRequest((request) => request + 1)
+        if (!workspace) setLocalOpen(true)
+      }
+      if (workspace) {
+        // A dirty Settings workspace may hold this transition until confirmed;
+        // the caller can still close its own menu because the request queued.
+        return workspace.requestWorkspace("notes", { onCommit: commit })
+      }
+      commit()
       return true
     },
-    [directory, notesEnabled]
+    [directory, notesEnabled, workspace]
   )
-  const closeNotes = useCallback(() => setOpen(false), [])
+  const closeNotes = useCallback(() => {
+    if (workspace) {
+      workspace.requestWorkspace("chat")
+      return
+    }
+    setLocalOpen(false)
+  }, [workspace])
 
   // Disabling the plugin closes the workspace on the same transition, so no
-  // Notes pane or header title can outlive the registry state.
+  // Notes pane or header title can outlive the registry state. Depend only on
+  // the active workspace and the stable force action: a pending confirmation or
+  // another workspace's transition must not re-run this reconciliation.
+  const workspaceActive = workspace?.active
+  const forceWorkspace = workspace?.forceWorkspace
   useEffect(() => {
     if (notesEnabled) return
     /* eslint-disable react-hooks/set-state-in-effect -- reconcile external workspace state with the plugin registry */
-    closeNotes()
+    if (forceWorkspace) {
+      if (workspaceActive === "notes") forceWorkspace("chat")
+    } else {
+      setLocalOpen(false)
+    }
     setEditingDirectory(null)
     setSelectedNoteID(null)
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [closeNotes, notesEnabled])
+  }, [forceWorkspace, notesEnabled, workspaceActive])
 
   const value: NotesContextValue = {
     notesEnabled,
     available,
-    open: notesEnabled && open,
+    open: showWorkspace,
     hasWorkspace: notesEnabled && editingDirectory !== null,
     workspaceKey: editingDirectory ?? "",
     selectedNoteID,

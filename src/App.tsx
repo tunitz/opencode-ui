@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
@@ -19,6 +19,7 @@ import {
 } from "@/components/settings-context"
 import { SettingsWorkspace } from "@/components/settings-workspace"
 import { Button } from "@/components/ui/button"
+import { WorkspaceProvider, useWorkspace } from "@/components/workspace-context"
 import { useUndoToast, UndoToastProvider } from "@/lib/undo-toast"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
 import { useOpenCode, type OpenCodeController } from "@/lib/use-opencode"
@@ -43,40 +44,38 @@ function EngineApp() {
 
   return (
     <UndoToastProvider>
-      <NotesProvider nav={nav}>
-        <SettingsProvider>
-          <AppShell nav={nav} />
-        </SettingsProvider>
-      </NotesProvider>
+      <WorkspaceProvider>
+        <NotesProvider nav={nav}>
+          <SettingsProvider>
+            <AppShell nav={nav} />
+          </SettingsProvider>
+        </NotesProvider>
+      </WorkspaceProvider>
     </UndoToastProvider>
   )
 }
 
 
 function AppShell({ nav }: { nav: OpenCodeController }) {
+  const workspace = useWorkspace()
   const notes = useNotesWorkspace()
   const settings = useSettingsWorkspace()
   const undo = useUndoToast()
   const { bindings } = useKeybindings()
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
-  const previousNotesOpen = useRef(notes.open)
-  useEffect(() => {
-    if (previousNotesOpen.current !== notes.open) {
-      previousNotesOpen.current = notes.open
-      if (!settings.open) document.getElementById("chat-main")?.focus()
-    }
-  }, [notes.open, settings.open])
+  const chatActive = workspace.active === "chat"
 
   // Command opens the inspector's Command tab. It is not a modal search dialog,
-  // and it respects custom bindings plus IME/composition.
+  // and it respects custom bindings plus IME/composition. Another workspace is
+  // left through the same guarded transition as the header Back control.
   useEffect(() => {
     const commandBinding = bindings.find((binding) => binding.command === "command.open")
     if (!commandBinding || !nav.activeSession) return
     const binding = commandBinding
     const openInspector = nav.openInspector
-    const closeNotes = notes.closeNotes
-    const notesOpen = notes.open
+    const requestWorkspace = workspace.requestWorkspace
+    const activeWorkspace = workspace.active
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat) return
       if (document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]')) return
@@ -84,12 +83,15 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
         return
       }
       event.preventDefault()
-      if (notesOpen) closeNotes()
-      openInspector("command")
+      if (activeWorkspace === "chat") {
+        openInspector("command")
+        return
+      }
+      requestWorkspace("chat", { run: () => openInspector("command") })
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [bindings, nav.activeSession, nav.openInspector, notes.closeNotes, notes.open])
+  }, [bindings, nav.activeSession, nav.openInspector, workspace])
 
   return (
     <NotificationsProvider nav={nav}>
@@ -114,10 +116,12 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
           >
             <div
               className={
-                notes.open || settings.open
+                !chatActive
                   ? "hidden"
                   : "mx-auto flex min-h-0 w-full max-w-[42.5rem] flex-1 flex-col md:max-w-none md:px-6 lg:px-8"
               }
+              inert={!chatActive ? true : undefined}
+              aria-hidden={!chatActive ? true : undefined}
             >
               {nav.startupNotice ? (
                 <div
@@ -187,19 +191,26 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
               />
             </div>
             {notes.hasWorkspace && (
-              <div
+              <section
+                data-workspace-focus="notes"
+                tabIndex={-1}
+                aria-label="Notes"
                 className={
-                  notes.open && !settings.open
-                    ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6 lg:px-8"
+                  workspace.active === "notes"
+                    ? "min-h-0 flex-1 overflow-y-auto px-4 py-4 focus:outline-none md:px-6 lg:px-8"
                     : "hidden"
                 }
               >
                 <NotesWorkspace />
-              </div>
+              </section>
             )}
-            {settings.open && (
+            {workspace.active === "settings" && (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
                 <SettingsWorkspace nav={nav} />
+              </div>
+            )}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
+                <MediaWorkspace />
               </div>
             )}
           </main>
@@ -218,7 +229,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
           if (message) undo.showUndo(message)
         }}
         onSessionCreated={() => {
-          if (notes.open) notes.closeNotes()
+          workspace.requestWorkspace("chat")
         }}
       />
     </NotificationsProvider>

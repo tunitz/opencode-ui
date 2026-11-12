@@ -569,16 +569,26 @@ export function SessionInspector({
   )
 }
 
-function InspectorRail({ nav }: { nav: OpenCodeController }) {
+function InspectorRail({
+  nav,
+  hidden = false,
+}: {
+  nav: OpenCodeController
+  hidden?: boolean
+}) {
   return (
     <aside
       data-desktop-sidebar="inspector"
       data-inspector-mode="rail"
       data-side="right"
       aria-label="Session inspector collapsed"
+      hidden={hidden || undefined}
+      inert={hidden || undefined}
+      aria-hidden={hidden || undefined}
       style={{ backgroundColor: "var(--sidebar)" }}
       className={cn(
-        "flex h-svh shrink-0 flex-col items-center border-s border-sidebar-border bg-sidebar",
+        "h-svh shrink-0 flex-col items-center border-s border-sidebar-border bg-sidebar",
+        hidden ? "hidden" : "flex",
         DESKTOP_SIDEBAR_RAIL_WIDTH
       )}
     >
@@ -644,17 +654,20 @@ export function SessionInspectorPanel({
   nav,
   onOpenSettings,
   onOpenWorktrees,
+  hidden = false,
 }: {
   nav: OpenCodeController
   onOpenSettings: () => void
   onOpenWorktrees: () => void
+  /** Kept mounted while another workspace owns the main pane. */
+  hidden?: boolean
 }) {
   const isDesktop = useIsDesktop()
 
   if (!isDesktop || !nav.activeSession) return null
 
   if (!nav.inspectorOpen) {
-    return <InspectorRail nav={nav} />
+    return <InspectorRail nav={nav} hidden={hidden} />
   }
 
   return (
@@ -664,9 +677,13 @@ export function SessionInspectorPanel({
       data-inspector-mode="full"
       data-side="right"
       aria-label="Session inspector"
+      hidden={hidden || undefined}
+      inert={hidden || undefined}
+      aria-hidden={hidden || undefined}
       style={{ backgroundColor: "var(--sidebar)" }}
       className={cn(
-        "flex h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
+        "h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
+        hidden ? "hidden" : "flex",
         DESKTOP_SIDEBAR_WIDTH
       )}
     >

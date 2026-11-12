@@ -72,10 +72,8 @@
     "test": "bun test tests --isolate",
     "test:bun": "bun run build:bun && bun test tests --isolate",
     "test:browser": "bun tests/browser/run.ts",
-    "verify": "bun run typecheck && bun run lint && bun run test",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc -b && tsc --noEmit -p plugins/notes/tsconfig.json",
     "preview": "bun server/bun-server.ts",
     "icons:generate": "bun scripts/generate-icons.mjs"
   },

@@ -2,7 +2,7 @@
  * Settings > Plugins.
  *
  * Lists the engine plugins the UI server knows how to manage and registers or
- * removes them through the UI server (never by writing engine config).
+ * removes them through the UI server.
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { PlugIcon, RefreshCwIcon } from "lucide-react"
@@ -14,9 +14,15 @@ type PluginStatus = {
   id: string
   name: string
   description: string
+  /** The engine config holds an entry for this plugin. */
+  configured: boolean
+  /** The plugin's MCP entry exists in this build; null for legacy payloads. */
+  installed: boolean | null
   registered: boolean
   connected: boolean
   restartRequired: boolean
+  /** true/false: the running engine matches the persisted config; null: unknown. */
+  engineSynced: boolean | null
 }
 
 type PluginsState = {
@@ -32,13 +38,28 @@ function normalizePlugin(value: unknown): PluginStatus | null {
   if (!isRecord(value) || typeof value.id !== "string" || !value.id) return null
   const registered = value.registered === true
   const connected = value.connected === true
+  // Older servers sent only `registered`; keep those payloads on the legacy
+  // labels instead of inferring a missing installation.
+  const configured =
+    typeof value.configured === "boolean" ? value.configured : registered
+  const installed =
+    typeof value.installed === "boolean" ? value.installed : null
+  const active = registered || (configured && installed === true)
   return {
     id: value.id,
     name: typeof value.name === "string" && value.name ? value.name : value.id,
     description: typeof value.description === "string" ? value.description : "",
-    registered,
-    connected,
-    restartRequired: value.restartRequired === true && registered && !connected,
+    configured,
+    installed,
+    registered: active,
+    connected: connected && installed !== false,
+    restartRequired:
+      value.restartRequired === true &&
+      active &&
+      installed !== false &&
+      !connected,
+    engineSynced:
+      typeof value.engineSynced === "boolean" ? value.engineSynced : null,
   }
 }
 
@@ -65,25 +86,37 @@ function failureMessage(error: unknown): string {
 }
 
 function StateChip({ plugin }: { plugin: PluginStatus }) {
-  const label = plugin.connected
-    ? "Connected"
-    : plugin.registered
-      ? "Registered"
-      : "Not registered"
-  const tone = plugin.connected
-    ? "border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
-    : plugin.registered
-      ? "border-amber-600/40 bg-amber-600/10 text-amber-700 dark:text-amber-400"
-      : "border-border text-muted-foreground"
+  const state =
+    plugin.engineSynced === false
+      ? "out-of-sync"
+      : plugin.connected
+        ? "connected"
+        : plugin.registered
+          ? "registered"
+          : plugin.installed === false
+            ? "not-installed"
+            : "not-registered"
+  const label =
+    state === "connected"
+      ? "Connected"
+      : state === "out-of-sync"
+        ? "Engine out of sync"
+        : state === "registered"
+          ? "Registered"
+          : state === "not-installed"
+            ? "Not installed"
+            : "Not registered"
+  const tone =
+    state === "connected"
+      ? "border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+      : state === "registered" ||
+          state === "out-of-sync" ||
+          (state === "not-installed" && plugin.configured)
+        ? "border-amber-600/40 bg-amber-600/10 text-amber-700 dark:text-amber-400"
+        : "border-border text-muted-foreground"
   return (
     <span
-      data-plugin-state={
-        plugin.connected
-          ? "connected"
-          : plugin.registered
-            ? "registered"
-            : "not-registered"
-      }
+      data-plugin-state={state}
       className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${tone}`}
     >
       {label}
@@ -213,8 +246,8 @@ export function SettingsPluginsSection() {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="max-w-prose text-sm text-muted-foreground">
-          Plugins run inside the OpenCode engine. Registering one here does not
-          change the engine configuration files.
+          Plugins run inside the OpenCode engine. Enabling one writes its MCP
+          entry to the engine config.
         </p>
         <Button
           type="button"
@@ -273,7 +306,15 @@ export function SettingsPluginsSection() {
         <ul aria-label="Plugins" className="divide-y rounded-lg border">
           {plugins.map((plugin) => {
             const busy = busyId === plugin.id
-            const enable = !plugin.registered
+            // A configured plugin owns a config entry, so the action removes it
+            // even when this build no longer ships the plugin's entry point.
+            // A disabled plugin the engine still runs needs the same retry.
+            const engineRemovalPending =
+              !plugin.configured && plugin.engineSynced === false
+            const canDisable =
+              plugin.registered || plugin.configured || engineRemovalPending
+            const canEnable = !canDisable && plugin.installed !== false
+            const stale = plugin.configured && plugin.installed === false
             return (
               <li
                 key={plugin.id}
@@ -293,28 +334,48 @@ export function SettingsPluginsSection() {
                       {plugin.description}
                     </p>
                   )}
-                  {plugin.restartRequired && (
+                  {stale && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      Configured but not installed in this build. Disable
+                      removes the stale entry.
+                    </p>
+                  )}
+                  {!canDisable && plugin.installed === false && (
+                    <p className="text-xs text-muted-foreground">
+                      Not installed in this build.
+                    </p>
+                  )}
+                  {plugin.engineSynced === false && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      {plugin.configured
+                        ? "Saved, but the engine has no entry. Restart the OpenCode engine to apply."
+                        : "The engine still has this entry. Retry Disable or restart the OpenCode engine."}
+                    </p>
+                  )}
+                  {plugin.restartRequired && plugin.engineSynced !== false && (
                     <p className="text-xs text-amber-700 dark:text-amber-400">
                       Restart the OpenCode engine to apply.
                     </p>
                   )}
                 </div>
-                <Button
-                  type="button"
-                  variant={enable ? "default" : "outline"}
-                  className="h-11"
-                  disabled={busy || loading || !engineAvailable}
-                  aria-label={`${enable ? "Enable" : "Disable"} ${plugin.name}`}
-                  onClick={() => void toggle(plugin, enable)}
-                >
-                  {busy
-                    ? enable
-                      ? "Enabling…"
-                      : "Disabling…"
-                    : enable
-                      ? "Enable"
-                      : "Disable"}
-                </Button>
+                {(canEnable || canDisable) && (
+                  <Button
+                    type="button"
+                    variant={canEnable ? "default" : "outline"}
+                    className="h-11"
+                    disabled={busy || loading || !engineAvailable}
+                    aria-label={`${canEnable ? "Enable" : "Disable"} ${plugin.name}`}
+                    onClick={() => void toggle(plugin, canEnable)}
+                  >
+                    {busy
+                      ? canEnable
+                        ? "Enabling…"
+                        : "Disabling…"
+                      : canEnable
+                        ? "Enable"
+                        : "Disable"}
+                  </Button>
+                )}
               </li>
             )
           })}

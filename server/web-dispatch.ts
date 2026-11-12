@@ -52,11 +52,13 @@ async function boundedRequest(request: Request, limit: number): Promise<Request 
 /** HTTP dispatch for the Bun gateway. WebSocket upgrades are handled separately. */
 export function createWebDispatcher(options: DispatcherOptions): (request: Request, remote?: string) => Promise<Response> {
   return async (request, remote) => {
+    const path = new URL(request.url).pathname
     const decision = evaluateWebRequest(request, options.security)
     if (!decision.allowed) {
-      return secureWebResponse(request, new Response(`Forbidden: ${decision.reason}\n`, { status: decision.status }))
+      return secureWebResponse(request, isMedia
+        ? mediaPreDispatchError(decision.status)
+        : new Response(`Forbidden: ${decision.reason}\n`, { status: decision.status }))
     }
-    const path = new URL(request.url).pathname
     let handler: Handler
     let limit: number | undefined
     if (options.auth && (path === "/api/ui/auth" || path.startsWith("/api/ui/auth/"))) {
@@ -70,6 +72,7 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     } else if (options.plugins && (path === PLUGINS_ROUTE || path.startsWith(`${PLUGINS_ROUTE}/`))) {
       handler = options.plugins
       limit = PLUGINS_BODY_LIMIT
+      limit = mediaBodyLimit(path, request.method)
     } else if (path === "/api/ui/agents" || path === "/api/ui/agents/default") {
       handler = options.agents
       limit = 64 * 1024
@@ -86,7 +89,11 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     }
     try {
       const bounded = limit === undefined ? request : await boundedRequest(request, limit)
-      if (!bounded) return secureWebResponse(request, new Response("Request too large\n", { status: 413 }))
+      if (!bounded) {
+        return secureWebResponse(request, isMedia
+          ? mediaPreDispatchError(413)
+          : new Response("Request too large\n", { status: 413 }))
+      }
       return secureWebResponse(request, await handler(bounded, remote))
     } catch {
       return secureWebResponse(request, new Response("Request failed\n", { status: 500 }))

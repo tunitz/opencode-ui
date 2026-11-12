@@ -58,10 +58,14 @@ import { NewSessionButton } from "@/components/new-session-dialog"
 import { NotesSidebar, useNotesWorkspace } from "@/components/notes-sidebar"
 import { IntegrationCommandDialogs } from "@/components/integration-command-dialogs"
 import {
+  MediaButton,
+  MediaTriggerButton,
+import {
   SettingsButton,
   SettingsTriggerButton,
 } from "@/components/settings-workspace"
 import { useOptionalSettingsWorkspace } from "@/components/settings-context"
+import { useOptionalWorkspace } from "@/components/workspace-context"
 import { projectName } from "@/components/project-select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -773,6 +777,15 @@ function SessionList({
   onSelect?: (sessionID: string) => void
 }) {
   const notes = useNotesWorkspace()
+  const workspace = useOptionalWorkspace()
+  // Only chat marks a row current; every other workspace is a separate surface.
+  const highlightedSessionID = workspace
+    ? workspace.active === "chat"
+      ? nav.activeSessionID
+      : null
+    : notes.open
+      ? null
+      : nav.activeSessionID
   const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -948,7 +961,7 @@ function SessionList({
                 {searchResults.length > 0 ? (
                   <SessionSearchResults
                     results={searchResults}
-                    activeSessionID={notes.open ? null : nav.activeSessionID}
+                    activeSessionID={highlightedSessionID}
                     runningSessionIDs={nav.runningSessionIDs}
                     unreadSessionIDs={nav.unreadSessionIDs}
                     onSelect={handleSelect}
@@ -974,7 +987,7 @@ function SessionList({
               >
                 <SessionTree
                   rows={pinnedRows}
-                  activeSessionID={notes.open ? null : nav.activeSessionID}
+                  activeSessionID={highlightedSessionID}
                   runningSessionIDs={nav.runningSessionIDs}
                   unreadSessionIDs={nav.unreadSessionIDs}
                   projects={nav.projects}
@@ -1020,7 +1033,7 @@ function SessionList({
                   >
                     <SessionTree
                       rows={rows}
-                      activeSessionID={notes.open ? null : nav.activeSessionID}
+                      activeSessionID={highlightedSessionID}
                       runningSessionIDs={nav.runningSessionIDs}
                       unreadSessionIDs={nav.unreadSessionIDs}
                       projects={nav.projects}
@@ -1186,9 +1199,22 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionSidebar")
   const notes = useNotesWorkspace()
   const settings = useOptionalSettingsWorkspace()
+  const workspace = useOptionalWorkspace()
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
+
+  // One exit path for every session navigation: the shared guard decides, and
+  // the selection only runs once the transition is committed.
+  function leaveToChat(run: () => void) {
+    if (workspace) {
+      workspace.requestWorkspace("chat", { run })
+      return
+    }
+    notes.closeNotes()
+    settings?.requestClose()
+    run()
+  }
 
   function toggleSidebar() {
     const next = !collapsed
@@ -1262,7 +1288,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         )}
       </div>
       <div className={cn("shrink-0", collapsed ? "flex flex-col items-center gap-1 px-2" : "px-3")}>
-        <NewSessionButton nav={nav} onCreated={notes.closeNotes} compact={collapsed} />
+        <NewSessionButton nav={nav} onCreated={() => leaveToChat(() => {})} compact={collapsed} />
         {collapsed ? (
           <Tooltip>
             <TooltipTrigger
@@ -1286,17 +1312,18 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
           <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
         )}
       </div>
-      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => { notes.closeNotes(); settings?.requestClose() }} />
+      <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => leaveToChat(() => {})} />
       {collapsed ? null : (
         <>
           <ProjectPanel nav={nav} className="mt-6" />
           <ScrollArea className="mt-2 min-h-0 flex-1">
             <div className="px-3"><NotesSidebar /></div>
-            <SessionList nav={nav} onSelect={(sessionID) => { notes.closeNotes(); settings?.requestClose(); nav.selectSession(sessionID) }} />
+            <SessionList nav={nav} onSelect={(sessionID) => leaveToChat(() => nav.selectSession(sessionID))} />
           </ScrollArea>
         </>
       )}
       <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-start gap-1 p-3")}>
+        <MediaButton />
         <SettingsButton />
       </div>
     </aside>
@@ -1307,23 +1334,39 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   recordPerfRender("SessionsSheet")
   const notes = useNotesWorkspace()
   const settings = useOptionalSettingsWorkspace()
+  const workspace = useOptionalWorkspace()
   const [open, setOpen] = useState(false)
   const pendingSettings = useRef(false)
+  const pendingMedia = useRef(false)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const pendingWorktreeProject = useRef<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
   const direction = useAppDirection()
 
+  function leaveToChat(run: () => void) {
+    if (workspace) {
+      workspace.requestWorkspace("chat", { run })
+      return
+    }
+    notes.closeNotes()
+    settings?.requestClose()
+    run()
+  }
+
   return (
     <>
     <Sheet open={open} onOpenChange={(next) => {
-      if (next) { pendingWorktreeProject.current = null; pendingSettings.current = false }
+      if (next) { pendingWorktreeProject.current = null; pendingSettings.current = false; pendingMedia.current = false }
       setOpen(next)
     }} onOpenChangeComplete={(next) => {
       if (!next && pendingSettings.current) {
         pendingSettings.current = false
         document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")?.focus()
         settings?.openSettings()
+      }
+      if (!next && pendingMedia.current) {
+        pendingMedia.current = false
+        document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")?.focus()
       }
       if (!next && pendingWorktreeProject.current) {
         setWorktreeProjectID(pendingWorktreeProject.current)
@@ -1371,7 +1414,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           </SheetClose>
         </SheetHeader>
         <div className="shrink-0 px-4">
-          <NewSessionButton nav={nav} onCreated={() => { notes.closeNotes(); setOpen(false) }} />
+          <NewSessionButton nav={nav} onCreated={() => { setOpen(false); leaveToChat(() => {}) }} />
           <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) { pendingWorktreeProject.current = projectID; setOpen(false) } }}>Project worktrees</Button>
         </div>
         <ProjectPanel nav={nav} className="mt-5" />
@@ -1380,14 +1423,18 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           <SessionList
             nav={nav}
             onSelect={(sessionID) => {
-              notes.closeNotes()
-              settings?.requestClose()
-              nav.selectSession(sessionID)
+              leaveToChat(() => nav.selectSession(sessionID))
               setOpen(false)
             }}
           />
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4">
+          <MediaTriggerButton
+            onClick={() => {
+              pendingMedia.current = true
+              setOpen(false)
+            }}
+          />
           <SettingsTriggerButton
             onClick={() => {
               pendingSettings.current = true
@@ -1397,7 +1444,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         </SheetFooter>
       </SheetContent>
     </Sheet>
-    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => { notes.closeNotes(); settings?.requestClose() }} />
+    <IntegrationCommandDialogs kind={worktreeProjectID ? "worktrees" : null} worktreeProjectID={worktreeProjectID ?? undefined} nav={nav} onClose={() => setWorktreeProjectID(null)} onResult={() => {}} onSessionCreated={() => leaveToChat(() => {})} />
     </>
   )
 }

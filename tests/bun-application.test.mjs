@@ -54,3 +54,27 @@ test("assembled gateway serves assets, guarded APIs, notifications, streams and 
     await rm(dir, { recursive: true, force: true })
   }
 }, 5000)
+
+  let disposed = false
+  const notifications = createNotificationService({ stateFile: join(dir, "state.json"), startWatcher: false, opencodeBaseUrl: "http://127.0.0.1:1", sendPush: async () => {} })
+  const stub = { handleRequest: async () => new Response("stub") }
+    handleRequest: async (request) => new Response(JSON.stringify({ path: new URL(request.url).pathname }), {
+      headers: { "content-type": "application/json" },
+    }),
+    dispose: () => { disposed = true },
+  }
+  const app = createBunApplication({
+    target: "http://127.0.0.1:1", authorization: "Basic fake-test-value", directory: "dist-bun-build",
+    security: { allowedHosts: ["127.0.0.1"], allowedOrigins: ["http://trusted.test"] },
+  })
+  try {
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    assert.equal(disposed, false)
+  } finally {
+    notifications.stop()
+    app.dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+  assert.equal(disposed, true)
+})

@@ -6,26 +6,31 @@ const dialogs = await readFile("src/components/integration-command-dialogs.tsx",
 const browser = await readFile("src/components/directory-browser.tsx", "utf8")
 const shell = await readFile("src/components/session-command-dialogs.tsx", "utf8")
 
-test("selecting a session closes Notes and the guarded Settings workspace in both surfaces", () => {
+test("session selection leaves every workspace through the shared guarded transition", () => {
   // Desktop sidebar: inline handler on the shared session list.
   expect(navigation).toContain(
-    "onSelect={(sessionID) => { notes.closeNotes(); settings?.requestClose(); nav.selectSession(sessionID) }}"
+    "onSelect={(sessionID) => leaveToChat(() => nav.selectSession(sessionID))}"
   )
   // Mobile sessions sheet: multi-line handler.
   expect(navigation).toContain(
-    "notes.closeNotes()\n              settings?.requestClose()\n              nav.selectSession(sessionID)"
+    "leaveToChat(() => nav.selectSession(sessionID))\n              setOpen(false)"
   )
-  // The guarded close keeps unsaved agent edits prompting; the unguarded one is
-  // not used for navigation.
+  // Both exits defer the actual selection until the coordinator commits.
+  expect(navigation).toContain('workspace.requestWorkspace("chat", { run })')
+  expect(navigation).toContain("notes.closeNotes()\n    settings?.requestClose()\n    run()")
+  // The unguarded close is never used for navigation.
   expect(navigation).not.toContain("settings?.closeSettings")
 })
 
-test("creating a worktree session from either surface closes Notes and Settings", () => {
+test("creating a worktree session from either surface returns to chat through the guard", () => {
   expect(
-    navigation.match(
-      /onSessionCreated=\{\(\) => \{ notes\.closeNotes\(\); settings\?\.requestClose\(\) \}\}/g
-    )
+    navigation.match(/onSessionCreated=\{\(\) => leaveToChat\(\(\) => \{\}\)\}/g)
   ).toHaveLength(2)
+})
+
+  expect(navigation).toContain("<MediaButton />")
+  expect(navigation).toContain("<MediaTriggerButton")
+  expect(navigation).toContain('pendingMedia.current = true')
 })
 
 test("the pinned sessions group starts expanded and stays user-collapsible", () => {

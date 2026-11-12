@@ -120,45 +120,120 @@ One `NotesService` instance per UI-server process, backed by the shared file sto
 ## App-layer Plugins API [app layer]
 
 Mounted under `/api/ui/plugins`; body limit 8 KiB. The UI server uses the server-held engine Basic
-credential and never exposes it to clients. Registration persists in the engine config file's
-`mcp.servers.notes` (atomic JSONC edit), so it survives engine reloads; hot-connecting the running
-engine is best-effort and an engine restart may be required.
+credential and never exposes it to clients. A trusted descriptor registry covers the built-in
+(atomic JSONC edit), so it survives engine reloads; hot-connecting the running engine is best-effort
+and an engine restart may be required.
 
-- `GET /api/ui/plugins` → `{ engineAvailable, plugins: [{ id, name, description, registered, connected, restartRequired }] }`.
-  `registered` is read from the config: `mcp.servers.notes` exists and is not `disabled: true`.
-  `connected` comes from `GET <engine>/api/mcp`; when the engine is unreachable the response is 200
-  with `engineAvailable: false` and `connected: false`, while a persisted registration still reports
-  `registered: true`. `restartRequired` is `registered && !connected`. A config read failure → 500
+- `GET /api/ui/plugins` → `{ engineAvailable, plugins: [{ id, name, description, configured, installed, registered, connected, restartRequired, engineSynced }] }`.
+  `registered` is read from the config: `mcp.servers.<id>` exists, is not `disabled: true`, and the
+  entry (plus each descriptor's required runtime files) is installed in this build. `connected`
+  comes from `GET <engine>/api/mcp` and additionally requires the entry to be installed; when the
+  engine is unreachable the response is 200 with `engineAvailable: false` and `connected: false`,
+  while a persisted registration still reports `registered: true`. `restartRequired` is
+  `registered && !connected`.
+  `engineSynced` is the residual: `true` when the engine's server list agrees with the persisted
+  config (entry present when configured, absent when not), `false` when it diverges, and `null` when
+  the engine is unreachable or its list shape is unknown. A config read failure → 500
   `{ error: { code: "config_read_failed" } }`.
-- `POST /api/ui/plugins/notes/enable` → sets `mcp.servers.notes` to
-  `{ "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false }`
-  (the bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH).
+- `POST /api/ui/plugins/<id>/enable` → sets `mcp.servers.<id>` to the descriptor's canonical entry.
+  For Notes that is
+  `{ "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false }`.
+  `"env": { "OPENCODE_MEDIA_DATA_DIR": "<absolute path>" }` only when the trusted launch environment
+  supplies an absolute, control-character-free override; a relative or invalid override fails
+  requires the checkout-only MCP SDK runtime files, so a packed install without them is not
+  `installed`.
+  The bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH.
+  The plugin's entry file and every descriptor-required runtime file must exist in the installation
+  root, matching what `GET` reports as `installed`; otherwise 409
+  `{ error: { code: "plugin_not_installed" } }` and nothing is persisted.
   The global config directory follows `$OPENCODE_CONFIG_DIR` → `$XDG_CONFIG_HOME/opencode` →
   `~/.config/opencode`; `opencode.jsonc` is preferred when present, else `opencode.json`. The edit
   keeps all other keys, servers, and comments (`jsonc-parser`) and is written atomically (private
   temp file, fsync, rename, directory fsync). A config write failure → 500
-  `{ error: { code: "config_write_failed" } }` and the engine is not touched. On success the server
-  best-effort applies the entry through `PUT /api/experimental/mcp/notes` (and
-  `POST /api/experimental/mcp/notes/connect` when registered but not connected), then re-reads
-  status. That hot registration is ephemeral, so the config write is authoritative; the response is
-  `{ registered: true, connected, restartRequired: !connected }` even when the engine is unreachable
-  or rejects the hot apply.
-- `POST /api/ui/plugins/notes/disable` → removes `mcp.servers.notes` with the same atomic JSONC edit
-  (a missing key or file is success) and best-effort calls `DELETE /api/experimental/mcp/notes`.
-  Response `{ registered: false }`.
+  `{ error: { code: "config_write_failed" } }` and the engine is not touched. The whole settle pass
+  is ordered by the in-process queue; the cooperative config lock covers only the atomic edit and is
+  released before any engine call, so a slow engine cannot starve another plugin or process. After
+  the lock is released the server re-reads the persisted entry and performs exactly one reconcile:
+  an enabled entry is applied with `PUT /api/experimental/mcp/<id>` (and
+  `POST /api/experimental/mcp/<id>/connect` when not connected), and a disabled entry is
+  compensated with `DELETE /api/experimental/mcp/<id>` only when the engine still lists it. The
+  reconcile is bounded as a whole; a spent budget or failed call is reported from the last status
+  read, never assumed. That hot registration is ephemeral, so the config write is authoritative;
+  the response is `{ registered, connected, restartRequired, engineSynced }` computed from the
+  authoritative re-read, even when the engine is unreachable or rejects the apply. A concurrent
+  writer in another process can still change the config between the lock release and the reconcile;
+  that divergence is reported, not hidden.
+- `POST /api/ui/plugins/<id>/disable` → removes `mcp.servers.<id>` with the same atomic JSONC edit
+  (a missing key or file is success; a missing config directory is not created) and compensates the
+  engine through the same ordered reconcile. Response `{ registered, connected, restartRequired,
+  engineSynced }`: `engineSynced` is `false` when the engine still lists the entry, and `null` when
+  an unreachable or timed-out engine cannot confirm removal, so the ephemeral entry may survive
+  until the engine reloads. `GET` reports the same residual, and the Settings UI surfaces it with an
+  "Engine out of sync" chip instead of showing a bare "Connected" next to an Enable action.
+- A divergent Notes disable (`registered: false` while `engineSynced: false`) is treated as
+  unknown by `src/lib/notes-plugin-state.ts`: the Notes surfaces stay visible while Settings
+  explains the pending engine removal. Notes are hidden only on a definitive disabled answer, and
+  transport, HTTP-shape or missing-entry failures also stay unknown rather than hiding them.
+- The in-process queue and cooperative lock waits are bounded from request arrival; exceeding the
+  bound returns 500 `config_write_failed` without touching the config or the engine. A held lock is
+  never reclaimed automatically, and the error names the lock file for manual recovery.
 - Engine list shape is `{ location, data: [{ name, status }] }`, where `status` is
   `{ status: "connected" | "pending" | "disabled" | "failed" | "needs_auth" }`. The UI treats only
   `connected` as connected; a registered non-connected server surfaces `restartRequired`.
   `disabled: false` means enabled.
 - `codemode: false` is required so each notes tool call renders as a real tool row.
 
+
+never proxied to the engine or the artifact fallback. Every response is a protected `/api` response,
+so the gateway applies `cache-control: no-store` and `Vary: Origin`.
+
+| Method and path | Access | Result |
+|---|---|---|
+
+returns the generic `501 { "error": { "code": "unavailable" } }`. Wrong verbs on a known route are
+405, and unknown subpaths are 404. Errors use `{ error: { code, message?, retryable?, details? } }`
+with sanitized details.
+
+The session-gated routes refuse a deployment that cannot prove a session at all: on a loopback bind
+with no password configured, gating is inactive, so there is no session to verify and the handler
+answers `501 unavailable` ("Configure an access password"). A missing or forged cookie with a
+password configured is `401 auth_required`; a non-loopback bind with no password is `401
+setup_required`. The gateway's own auth gate may answer `401` before the handler runs.
+
+
+`events` is newest first and each event is projected to `{ id, instanceID, operationID, channel,
+outcome, effects, effectsSanitized, effectsRedacted, sanitizedFields, redactedFields, createdAt }`.
+`targetID`, raw `effects_json`, credentials, addresses, URLs and free-form text are deliberately
+absent; unsafe effect values are dropped or replaced with the redaction marker and named in
+`sanitizedFields`/`redactedFields`. `truncated` is exact: the store query requests `limit + 1` rows,
+and the extra row only signals that older events exist outside the window. The store exposes only
+`listAudit(limit)` (no cursor or offset), so this route is a single bounded window and does not
+emulate pagination.
+
+The store pre-normalizes an audit row before this projection sees it: an unrecognized `channel`
+becomes `sdk`, an unrecognized `outcome` becomes `unknown`, and non-primitive or unparseable `effects`
+become `{}`. Those fields are therefore already within the projection's closed vocabulary, and
+`sanitizedFields` will not name the pre-normalized `channel`, `outcome` or malformed-effects case.
+`instanceID`, `operationID`, `id` and `createdAt` are still withheld or flagged when unusable, and
+effects are re-sanitized here rather than trusted from the row.
+
+
+`POST /connection-candidates` and `POST /instances` answer `501 unavailable` with
+`"Connection setup is disabled: this build cannot verify an explicit human target review and Save
+confirmation."` before any session check, DNS lookup, body parse or store access. The application
+reports `connectionSetupKind: "legacy" | "trusted"`; production composition
+(`server/bun-server.ts`) passes no `connectionTrust`, so the kind is `legacy` and both routes stay
+closed. The compiled-but-disabled trusted path returns a one-use review token in the review response
+body and requires `{ candidateID, reviewToken }` at save; the legacy path requires only
+`{ candidateID }`. Neither token nor cookie is human proof, and the trusted path is still blocked
+because the `connections/trust` verifier has no per-request evidence channel (see
+
 ## Dispatch order [app layer]
 
 The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied
 upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
-Notes API, Plugins API, agents, notifications, artifacts (`/api/ui` fallback), engine proxy (`/api*`
-and `/openapi.json`), then static frontend assets. Notes and Plugins branches are skipped when those
-services are not installed. Notes events and `/api/event` disable the request timeout.
+are skipped when those services are not installed. Notes events and `/api/event` disable the request
+timeout.
 
 ## API contract [source/spec; runtime exercised only for info, spec, auth, SSE]
 
@@ -434,3 +509,7 @@ Pins are not evidence of integration.
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests
   are not a vendor push receipt.
+  `501 read_security_unavailable` until credential reflection has a reviewed threat model, and
+  connection setup answers `501 unavailable` until a verifier can prove a per-request human target
+  review. `GET /audit` is a single bounded newest-first window because the store has no audit cursor.
+  writes `verified_version`/`profile` even though the unwired `promote-profile` primitive exists.

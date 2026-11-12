@@ -20,13 +20,11 @@ test("the worktree browser starts a session in the resolved project or worktree 
   expect(dialogs).toMatch(/onSessionCreated\?\.\(\)\s*onResult\("Session created in the worktree\."\)/)
 })
 
-test("worktree session creation closes Notes and Settings from navigation", async () => {
+test("worktree session creation returns to chat through the shared guard", async () => {
   const navigation = await readFile("src/components/session-nav.tsx", "utf8")
   const commandCenter = await readFile("src/components/command-center.tsx", "utf8")
   expect(
-    navigation.match(
-      /onSessionCreated=\{\(\) => \{ notes\.closeNotes\(\); settings\?\.requestClose\(\) \}\}/g
-    )
+    navigation.match(/onSessionCreated=\{\(\) => leaveToChat\(\(\) => \{\}\)\}/g)
   ).toHaveLength(2)
   expect(commandCenter).toContain("onSessionCreated={closeNotes}")
 })

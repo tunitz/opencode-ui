@@ -207,9 +207,14 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const notes = createNotesApi()
+    application: createMediaApplication(),
+    // Credential-bearing routes need a provable human session, not just a
+    // loopback connection: `createMediaHumanGate` refuses when no password-backed
+    // session exists instead of claiming the caller is authenticated.
+    human: createMediaHumanGate(auth),
+  })
   const plugins = createPluginsApi({ engineUrl: target, authorization, repoRoot: resolve(import.meta.dirname, "..") })
   const application = createBunApplication({
-    target, authorization, directory, agents, artifacts, notifications, auth, notes, plugins,
     security,
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {

@@ -1,6 +1,5 @@
 import { ArrowLeftIcon } from "lucide-react"
-import { useNotesWorkspace } from "@/components/notes-sidebar"
-import { useOptionalSettingsWorkspace } from "@/components/settings-context"
+import { useWorkspace } from "@/components/workspace-context"
 import { SessionInspector } from "@/components/session-inspector"
 import { SubagentNavigation } from "@/components/subagent-navigation"
 import { WorkingTreeShortcut } from "@/components/working-tree-shortcut"
@@ -21,17 +20,19 @@ export function AppHeader({
   onOpenWorktrees: () => void
 }) {
   recordPerfRender("AppHeader")
-  const notes = useNotesWorkspace()
-  const settings = useOptionalSettingsWorkspace()
-  const settingsOpen = settings?.open ?? false
-  const workspaceOpen = notes.open || settingsOpen
-  const title = settingsOpen
-    ? "Settings"
-    : notes.open
+  const workspace = useWorkspace()
+  const workspaceOpen = workspace.active !== "chat"
+  const workspaceTitle =
+    workspace.active === "notes"
       ? "Notes"
-      : nav.activeSession
-        ? nav.activeSession.title?.trim() || "Untitled session"
-        : "New session"
+      : workspace.active === "settings"
+        ? "Settings"
+          : null
+  const title =
+    workspaceTitle ??
+    (nav.activeSession
+      ? nav.activeSession.title?.trim() || "Untitled session"
+      : "New session")
 
   return (
     <header className="safe-horizontal flex h-14 shrink-0 items-center border-b border-border/70 px-2 md:px-6 lg:px-8">
@@ -42,10 +43,7 @@ export function AppHeader({
           size="icon-lg"
           className="size-11 shrink-0"
           aria-label="Back to conversation"
-          onClick={() => {
-            if (settingsOpen) settings?.requestClose()
-            else notes.closeNotes()
-          }}
+          onClick={() => workspace.requestWorkspace("chat")}
         >
           <ArrowLeftIcon aria-hidden="true" className="rtl:rotate-180" />
         </Button>
