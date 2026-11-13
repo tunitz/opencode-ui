@@ -201,7 +201,47 @@ answers `501 unavailable` ("Configure an access password"). A missing or forged 
 password configured is `401 auth_required`; a non-loopback bind with no password is `401
 setup_required`. The gateway's own auth gate may answer `401` before the handler runs.
 
-read/test body is parsed or the store is opened. Credential reflection is **mitigated, not
+### Verification candidate recording and profile promotion [app layer]
+
+The seven verification endpoints are enabled only when both independent trust
+compositions (recording and promotion) are present. The route first proves a
+password-backed browser session; therefore anonymous requests remain `401` even
+when trust is absent. Authenticated requests to an uncomposed endpoint return
+`501` because it cannot prove a human session. Mutating routes additionally
+require same-origin JSON.
+
+`GET /instances/:id/verification` opens the existing store through the
+read-only application path and returns only the recorded/fresh flags, closed
+staleness reasons and a sanitized candidate projection. It does not mutate the
+database and omits credentials, actor IDs, upstream free-form text and approved
+addresses.
+
+Recording is a three-request workflow: review `{ expectedRevision }`, step-up
+`{ password }`, then apply `{ expectedRevision, reviewID, materialHash,
+reviewToken, stepUpTicket }`. The review authorizes only `record-verification`;
+it cannot also authorize promotion. The apply path consumes the review token and
+step-up ticket, confirms evidence and authorizes the exact plan before opening
+the writable store or probing. It uses the existing guarded `verifyStoredConnection`
+transport with stored credentials and approved addresses, a 15-second probe
+timeout and the per-instance connection-test single-flight guard. The plan is
+spent before the probe. On failure the response includes `recorded: "false"`
+and `approvalSpent`; callers must start a new review after a spent failure.
+
+Promotion is a separate three-request workflow with its own token registry,
+unless the current candidate is fresh and recordable. `connection-approval-material/v2`
+hashes the exact candidate digest, version, canonical profile, `observedAt`,
+credential kind, principal role, identity confidence and warning list. The
+review lifetime is 5 minutes, step-up lifetime 2 minutes, both shorter than the
+30-minute observation freshness window; a promotion review's expiry is clamped
+to candidate freshness. The one-use promotion plan pins the candidate again,
+then the store checks revision, target, candidate and credential state in its
+atomic promotion transaction. Candidate replacement, revision drift, credential
+rotation, target drift, missing/disabled state, malformed or unsupported
+candidates, expiry and clock skew fail closed with `409` (or `503` if state is
+unavailable). Promotion writes only a version/profile mapping; it does not
+validate capabilities and never claims `serverIdentityVerified`.
+
+verification/read/test bodies are parsed or the store is opened. Credential reflection is **mitigated, not
 prevented**: closed DTO projections are combined with a best-effort echo filter for direct and
 commonly encoded forms. Bounded misses include key/value adjacency patterns beyond the inspected
 checks; splits beyond the 16,384 UTF-16-code-unit boundary window or 8 Mi-unit join budget; numeric
@@ -235,16 +275,16 @@ become `{}`. Those fields are therefore already within the projection's closed v
 effects are re-sanitized here rather than trusted from the row.
 
 
-`POST /connection-candidates`, `POST /connection-step-up` and `POST /instances` answer `501
-unavailable` with `"Connection setup is disabled: this build cannot verify an explicit human target
-review and Save confirmation."` before any session check, DNS lookup, body parse, password check or
-store access. The application reports `connectionSetupKind: "legacy" | "trusted"`; production
-composition (`server/bun-server.ts`) passes no `connectionTrust`, so the kind is `legacy` and all
-three routes stay closed. The compiled-but-disabled trusted path returns a one-use review token in
-the review response body, mints a one-use step-up ticket after re-checking the access password, and
-requires `{ candidateID, reviewToken, stepUpTicket }` at save; the legacy path requires only
-`{ candidateID }`. Neither token, ticket nor cookie is human proof; the trusted composition is
-blocked until the browser surface and its confirmation evidence are reviewed (see
+Production (`server/bun-server.ts`) composes `connectionTrust`, so the trusted
+path is enabled even though the browser UI has no setup controls. The three
+routes require a password-backed browser session and same-origin JSON; when an
+application is constructed without `connectionTrust`, they answer `501` before
+opening the store. The review is DNS-only and returns a one-use token in the
+response body; step-up re-checks the access password and returns a ticket; Save
+requires `{ candidateID, reviewToken, stepUpTicket }`. The legacy test-only
+seam requires only `{ candidateID }` and is not used in production. Neither
+token, ticket nor cookie proves physical human presence. See
+and full order.
 
 
 The three credential routes above are POST-only, use exact one-segment instance paths, and require
@@ -264,8 +304,7 @@ change-log entry. Audit effects are only `{ field, action, revision }`; audit fa
 write. Clearing an already-absent field is a no-op but records the audit without advancing revision
 or generation. A post-commit read-back failure reports `503` with `details.committed: "true"`.
 Disabled instances are refused before review. Production composes a credential-specific trust service,
-review-token/ticket registries and UI confirmation verifier independently from connection setup;
-connection setup itself remains disabled.
+review-token/ticket registries and UI confirmation verifier independently from connection setup.
 
 The store's `setCredential` and `applyCredentialChange` methods are privileged local persistence
 APIs, not authorization boundaries: neither carries the route's session/review/step-up evidence, and
@@ -560,11 +599,12 @@ Pins are not evidence of integration.
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests
   are not a vendor push receipt.
-  `/instances/:id/test` are served behind the human-session gate; the persisted-profile gate remains,
-  so reads without a promoted profile answer `501 profile_unverified` until the promotion UI exists.
-  Credential reflection is mitigated, not prevented, by closed projections and a best-effort echo
-  filter with bounded misses (see above); connection setup still answers `501 unavailable` until a
-  verifier can prove per-request human target review. The guard is not sufficient for any future
-  agent/MCP read surface. `GET /audit` is a single bounded newest-first window because the store has
-  production flow writes `verified_version`/`profile` even though the unwired `promote-profile`
-  primitive exists.
+  browser session; mutating verification routes also require same-origin JSON, review evidence and
+  password step-up. Verification recording and profile promotion are composed in production, but no
+  Connections UI, CLI or MCP workflow invokes them. Promotion sets a profile/version mapping only;
+  it does not verify capabilities, support or server identity. Connection setup is also composed in
+  production behind its separate same-origin, session, review and step-up flow, though no setup UI is
+  mounted. Credential reflection is mitigated, not
+  prevented, by closed projections and a best-effort echo filter with bounded misses (see above);
+  the guard is not sufficient for any future agent/MCP read surface. `GET /audit` is a single bounded
+  the documented same-UID boundary.

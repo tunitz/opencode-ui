@@ -212,6 +212,8 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const notes = createNotesApi()
   const connectionConfirmations = createMediaUiConfirmationStore()
   const credentialConfirmations = createMediaUiConfirmationStore()
+  const verificationRecordConfirmations = createMediaUiConfirmationStore()
+  const promotionConfirmations = createMediaUiConfirmationStore()
     application: createMediaApplication({
       // This is the production trusted setup composition. The application builds
       // its review-token and step-up-ticket registries from these options; the
@@ -226,6 +228,18 @@ export async function startBunServer(options: BunServerOptions = {}) {
       credentialTrust: {
         confirmations: credentialConfirmations,
         verify: createMediaUiConnectionVerifier(credentialConfirmations),
+        evidence: { kind: "required", channels: ["ui"] },
+      },
+      // Recording and promotion each have independent token, step-up and
+      // confirmation state. Promotion is reviewed only after a candidate exists.
+      verificationRecordTrust: {
+        confirmations: verificationRecordConfirmations,
+        verify: createMediaUiConnectionVerifier(verificationRecordConfirmations),
+        evidence: { kind: "required", channels: ["ui"] },
+      },
+      promotionTrust: {
+        confirmations: promotionConfirmations,
+        verify: createMediaUiConnectionVerifier(promotionConfirmations),
         evidence: { kind: "required", channels: ["ui"] },
       },
       // Step-up shares the login failure counter and delay. The password never

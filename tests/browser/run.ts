@@ -51,6 +51,7 @@ type MediaSetupRequest = {
 }
 const mediaSetupRequests: MediaSetupRequest[] = []
 const mediaCredentialRequests: MediaSetupRequest[] = []
+const mediaVerificationRequests: MediaSetupRequest[] = []
 const results: Result[] = []
 
 type FixtureSpace = {
@@ -261,8 +262,13 @@ const FIXTURE_STEP_UP_TICKET = "b".repeat(64)
 const FIXTURE_CREDENTIAL_REVIEW_ID = `credrev_${"d".repeat(32)}`
 const FIXTURE_CREDENTIAL_HASH = "e".repeat(64)
 const FIXTURE_CREDENTIAL_CANARY = "BROWSER-CREDENTIAL-CANARY-1234567890"
+const FIXTURE_VERIFICATION_REVIEW_ID = `connrev_${"f".repeat(32)}`
+const FIXTURE_VERIFICATION_HASH = "9".repeat(64)
+const FIXTURE_VERIFICATION_TOKEN = "7".repeat(64)
+const FIXTURE_VERIFICATION_PASSWORD = "synthetic-verification-password"
 let fixtureAddedMediaInstance: FixtureMediaInstance | null = null
 let fixtureReviewedMediaName: string | null = null
+let fixtureRecordedVerificationCandidate: Record<string, unknown> | null = null
 
 function spacesFor(directory: string | null): FixtureSpace[] {
   if (!directory) return [...fixtureSpaces]
@@ -581,6 +587,47 @@ function json(body: unknown, status = 200) {
   })
 }
 
+function verificationCandidate() {
+  const now = Date.now()
+  return {
+    version: "4.0.20.3014",
+    profileObservation: {
+      state: "candidate-profile-match",
+      matchingProfiles: ["sonarr-4-current"],
+      preferredProfile: "sonarr-4-current",
+    },
+    credentialKind: "api-key",
+    principalRole: "admin",
+    identityConfidence: "strong",
+    warnings: ["plaintext_transport"],
+    checkedAt: now - 2_000,
+    observedAt: now - 1_000,
+    ageMs: 1_000,
+    approvedAddressCount: 1,
+  }
+}
+
+function verificationStatus(instanceID: string) {
+  if (fixtureRecordedVerificationCandidate && instanceID === "sonarr-primary") {
+    return {
+      instanceID,
+      recorded: true,
+      fresh: true,
+      state: "fresh",
+      reasons: [],
+      candidate: fixtureRecordedVerificationCandidate,
+    }
+  }
+  return {
+    instanceID,
+    recorded: false,
+    fresh: false,
+    state: "not-recorded",
+    reasons: ["not_recorded"],
+    candidate: null,
+  }
+}
+
 await buildFixture(outDir)
 
 const server = Bun.serve({
@@ -676,6 +723,95 @@ const server = Bun.serve({
         ticket: FIXTURE_STEP_UP_TICKET,
         expiresAt: Date.now() + 60_000,
       })
+    }
+    const verificationRoute = pathname.match(
+    )
+    if (verificationRoute) {
+      const instanceID = verificationRoute[1]
+      const route = verificationRoute[2]
+      const instance =
+        fixtureMediaInstances.find((candidate) => candidate.id === instanceID) ??
+        (fixtureAddedMediaInstance?.id === instanceID
+          ? fixtureAddedMediaInstance
+          : undefined)
+      if (!instance)
+        return json({ error: { code: "not_found", message: "Unknown instance." } }, 404)
+      if (route === "verification" && request.method === "GET")
+        return json(verificationStatus(instanceID))
+      if (request.method !== "POST")
+        return json({ error: { code: "method_not_allowed" } }, 405)
+      const body = (await request.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >
+      mediaVerificationRequests.push({
+        method: request.method,
+        path: pathname,
+        search: url.search,
+        body,
+      })
+      if (route === "verification-reviews" || route === "promotion-reviews") {
+        const promotion = route === "promotion-reviews"
+        const candidate = fixtureRecordedVerificationCandidate
+        return json({
+          reviewID: FIXTURE_VERIFICATION_REVIEW_ID,
+          materialHash: FIXTURE_VERIFICATION_HASH,
+          expiresAt: Date.now() + 90_000,
+          token: FIXTURE_VERIFICATION_TOKEN,
+          display: {
+            service: instance.service,
+            name: instance.name,
+            approvedAddresses: ["203.0.113.15"],
+            credentials: { ...instance.credentials },
+            effects: [promotion ? "promote-profile" : "record-verification"],
+            ...(promotion && candidate ? { candidate } : {}),
+          },
+        })
+      }
+      if (route === "verification-step-up" || route === "promotion-step-up")
+        return json({
+          ticket: FIXTURE_STEP_UP_TICKET,
+          expiresAt: Date.now() + 60_000,
+        })
+      if (route === "verification-record") {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        fixtureRecordedVerificationCandidate = verificationCandidate()
+        return json({
+          instanceID,
+          recorded: true,
+          approvalSpent: true,
+          candidate: fixtureRecordedVerificationCandidate,
+        })
+      }
+      if (route === "promote") {
+        const candidate = fixtureRecordedVerificationCandidate
+        if (!candidate)
+          return json(
+            {
+              error: {
+                code: "conflict",
+                message: "A recorded candidate is required.",
+                details: { reason: "candidate_not_recorded" },
+              },
+            },
+            409
+          )
+        const nextRevision = (instance.revision ?? 0) + 1
+        instance.revision = nextRevision
+        instance.verifiedVersion = String(candidate.version)
+        instance.profile = "sonarr-4-current"
+        instance.readiness = "locally-ready"
+        return json({
+          instanceID,
+          revision: nextRevision,
+          verifiedVersion: String(candidate.version),
+          profile: "sonarr-4-current",
+          transport: "plaintext",
+          serverIdentityVerified: false,
+          versionSource: "upstream-self-report",
+          warnings: ["plaintext_transport"],
+        })
+      }
     }
     const credentialRoute = pathname.match(
     )
@@ -5594,6 +5730,245 @@ if (browser) {
           )
         } finally {
           await opened.context.close()
+        }
+      }
+    }
+  )
+}
+
+if (browser) {
+  await run(
+    async ({ check }) => {
+      const scenarios = [
+        {
+          width: 1280,
+          height: 900,
+          theme: "light" as const,
+          dir: "ltr" as const,
+          reducedMotion: "no-preference" as const,
+        },
+        {
+          width: 320,
+          height: 844,
+          theme: "dark" as const,
+          dir: "rtl" as const,
+          reducedMotion: "reduce" as const,
+        },
+      ]
+
+      for (const scenario of scenarios) {
+        const { width, height } = scenario
+        mediaRequests.length = 0
+        mediaInstanceRequests.length = 0
+        mediaVerificationRequests.length = 0
+        fixtureAddedMediaInstance = null
+        fixtureReviewedMediaName = null
+        fixtureRecordedVerificationCandidate = null
+        const sonarr = fixtureMediaInstances.find(
+          (instance) => instance.id === "sonarr-primary"
+        )!
+        sonarr.disabled = false
+        sonarr.configError = null
+        sonarr.verifiedVersion = null
+        sonarr.profile = null
+        sonarr.revision = 3
+        sonarr.credentials = { apiKey: true, userToken: false }
+        sonarr.readiness = "unverified"
+
+        const opened = await openPage(
+          { width, height },
+          { theme: scenario.theme },
+          { dir: scenario.dir, reducedMotion: scenario.reducedMotion }
+        )
+        const page = opened.page
+        try {
+          await page
+            .click()
+          const row = page
+            .filter({ hasText: "Sonarr primary" })
+          await row
+            .waitFor({ state: "visible" })
+          await testButton.waitFor({ state: "visible" })
+          const actionBox = await testButton.boundingBox()
+          check(
+            `${width}px: Test connection meets the 44px target`,
+            Boolean(actionBox && actionBox.height >= 44),
+            JSON.stringify(actionBox)
+          )
+          await testButton.click()
+          const verificationDialog = page.getByRole("dialog", {
+            name: "Test connection",
+          })
+          await verificationDialog.waitFor({ state: "visible" })
+          await verificationDialog
+            .getByRole("heading", { name: "Review summary" })
+            .waitFor({ state: "visible" })
+          const recordReviewText = await verificationDialog.innerText()
+          check(
+            `${width}px: test review shows target, credential, addresses and transport warning`,
+            recordReviewText.includes("Sonarr primary") &&
+              recordReviewText.includes("API key") &&
+              recordReviewText.includes("203.0.113.15") &&
+              recordReviewText.includes("Plaintext HTTP") &&
+              recordReviewText.includes("Reads stay locked")
+          )
+
+          await verificationDialog
+            .getByRole("button", { name: "Confirm password" })
+            .click()
+          const recordPassword = verificationDialog.getByLabel("Access password")
+          check(
+            `${width}px: test step-up uses current-password autocomplete`,
+            (await recordPassword.getAttribute("autocomplete")) ===
+              "current-password"
+          )
+          await recordPassword.fill(FIXTURE_VERIFICATION_PASSWORD)
+          await verificationDialog
+            .getByRole("button", { name: "Confirm password" })
+            .click()
+          const testApply = verificationDialog.locator(
+          )
+          await testApply.waitFor({ state: "visible" })
+          await testApply.click()
+          await verificationDialog
+            .getByRole("button", { name: "Contacting the service" })
+            .waitFor({ state: "visible" })
+          check(
+            `${width}px: probe busy copy says it is contacting the service`,
+            (await verificationDialog
+              .getByRole("button", { name: "Contacting the service" })
+              .innerText()) === "Contacting the service"
+          )
+          await verificationDialog.waitFor({ state: "hidden" })
+          await row
+            .waitFor({ state: "visible" })
+          await row
+            .getByText("Verification candidate recorded. Reads stay locked until a profile is promoted.")
+            .waitFor({ state: "visible" })
+          check(
+            `${width}px: test shows the observed version without an identity claim`,
+            (await row.innerText()).includes("4.0.20.3014") &&
+              !(await row.innerText()).includes("server identity verified")
+          )
+
+          const promoteButton = row.locator(
+          )
+          await promoteButton.waitFor({ state: "visible" })
+          check(
+            `${width}px: fresh candidate with profile observation enables promotion`,
+            !(await promoteButton.isDisabled())
+          )
+          await promoteButton.click()
+          const promotionDialog = page.getByRole("dialog", {
+            name: "Promote profile",
+          })
+          await promotionDialog.waitFor({ state: "visible" })
+          const promotionReviewText = await promotionDialog.innerText()
+          check(
+            `${width}px: promotion review shows exact self-reported version, profile, credential and HTTP warning`,
+            promotionReviewText.includes("4.0.20.3014") &&
+              promotionReviewText.includes("sonarr-4-current") &&
+              promotionReviewText.includes("api-key") &&
+              promotionReviewText.includes("Plaintext HTTP") &&
+              promotionReviewText.includes(
+                "Reported by the service, not cryptographically verified"
+              )
+          )
+          await promotionDialog
+            .getByRole("button", { name: "Confirm password" })
+            .click()
+          const promotionPassword = promotionDialog.getByLabel("Access password")
+          await promotionPassword.fill(FIXTURE_VERIFICATION_PASSWORD)
+          await promotionDialog
+            .getByRole("button", { name: "Confirm password" })
+            .click()
+          await promotionDialog
+            .click()
+          await promotionDialog.waitFor({ state: "hidden" })
+          await row
+            .getByText("Profile promoted — reads unlocked for this instance")
+            .waitFor({ state: "visible" })
+          check(
+            `${width}px: promotion caveat remains visible and readiness refreshes`,
+            (await row.innerText()).includes(
+              "The version is reported by the service, not cryptographically verified."
+            ) &&
+              (await row.innerText()).includes("Local configuration ready") &&
+              (await row.innerText()).includes("sonarr-4-current")
+          )
+
+          const route = (suffix: string) =>
+            mediaVerificationRequests.find((item) => item.path.endsWith(suffix))
+          const recordReview = route("/verification-reviews")
+          const recordStepUp = route("/verification-step-up")
+          const recordApply = route("/verification-record")
+          const promotionReview = route("/promotion-reviews")
+          const promotionStepUp = route("/promotion-step-up")
+          const promotionApply = route("/promote")
+          check(
+            `${width}px: review bodies bind the expected revision`,
+            recordReview?.body.expectedRevision === 3 &&
+              promotionReview?.body.expectedRevision === 3
+          )
+          check(
+            `${width}px: passwords appear only in the two step-up request bodies`,
+            recordStepUp?.body.password === FIXTURE_VERIFICATION_PASSWORD &&
+              promotionStepUp?.body.password === FIXTURE_VERIFICATION_PASSWORD &&
+              Object.keys(recordStepUp?.body ?? {}).join(",") === "password" &&
+              Object.keys(promotionStepUp?.body ?? {}).join(",") === "password" &&
+              !JSON.stringify(recordApply?.body).includes(
+                FIXTURE_VERIFICATION_PASSWORD
+              ) &&
+              !JSON.stringify(promotionApply?.body).includes(
+                FIXTURE_VERIFICATION_PASSWORD
+              )
+          )
+          check(
+            `${width}px: both applies use the exact reviewed evidence`,
+            recordApply?.body.reviewID === FIXTURE_VERIFICATION_REVIEW_ID &&
+              recordApply?.body.materialHash === FIXTURE_VERIFICATION_HASH &&
+              recordApply?.body.reviewToken === FIXTURE_VERIFICATION_TOKEN &&
+              recordApply?.body.stepUpTicket === FIXTURE_STEP_UP_TICKET &&
+              promotionApply?.body.reviewID === FIXTURE_VERIFICATION_REVIEW_ID &&
+              promotionApply?.body.materialHash === FIXTURE_VERIFICATION_HASH &&
+              promotionApply?.body.reviewToken === FIXTURE_VERIFICATION_TOKEN &&
+              promotionApply?.body.stepUpTicket === FIXTURE_STEP_UP_TICKET
+          )
+          check(
+            `${width}px: inventory refresh follows promotion`,
+            mediaInstanceRequests.length === 2
+          )
+
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth - window.innerWidth
+          )
+          check(
+            `${width}px: verification journey has no horizontal overflow`,
+            overflow <= 0,
+            `overflow=${overflow}`
+          )
+          check(
+            `${width}px: verification journey has no page errors`,
+            opened.pageErrors.length === 0,
+            opened.pageErrors.join(" | ")
+          )
+          check(
+            `${width}px: verification journey has no console errors`,
+            opened.consoleErrors.length === 0,
+            opened.consoleErrors.join(" | ")
+          )
+          mergeDiagnostics(
+            results.find((result) =>
+            )!,
+            opened
+          )
+        } finally {
+          await opened.context.close()
+          fixtureRecordedVerificationCandidate = null
+          sonarr.verifiedVersion = null
+          sonarr.profile = null
+          sonarr.revision = 3
+          sonarr.readiness = "unverified"
         }
       }
     }
