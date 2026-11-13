@@ -6013,6 +6013,7 @@ if (browser) {
             body: JSON.stringify({
               error: {
                 code: "unavailable",
+                message:
               },
             }),
           })
@@ -6021,10 +6022,30 @@ if (browser) {
         await page.getByRole("button", { name: "Refresh connections" }).click()
           state: "visible",
         })
+        const addConnection = page.getByRole("button", {
+          name: "Add connection",
+        })
+        await addConnection.waitFor({ state: "visible" })
         check(
           "320px: a successful empty inventory is stated without health claims",
           !/Healthy|Online|\bConnected\b/.test(
           )
+        )
+        check(
+          "320px: empty inventory keeps the Add connection entry point",
+          await addConnection.isVisible()
+        )
+        const setupDialog = page.getByRole("dialog", { name: "Add connection" })
+        await addConnection.click()
+        await setupDialog.waitFor({ state: "visible" })
+        await setupDialog.getByRole("button", { name: "Cancel" }).click()
+        await setupDialog.waitFor({ state: "hidden" })
+        const returnedFocus = await activeElement(page)
+        check(
+          "320px: closing setup from the empty inventory restores Add connection focus",
+          returnedFocus.tag === "BUTTON" &&
+            (returnedFocus.text ?? "").includes("Add connection"),
+          JSON.stringify(returnedFocus)
         )
 
         mode = "error"
@@ -6034,7 +6055,13 @@ if (browser) {
         })
         check(
           "320px: a failed inventory read is safe and actionable",
+          errorText.includes(
+          ) &&
             errorText.includes("Retry")
+        )
+        check(
+          "320px: genuine inventory errors keep Retry without Add connection",
+          (await page.getByRole("button", { name: "Add connection" }).count()) === 0
         )
         const retryBox = await page
           .getByRole("button", { name: "Retry" })
