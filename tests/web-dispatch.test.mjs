@@ -50,6 +50,24 @@ describe("Web gateway dispatch", () => {
       method: "POST", headers: { "content-type": "application/json" }, body,
     }))
   })
+    const post = (path, body) => withMedia(request(path, {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    }))
+    for (const path of [
+    ]) {
+      expect((await post(path, "x".repeat(8 * 1024))).status).toBe(200)
+      const oversized = await post(path, "x".repeat(8 * 1024 + 1))
+      expect(oversized.status).toBe(413)
+      expect(await oversized.json()).toEqual({ error: { code: "payload_too_large" } })
+    }
+    expect((await post(applyPath, "x".repeat(32 * 1024))).status).toBe(200)
+    const oversizedApply = await post(applyPath, "x".repeat(32 * 1024 + 1))
+    expect(oversizedApply.status).toBe(413)
+    expect(await oversizedApply.json()).toEqual({ error: { code: "payload_too_large" } })
+    // The anchored family must not grant the larger cap to an extra path segment.
+    expect((await post(`${applyPath}/extra`, "x".repeat(32 * 1024 + 1))).status).toBe(200)
+    expect((await post(`${applyPath}/extra`, "x".repeat(256 * 1024 + 1))).status).toBe(413)
+  })
     // Regression: the gateway chose the 1 MiB ceiling whenever *any* path
     // segment was `import`/`batch`, so the connection-test route for an entity
     // whose ID happened to be `import` buffered 1 MiB instead of 256 KiB.

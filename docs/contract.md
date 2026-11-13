@@ -246,6 +246,39 @@ requires `{ candidateID, reviewToken, stepUpTicket }` at save; the legacy path r
 `{ candidateID }`. Neither token, ticket nor cookie is human proof; the trusted composition is
 blocked until the browser surface and its confirmation evidence are reviewed (see
 
+
+The three credential routes above are POST-only, use exact one-segment instance paths, and require
+same-origin JSON plus the password-backed browser session. Review accepts only
+`{ expectedRevision, action, field }`; step-up accepts only `{ password }`; apply accepts the exact
+review binding `{ expectedRevision, action, field, reviewID, materialHash, reviewToken,
+stepUpTicket }` and a body-only `value` for stores. A value is never accepted during review and is
+excluded from trust material, hashes, grants, plans, audit effects, responses and errors. Unknown
+keys (including `confirmed`, `force`, `yes`, `apiKey` and the legacy `token` key) are rejected. A
+missing/empty store value and any value on clear are `400`; mismatched, expired, consumed or cross-instance
+review/ticket evidence maps to the same `409 review_token_unavailable`. Review/step-up bodies are
+capped at 8 KiB and apply at 32 KiB by anchored route family.
+
+The store applies one field change in an immediate transaction: blocking-intent and revision checks,
+credential upsert/delete, instance revision and credential-generation bump, sanitized audit row, and
+change-log entry. Audit effects are only `{ field, action, revision }`; audit failure rolls back the
+write. Clearing an already-absent field is a no-op but records the audit without advancing revision
+or generation. A post-commit read-back failure reports `503` with `details.committed: "true"`.
+Disabled instances are refused before review. Production composes a credential-specific trust service,
+review-token/ticket registries and UI confirmation verifier independently from connection setup;
+connection setup itself remains disabled.
+
+The store's `setCredential` and `applyCredentialChange` methods are privileged local persistence
+APIs, not authorization boundaries: neither carries the route's session/review/step-up evidence, and
+trusted code running as the same UID can call them. `setCredential` retains its weaker legacy
+character policy and is not used by production credential routes.
+
+The review binds the field and resulting credential-presence state, **not the secret bytes**. A
+same-session attacker who can alter the apply request could substitute a different value under the
+same field approval. Step-up establishes password possession, not comprehension; same-origin XSS,
+browser automation, stolen sessions with the password and same-UID processes remain outside this
+boundary. Credential deletion is logical: SQLite WAL/free pages and backups may retain old bytes.
+There is no credential UI, CLI, MCP or model-writable path in this change.
+
 ## Dispatch order [app layer]
 
 The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied

@@ -50,6 +50,7 @@ type MediaSetupRequest = {
   body: Record<string, unknown>
 }
 const mediaSetupRequests: MediaSetupRequest[] = []
+const mediaCredentialRequests: MediaSetupRequest[] = []
 const results: Result[] = []
 
 type FixtureSpace = {
@@ -257,6 +258,9 @@ const fixtureMediaDiagnostics: FixtureMediaDiagnostic[] = [
 const FIXTURE_CONNECTION_CANDIDATE = "c".repeat(64)
 const FIXTURE_REVIEW_TOKEN = "a".repeat(64)
 const FIXTURE_STEP_UP_TICKET = "b".repeat(64)
+const FIXTURE_CREDENTIAL_REVIEW_ID = `credrev_${"d".repeat(32)}`
+const FIXTURE_CREDENTIAL_HASH = "e".repeat(64)
+const FIXTURE_CREDENTIAL_CANARY = "BROWSER-CREDENTIAL-CANARY-1234567890"
 let fixtureAddedMediaInstance: FixtureMediaInstance | null = null
 let fixtureReviewedMediaName: string | null = null
 
@@ -671,6 +675,79 @@ const server = Bun.serve({
       return json({
         ticket: FIXTURE_STEP_UP_TICKET,
         expiresAt: Date.now() + 60_000,
+      })
+    }
+    const credentialRoute = pathname.match(
+    )
+    if (credentialRoute) {
+      if (request.method !== "POST")
+        return json({ error: { code: "method_not_allowed" } }, 405)
+      const body = (await request.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >
+      mediaCredentialRequests.push({
+        method: request.method,
+        path: pathname,
+        search: url.search,
+        body,
+      })
+      const instance = fixtureMediaInstances.find(
+        (candidate) => candidate.id === credentialRoute[1]
+      )
+      if (!instance)
+        return json({ error: { code: "not_found", message: "Unknown instance." } }, 404)
+
+      const route = credentialRoute[2]
+      if (route === "credential-reviews") {
+        const field = body.field
+        const action = body.action
+        if (
+          (field !== "apiKey" && field !== "userToken") ||
+          (field === "userToken" && instance.service !== "jellyfin") ||
+          (action !== "store" && action !== "clear")
+        )
+          return json({ error: { code: "invalid" } }, 400)
+        const current = { ...instance.credentials }
+        const resulting = { ...current, [field]: action === "store" }
+        return json({
+          reviewID: FIXTURE_CREDENTIAL_REVIEW_ID,
+          materialHash: FIXTURE_CREDENTIAL_HASH,
+          expiresAt: Date.now() + 90_000,
+          token: FIXTURE_REVIEW_TOKEN,
+          display: {
+            service: instance.service,
+            name: instance.name,
+            approvedAddresses: ["203.0.113.15", "203.0.113.16"],
+            current,
+            resulting,
+            warnings: [],
+          },
+        })
+      }
+      if (route === "credential-step-up")
+        return json({
+          ticket: FIXTURE_STEP_UP_TICKET,
+          expiresAt: Date.now() + 60_000,
+        })
+
+      const field = body.field
+      const action = body.action
+      if (
+        (field !== "apiKey" && field !== "userToken") ||
+        (field === "userToken" && instance.service !== "jellyfin") ||
+        (action !== "store" && action !== "clear")
+      )
+        return json({ error: { code: "invalid" } }, 400)
+      instance.credentials[field] = action === "store"
+      instance.revision = (instance.revision ?? 0) + 1
+      return json({
+        instanceID: instance.id,
+        field,
+        action,
+        changed: true,
+        revision: instance.revision,
+        credentials: { ...instance.credentials },
       })
     }
       if (request.method === "POST") {
@@ -4912,11 +4989,22 @@ if (browser) {
               bodyText.includes("Unknown stored service") &&
               bodyText.includes("ID: future-instance")
           )
+          const sonarrRow = panel
+            .filter({ hasText: "Sonarr primary" })
+          const disabledRow = panel
+            .filter({ hasText: "Radarr archive" })
           check(
-            `${width}px: no connection mutation controls are offered`,
-            (await panel
-              .getByRole("button", { name: /^(Add|Edit|Test|Delete|Save)$/ })
-              .count()) === 0
+            `${width}px: enabled instances expose field-specific credential actions`,
+            (await sonarrRow.getByRole("button", { name: "Replace API key" }).count()) ===
+              1 &&
+                1
+          )
+          check(
+            `${width}px: disabled instances hide credential actions with a reason`,
+              0 &&
+              (await disabledRow.innerText()).includes(
+                "Credential changes are unavailable while this instance is disabled."
+              )
           )
 
           for (const name of ["Load more instances", "Load more diagnostics"]) {
@@ -4971,6 +5059,15 @@ if (browser) {
             completeText.includes("Jellyfin library") &&
               completeText.includes("3 instances") &&
               completeText.includes("2 diagnostics")
+          )
+          const jellyfinRow = panel
+            .filter({ hasText: "Jellyfin library" })
+          check(
+            `${width}px: user-token controls are restricted to Jellyfin`,
+            (await jellyfinRow
+              .count()) === 2 &&
+              (await panel
+                .count()) === 2
           )
           const instancesFocus = await activeElement(page)
           check(
@@ -5159,7 +5256,7 @@ if (browser) {
           check(
             `${width}px: refreshed row remains unverified and credential-free`,
             (await row.innerText()).includes("Credential missing") &&
-              (await row.innerText()).includes("None")
+              (await row.innerText()).includes("Not configured")
           )
           check(
             `${width}px: inventory refreshed after save`,
@@ -5236,6 +5333,259 @@ if (browser) {
             `${width}px: setup journey has no console errors`,
             opened.consoleErrors.length === 0,
             opened.consoleErrors.join(" | ")
+          )
+          mergeDiagnostics(
+            results.find((result) =>
+            )!,
+            opened
+          )
+        } finally {
+          await opened.context.close()
+        }
+      }
+    }
+  )
+}
+
+if (browser) {
+  await run(
+    async ({ check }) => {
+      const scenarios = [
+        {
+          width: 1280,
+          height: 900,
+          theme: "light" as const,
+          dir: "ltr" as const,
+          reducedMotion: "no-preference" as const,
+        },
+        {
+          width: 390,
+          height: 844,
+          theme: "dark" as const,
+          dir: "rtl" as const,
+          reducedMotion: "reduce" as const,
+        },
+        {
+          width: 320,
+          height: 844,
+          theme: "system" as const,
+          dir: "rtl" as const,
+          reducedMotion: "reduce" as const,
+        },
+      ]
+
+      for (const scenario of scenarios) {
+        const { width, height } = scenario
+        mediaRequests.length = 0
+        mediaInstanceRequests.length = 0
+        mediaCredentialRequests.length = 0
+        fixtureAddedMediaInstance = null
+        fixtureReviewedMediaName = null
+        const sonarr = fixtureMediaInstances.find(
+          (instance) => instance.id === "sonarr-primary"
+        )!
+        sonarr.credentials = { apiKey: true, userToken: false }
+        sonarr.revision = 3
+
+        const opened = await openPage(
+          { width, height },
+          scenario.theme === "system" ? undefined : { theme: scenario.theme },
+          { dir: scenario.dir, reducedMotion: scenario.reducedMotion }
+        )
+        const page = opened.page
+        const consoleMessages: string[] = []
+        page.on("console", (message) => consoleMessages.push(message.text()))
+        try {
+          await page
+            .click()
+          const row = page
+            .filter({ hasText: "Sonarr primary" })
+          const replaceButton = row.getByRole("button", {
+            name: "Replace API key",
+          })
+          await replaceButton.waitFor({ state: "visible" })
+          const replaceBox = await replaceButton.boundingBox()
+          check(
+            `${width}px: Replace API key meets the 44px target`,
+            Boolean(replaceBox && replaceBox.height >= 44),
+            JSON.stringify(replaceBox)
+          )
+          await replaceButton.click()
+          const dialog = page.getByRole("dialog", { name: "Replace API key" })
+          await dialog.waitFor({ state: "visible" })
+          await page.getByRole("heading", { name: "Review summary" }).waitFor({
+            state: "visible",
+          })
+
+          const summary = await dialog.innerText()
+          check(
+            `${width}px: review summarizes instance, field, action, presence, revision and target`,
+            summary.includes("Sonarr primary") &&
+              summary.includes("API key") &&
+              summary.includes("Replace") &&
+              summary.includes("Configured → Configured") &&
+              summary.includes("3") &&
+              summary.includes("203.0.113.15")
+          )
+          const reviewRequest = mediaCredentialRequests.find((item) =>
+            item.path.endsWith("/credential-reviews")
+          )
+          check(
+            `${width}px: credential review body has no value`,
+            reviewRequest?.method === "POST" &&
+              reviewRequest.search === "" &&
+              JSON.stringify(reviewRequest.body) ===
+                JSON.stringify({
+                  expectedRevision: 3,
+                  action: "store",
+                  field: "apiKey",
+                }) &&
+              !JSON.stringify(reviewRequest.body).includes(
+                FIXTURE_CREDENTIAL_CANARY
+              )
+          )
+
+          await page.getByRole("button", { name: "Confirm password" }).click()
+          const passwordInput = page.getByLabel("Access password")
+          check(
+            `${width}px: step-up password uses current-password autocomplete`,
+            (await passwordInput.getAttribute("autocomplete")) ===
+              "current-password"
+          )
+          await passwordInput.fill("synthetic-browser-password")
+          await page.getByRole("button", { name: "Confirm password" }).click()
+          const secretInput = page.locator(
+          )
+          await secretInput.waitFor({ state: "visible" })
+          check(
+            `${width}px: credential input is password-only and disables autocomplete/spellcheck`,
+            (await secretInput.getAttribute("type")) === "password" &&
+              (await secretInput.getAttribute("autocomplete")) === "off" &&
+              (await secretInput.getAttribute("spellcheck")) === "false",
+            JSON.stringify({
+              tag: await secretInput.evaluate((element) => element.tagName),
+              type: await secretInput.getAttribute("type"),
+              autocomplete: await secretInput.getAttribute("autocomplete"),
+              spellcheck: await secretInput.getAttribute("spellcheck"),
+            })
+          )
+          const saveButton = page.getByRole("button", { name: "Save credential" })
+          const saveBox = await saveButton.boundingBox()
+          check(
+            `${width}px: Save credential meets the 44px target`,
+            Boolean(saveBox && saveBox.height >= 44),
+            JSON.stringify(saveBox)
+          )
+          await secretInput.fill(FIXTURE_CREDENTIAL_CANARY)
+          const canaryBeforeApply = await page.evaluate((canary) => ({
+            passwordInputs: [...document.querySelectorAll('input[type="password"]')]
+              .map((input) => (input as HTMLInputElement).value)
+              .filter((value) => value.includes(canary)).length,
+            text: document.body.innerText.includes(canary),
+            url: location.href.includes(canary),
+          }), FIXTURE_CREDENTIAL_CANARY)
+          check(
+            `${width}px: before apply, the canary exists only in the password input`,
+            canaryBeforeApply.passwordInputs === 1 &&
+              !canaryBeforeApply.text &&
+              !canaryBeforeApply.url
+          )
+          await saveButton.click()
+          await page.getByText("Configured; not tested.").waitFor({
+            state: "visible",
+          })
+          await dialog.waitFor({ state: "hidden" })
+
+          const stepUpRequest = mediaCredentialRequests.find((item) =>
+            item.path.endsWith("/credential-step-up")
+          )
+          const applyRequest = mediaCredentialRequests.find((item) =>
+            item.path.endsWith("/credentials")
+          )
+          check(
+            `${width}px: step-up body contains only the password`,
+            stepUpRequest?.method === "POST" &&
+              stepUpRequest.search === "" &&
+              JSON.stringify(stepUpRequest.body) ===
+                JSON.stringify({ password: "synthetic-browser-password" })
+          )
+          check(
+            `${width}px: apply body contains the canary exactly once`,
+            applyRequest?.method === "POST" &&
+              applyRequest.search === "" &&
+              applyRequest.body.reviewID === FIXTURE_CREDENTIAL_REVIEW_ID &&
+              applyRequest.body.materialHash === FIXTURE_CREDENTIAL_HASH &&
+              applyRequest.body.reviewToken === FIXTURE_REVIEW_TOKEN &&
+              applyRequest.body.stepUpTicket === FIXTURE_STEP_UP_TICKET &&
+              applyRequest.body.value === FIXTURE_CREDENTIAL_CANARY &&
+              JSON.stringify(applyRequest.body).split(
+                FIXTURE_CREDENTIAL_CANARY
+              ).length === 2
+          )
+          const secretAfterClose = await page.evaluate(() => ({
+            url: location.href,
+            localStorage: JSON.stringify({ ...localStorage }),
+            sessionStorage: JSON.stringify({ ...sessionStorage }),
+            history: JSON.stringify(history.state),
+            body: document.body.innerText,
+            inputValues: [...document.querySelectorAll("input")].map(
+              (input) => (input as HTMLInputElement).value
+            ),
+            secretInputs: document.querySelectorAll(
+            ).length,
+            html: document.documentElement.innerHTML,
+          }))
+          check(
+            `${width}px: closing removes the canary from storage, URL, history, DOM and inputs`,
+            !secretAfterClose.url.includes(FIXTURE_CREDENTIAL_CANARY) &&
+              !secretAfterClose.localStorage.includes(FIXTURE_CREDENTIAL_CANARY) &&
+              !secretAfterClose.sessionStorage.includes(FIXTURE_CREDENTIAL_CANARY) &&
+              !secretAfterClose.history.includes(FIXTURE_CREDENTIAL_CANARY) &&
+              !secretAfterClose.body.includes(FIXTURE_CREDENTIAL_CANARY) &&
+              !secretAfterClose.inputValues.some((value) =>
+                value.includes(FIXTURE_CREDENTIAL_CANARY)
+              ) &&
+              secretAfterClose.secretInputs === 0 &&
+              !secretAfterClose.html.includes(FIXTURE_CREDENTIAL_CANARY),
+            JSON.stringify({
+              ...secretAfterClose,
+              html: secretAfterClose.html.includes(FIXTURE_CREDENTIAL_CANARY),
+            })
+          )
+          check(
+            `${width}px: post-change row reports presence without claiming a test`,
+            (await row.innerText()).includes("Configured") &&
+              !/Verified|Healthy|Online/.test(await row.innerText())
+          )
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollWidth - window.innerWidth
+          )
+          check(
+            `${width}px: credential journey has no horizontal page overflow`,
+            overflow <= 0,
+            `overflow=${overflow}`
+          )
+          const returnedFocus = await activeElement(page)
+          check(
+            `${width}px: completed change returns focus to its field action`,
+            returnedFocus.tag === "BUTTON" &&
+              (returnedFocus.text ?? "").includes("Replace API key"),
+            JSON.stringify(returnedFocus)
+          )
+          check(
+            `${width}px: credential journey has no page errors`,
+            opened.pageErrors.length === 0,
+            opened.pageErrors.join(" | ")
+          )
+          check(
+            `${width}px: credential journey has no console errors`,
+            opened.consoleErrors.length === 0,
+            opened.consoleErrors.join(" | ")
+          )
+          check(
+            `${width}px: the credential canary never reaches browser console output`,
+            !consoleMessages.join(" ").includes(FIXTURE_CREDENTIAL_CANARY),
+            consoleMessages.join(" | ")
           )
           mergeDiagnostics(
             results.find((result) =>

@@ -211,6 +211,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const notes = createNotesApi()
   const connectionConfirmations = createMediaUiConfirmationStore()
+  const credentialConfirmations = createMediaUiConfirmationStore()
     application: createMediaApplication({
       // This is the production trusted setup composition. The application builds
       // its review-token and step-up-ticket registries from these options; the
@@ -218,6 +219,13 @@ export async function startBunServer(options: BunServerOptions = {}) {
       connectionTrust: {
         confirmations: connectionConfirmations,
         verify: createMediaUiConnectionVerifier(connectionConfirmations),
+        evidence: { kind: "required", channels: ["ui"] },
+      },
+      // Credentials have an independent review/ticket registry, verifier store,
+      // and digest domains; connection-setup evidence cannot authorize a write.
+      credentialTrust: {
+        confirmations: credentialConfirmations,
+        verify: createMediaUiConnectionVerifier(credentialConfirmations),
         evidence: { kind: "required", channels: ["ui"] },
       },
       // Step-up shares the login failure counter and delay. The password never
