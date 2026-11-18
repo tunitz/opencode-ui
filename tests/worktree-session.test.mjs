@@ -123,7 +123,13 @@ test("the sidebar trigger still opens the shared dialog with the default folder"
   expect(dialog).toContain('initialDirectory={nav.location?.directory ?? ""}')
 })
 
-test("the trigger remounts the dialog on open instead of resetting state in an effect", () => {
-  expect(dialog).not.toContain("useLayoutEffect")
-  expect(dialog).toContain("key={sessionKey}")
+test("the dialog resets transient state on open instead of remounting", () => {
+  // Reopening must not remount the dialog (that forced fresh native catalog
+  // calls). The new contract is a single batched reset driven by the open
+  // transition, with every transient field in one state object.
+  expect(dialog).not.toContain("key={sessionKey}")
+  expect(dialog).not.toContain("sessionKey")
+  expect(dialog).toContain("wasOpenRef")
+  expect(dialog).toContain("initialTarget(initialDirectory)")
+  expect(dialog).toContain("type TargetState")
 })

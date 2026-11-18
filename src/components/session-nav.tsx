@@ -194,7 +194,7 @@ export function sessionProjectLabel(session: SessionInfo, projects: Project[]) {
   )
 }
 
-function SessionRow({
+const SessionRow = memo(function SessionRow({
   session,
   active,
   running,
@@ -530,7 +530,7 @@ function SessionRow({
       </AlertDialog>
     </div>
   )
-}
+})
 
 type SessionTreeProps = {
   rows: readonly SessionTreeRow<SessionInfo>[]
@@ -559,7 +559,7 @@ function SessionTree({ rows, ...context }: SessionTreeProps) {
   )
 }
 
-function SessionTreeNode({
+const SessionTreeNode = memo(function SessionTreeNode({
   row,
   activeSessionID,
   runningSessionIDs,
@@ -643,7 +643,7 @@ function SessionTreeNode({
       ) : null}
     </div>
   )
-}
+})
 
 type SessionSearchResult = {
   session: SessionInfo
@@ -795,6 +795,27 @@ function SessionList({
     (sessionID: string) => onSelectRef.current(sessionID),
     []
   )
+  // The controller recreates its callback identities on status frames. Refs
+  // keep the memoized tree rows from re-rendering for that churn alone.
+  const renameSessionRef = useRef(nav.renameSession)
+  const deleteSessionRef = useRef(nav.deleteSession)
+  useEffect(() => {
+    renameSessionRef.current = nav.renameSession
+    deleteSessionRef.current = nav.deleteSession
+  }, [nav.renameSession, nav.deleteSession])
+  const handleRename = useCallback(
+    (sessionID: string, title: string) =>
+      renameSessionRef.current(sessionID, title),
+    []
+  )
+  const handleDelete = useCallback(
+    (sessionID: string) => deleteSessionRef.current(sessionID),
+    []
+  )
+  // Live run/unread maps change on activity frames; deferring them keeps the
+  // heavy tree rows interactive while status catches up in a low-priority pass.
+  const deferredRunningSessionIDs = useDeferredValue(nav.runningSessionIDs)
+  const deferredUnreadSessionIDs = useDeferredValue(nav.unreadSessionIDs)
   const searchQuery = query.trim()
   const searching = searchQuery.length > 0
   const deferredQuery = useDeferredValue(searchQuery)
@@ -881,7 +902,7 @@ function SessionList({
     setOpenGroup(activeGroup)
   }, [activeGroup])
 
-  function toggleSessionTree(sessionID: string) {
+  const toggleSessionTree = useCallback((sessionID: string) => {
     setExpandedIDs((current) => {
       const next = new Set(current)
 
@@ -893,7 +914,7 @@ function SessionList({
 
       return next
     })
-  }
+  }, [])
 
   function closeSearch() {
     setSearchOpen(false)
@@ -985,14 +1006,14 @@ function SessionList({
                 <SessionTree
                   rows={pinnedRows}
                   activeSessionID={highlightedSessionID}
-                  runningSessionIDs={nav.runningSessionIDs}
-                  unreadSessionIDs={nav.unreadSessionIDs}
+                  runningSessionIDs={deferredRunningSessionIDs}
+                  unreadSessionIDs={deferredUnreadSessionIDs}
                   projects={nav.projects}
                   expandedIDs={expandedIDs}
                   onToggle={toggleSessionTree}
                   onSelect={handleSelect}
-                  onRename={nav.renameSession}
-                  onDelete={nav.deleteSession}
+                  onRename={handleRename}
+                  onDelete={handleDelete}
                   shortcuts={shortcuts}
                   onShortcut={updateShortcut}
                 />
@@ -1031,14 +1052,14 @@ function SessionList({
                     <SessionTree
                       rows={rows}
                       activeSessionID={highlightedSessionID}
-                      runningSessionIDs={nav.runningSessionIDs}
-                      unreadSessionIDs={nav.unreadSessionIDs}
+                      runningSessionIDs={deferredRunningSessionIDs}
+                      unreadSessionIDs={deferredUnreadSessionIDs}
                       projects={nav.projects}
                       expandedIDs={expandedIDs}
                       onToggle={toggleSessionTree}
                       onSelect={handleSelect}
-                      onRename={nav.renameSession}
-                      onDelete={nav.deleteSession}
+                      onRename={handleRename}
+                      onDelete={handleDelete}
                       shortcuts={shortcuts}
                       onShortcut={updateShortcut}
                     />

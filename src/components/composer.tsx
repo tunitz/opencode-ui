@@ -1,5 +1,6 @@
 import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
 import {
+  memo,
   useEffect,
   useId,
   useLayoutEffect,
@@ -165,6 +166,25 @@ function decodeInlineText(uri: string): string | null {
   }
 }
 
+/**
+ * Inline text previews are decoded during render, and the composer re-renders
+ * on every keystroke. Attachment URIs are immutable, so cache the decoded text
+ * by URI (bounded) and let a memoized preview skip the work entirely.
+ */
+const INLINE_TEXT_CACHE_LIMIT = 64
+const inlineTextCache = new Map<string, string | null>()
+
+function cachedDecodeInlineText(uri: string): string | null {
+  if (inlineTextCache.has(uri)) return inlineTextCache.get(uri) ?? null
+  const decoded = decodeInlineText(uri)
+  if (inlineTextCache.size >= INLINE_TEXT_CACHE_LIMIT) {
+    const oldest = inlineTextCache.keys().next().value
+    if (oldest !== undefined) inlineTextCache.delete(oldest)
+  }
+  inlineTextCache.set(uri, decoded)
+  return decoded
+}
+
 function isTextPreviewMime(mime: string): boolean {
   return (
     mime === "text/plain" ||
@@ -199,7 +219,7 @@ function CsvPreview({ text }: { text: string }) {
   )
 }
 
-function AttachmentPreview({
+const AttachmentPreview = memo(function AttachmentPreview({
   attachment,
 }: {
   attachment: ComposerAttachment
@@ -207,7 +227,7 @@ function AttachmentPreview({
   const [open, setOpen] = useState(false)
   const inlineText =
     attachment.source === "inline" && isTextPreviewMime(attachment.mime)
-      ? decodeInlineText(attachment.uri)
+      ? cachedDecodeInlineText(attachment.uri)
       : null
   const audio =
     attachment.mime.startsWith("audio/") && attachment.uri.startsWith("data:")
@@ -291,7 +311,7 @@ function AttachmentPreview({
       </Dialog>
     </>
   )
-}
+})
 
 export function Composer({
   nav,

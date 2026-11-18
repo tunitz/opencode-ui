@@ -183,6 +183,10 @@ export function subscribeNotesEvents(
   let source: EventSource | null = null
   let staleTimer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  // A watchdog restart already emits one "something changed" signal before
+  // reopening, so the resulting `open` frame must not emit a second one.
+  // EventSource's own reconnects still signal, so missed changes are refetched.
+  let skipOpenSignal = false
 
   const handleChange = (event: MessageEvent) => {
     let at = Date.now()
@@ -195,14 +199,21 @@ export function subscribeNotesEvents(
     onChange(at)
     arm()
   }
+  // A heartbeat (named ping/heartbeat frames, or any unnamed frame) proves the
+  // stream is alive. It resets the stale watchdog but is NOT a change signal.
+  const handleHeartbeat = () => arm()
   const handleOpen = () => {
-    onChange(Date.now())
+    if (!skipOpenSignal) onChange(Date.now())
+    skipOpenSignal = false
     arm()
   }
   const closeSource = () => {
     if (!source) return
     try {
       source.removeEventListener("changed", handleChange as EventListener)
+      source.removeEventListener("heartbeat", handleHeartbeat as EventListener)
+      source.removeEventListener("ping", handleHeartbeat as EventListener)
+      source.removeEventListener("message", handleHeartbeat as EventListener)
       source.removeEventListener("open", handleOpen)
       source.close()
     } catch {
@@ -216,6 +227,7 @@ export function subscribeNotesEvents(
       if (stopped) return
       closeSource()
       onChange(Date.now())
+      skipOpenSignal = true
       open()
     }, STALE_MS)
   }
@@ -223,9 +235,13 @@ export function subscribeNotesEvents(
     try {
       source = new EventSource("/api/ui/notes/events")
     } catch {
+      skipOpenSignal = false
       return
     }
     source.addEventListener("changed", handleChange as EventListener)
+    source.addEventListener("heartbeat", handleHeartbeat as EventListener)
+    source.addEventListener("ping", handleHeartbeat as EventListener)
+    source.addEventListener("message", handleHeartbeat as EventListener)
     source.addEventListener("open", handleOpen)
     arm()
   }
@@ -519,6 +535,10 @@ export function createNotesAdapter(directory: string): NotesAdapter {
     },
     subscribe(onChange) {
       let timer: ReturnType<typeof setTimeout> | null = null
+      // The server's `list` method has no `since`/`at` filter, so a change
+      // signal can only trigger a full relist today. Signals are already
+      // emitted once per event upstream; this debounce collapses bursts and
+      // the watchdog's forced-refresh signal into one relist.
       const stop = subscribeNotesEvents(() => {
         if (timer) clearTimeout(timer)
         timer = setTimeout(() => {

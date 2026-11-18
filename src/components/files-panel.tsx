@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -659,11 +667,28 @@ function DiffCounts({
   )
 }
 
+// renderPatch is called both to count matches and to render the diff. Cache the
+// parsed lines by patch text so a keystroke in Find does not parse it twice.
+const PATCH_RENDER_CACHE_LIMIT = 200
+const patchRenderCache = new Map<string, ReturnType<typeof renderPatch>>()
+
+function cachedRenderPatch(patch: string): ReturnType<typeof renderPatch> {
+  const hit = patchRenderCache.get(patch)
+  if (hit) return hit
+  const rendered = renderPatch(patch)
+  if (patchRenderCache.size >= PATCH_RENDER_CACHE_LIMIT) {
+    const oldest = patchRenderCache.keys().next().value
+    if (oldest !== undefined) patchRenderCache.delete(oldest)
+  }
+  patchRenderCache.set(patch, rendered)
+  return rendered
+}
+
 export function countDiffMatches(patch: string, find: string): number {
   const query = find.trim()
   if (!query) return 0
   const needle = query.toLocaleLowerCase()
-  return renderPatch(patch).lines.reduce((total, line) => {
+  return cachedRenderPatch(patch).lines.reduce((total, line) => {
     const text = line.text.toLocaleLowerCase()
     let count = 0
     let index = text.indexOf(needle)
@@ -675,16 +700,17 @@ export function countDiffMatches(patch: string, find: string): number {
   }, 0)
 }
 
-function HighlightedLine({
+const HighlightedLine = memo(function HighlightedLine({
   text,
   find,
   startIndex,
-  activeMatch,
+  activeOffset,
 }: {
   text: string
   find: string
   startIndex: number
-  activeMatch: number
+  /** Active match index relative to startIndex, or -1 when it is on another line. */
+  activeOffset: number
 }) {
   const query = find.trim()
   if (!query) return <>{text || " "}</>
@@ -692,11 +718,12 @@ function HighlightedLine({
   const needle = query.toLocaleLowerCase()
   const parts: React.ReactNode[] = []
   let cursor = 0
-  let match = startIndex
+  let local = 0
   let index = lower.indexOf(needle)
   while (index >= 0) {
     if (index > cursor) parts.push(text.slice(cursor, index))
-    const selected = match === activeMatch
+    const match = startIndex + local
+    const selected = local === activeOffset
     parts.push(
       <mark
         key={`${match}:${index}`}
@@ -709,13 +736,15 @@ function HighlightedLine({
         {text.slice(index, index + needle.length)}
       </mark>
     )
-    match += 1
+    local += 1
     cursor = index + needle.length
     index = lower.indexOf(needle, cursor)
   }
   if (cursor < text.length) parts.push(text.slice(cursor))
   return <>{parts.length ? parts : " "}</>
-}
+})
+
+const DIFF_LINE_CAP = 400
 
 function DiffPatch({
   file,
@@ -726,22 +755,49 @@ function DiffPatch({
   find?: string
   activeMatch?: number
 }) {
-  const rendered = useMemo(() => renderPatch(file.patch), [file.patch])
+  const rendered = useMemo(() => cachedRenderPatch(file.patch), [file.patch])
+  const needle = find.trim().toLocaleLowerCase()
+  // One scan builds both the per-line match starts and counts. Most rows keep
+  // the same props when activeMatch steps, so memoized HighlightedLine rows
+  // only re-render when their own highlight changes.
+  const matchMap = useMemo(() => {
+    const starts: number[] = []
+    const counts: number[] = []
+    let cursor = 0
+    for (const line of rendered.lines) {
+      starts.push(cursor)
+      const count = needle
+        ? line.text.toLocaleLowerCase().split(needle).length - 1
+        : 0
+      counts.push(count)
+      cursor += count
+    }
+    return { starts, counts }
+  }, [rendered, needle])
+  const [showAll, setShowAll] = useState(false)
+  const activeLine = useMemo(() => {
+    if (!needle) return -1
+    return matchMap.starts.findIndex(
+      (start, index) =>
+        activeMatch >= start && activeMatch < start + matchMap.counts[index]
+    )
+  }, [matchMap, activeMatch, needle])
+  const total = rendered.lines.length
+  // Always keep the active match in the DOM so Find's scroll-into-view and the
+  // match counter keep working; "show all" restores every line for Find-in-page.
+  const visibleCount = showAll
+    ? total
+    : Math.min(
+        total,
+        Math.max(DIFF_LINE_CAP, activeLine >= 0 ? activeLine + 1 : 0)
+      )
+
   if (!file.patch.trim()) {
     return (
       <p role="status" className="text-xs text-muted-foreground">
         No textual patch is available for this file.
       </p>
     )
-  }
-  const matchStarts: number[] = []
-  const needle = find.trim().toLocaleLowerCase()
-  let matchCursor = 0
-  for (const line of rendered.lines) {
-    matchStarts.push(matchCursor)
-    if (needle) {
-      matchCursor += line.text.toLocaleLowerCase().split(needle).length - 1
-    }
   }
   return (
     <>
@@ -756,8 +812,8 @@ function DiffPatch({
         aria-label={`Diff for ${file.file}`}
         className="max-h-[45svh] overflow-auto rounded-xl border border-border/70 bg-muted/40 p-3 font-mono text-[13px] leading-5 whitespace-pre"
       >
-        {rendered.lines.map((line, lineIndex) => {
-          const start = matchStarts[lineIndex] ?? 0
+        {rendered.lines.slice(0, visibleCount).map((line, lineIndex) => {
+          const start = matchMap.starts[lineIndex] ?? 0
           return (
             <span
               key={line.key}
@@ -773,12 +829,27 @@ function DiffPatch({
                 text={line.text}
                 find={find}
                 startIndex={start}
-                activeMatch={activeMatch}
+                activeOffset={activeMatch - start}
               />
             </span>
           )
         })}
       </pre>
+      {visibleCount < total ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p role="status" className="text-[11px] text-muted-foreground">
+            Showing {visibleCount} of {total} diff lines.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 px-3 text-xs"
+            onClick={() => setShowAll(true)}
+          >
+            Show all {total} lines
+          </Button>
+        </div>
+      ) : null}
     </>
   )
 }
@@ -920,15 +991,21 @@ export function ChangesPanel({
   const visibleFiles = filesContext === context ? files : []
   const totals = diffTotals(visibleFiles)
   const selected = visibleFiles.find((file) => file.file === selectedPath) ?? null
-  const matchCount = selected ? countDiffMatches(selected.patch, find) : 0
+  // Keep the input responsive: scanning/highlighting follows a deferred value,
+  // while the controlled field and focus stay on the live query.
+  const deferredFind = useDeferredValue(find)
+  const matchCount = useMemo(
+    () => (selected ? countDiffMatches(selected.patch, deferredFind) : 0),
+    [selected, deferredFind]
+  )
 
   useEffect(() => {
-    if (!find.trim()) return
+    if (!deferredFind.trim()) return
     const container = document.querySelector<HTMLElement>(
       `[data-diff-match="${Math.min(activeMatch, Math.max(0, matchCount - 1))}"]`
     )
     container?.scrollIntoView({ block: "nearest" })
-  }, [activeMatch, find, matchCount])
+  }, [activeMatch, deferredFind, matchCount])
 
   function stepMatch(direction: 1 | -1) {
     if (matchCount === 0) return
@@ -1092,7 +1169,7 @@ export function ChangesPanel({
                   Open read-only file
                 </Button>
               ) : null}
-              <DiffPatch file={selected} find={find} activeMatch={activeMatch} />
+              <DiffPatch file={selected} find={deferredFind} activeMatch={activeMatch} />
             </section>
           ) : null}
         </>

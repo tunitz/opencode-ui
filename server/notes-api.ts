@@ -258,7 +258,9 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
         }
         heartbeat = setInterval(() => {
           try {
-            controller.enqueue(encoder.encode(": heartbeat\n\n"))
+            // A named event (not an SSE comment) so browser EventSource can
+            // observe it and reset the client's stale-connection watchdog.
+            controller.enqueue(encoder.encode("event: heartbeat\ndata: {}\n\n"))
           } catch {
             cleanup()
           }

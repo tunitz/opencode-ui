@@ -1,7 +1,13 @@
+import { useMemo } from "react"
 import { FolderIcon, LayersIcon } from "lucide-react"
 
 import { PickerSelect, type PickerOption } from "@/components/ui/picker-select"
 import type { Project } from "@/lib/opencode"
+
+// Stable element instances: recreating them per render gave every row new
+// option objects and defeated the picker's memoized rows.
+const ALL_PROJECTS_ICON = <LayersIcon aria-hidden="true" />
+const PROJECT_ICON = <FolderIcon aria-hidden="true" />
 
 function directoryName(directory: string | undefined): string | null {
   const segment = directory?.split("/").filter(Boolean).at(-1)
@@ -44,23 +50,26 @@ export function ProjectSelect({
     : selected
       ? projectName(selected)
       : fallbackLabel
-  const options: PickerOption[] = [
-    ...(includeAllProjects
-      ? [
-          {
-            value: ALL_PROJECTS,
-            label: "All projects",
-            icon: <LayersIcon aria-hidden="true" />,
-          },
-        ]
-      : []),
-    ...projects.map((project) => ({
-      value: project.id,
-      label: projectName(project),
-      detail: project.canonical,
-      icon: <FolderIcon aria-hidden="true" />,
-    })),
-  ]
+  const options = useMemo<PickerOption[]>(
+    () => [
+      ...(includeAllProjects
+        ? [
+            {
+              value: ALL_PROJECTS,
+              label: "All projects",
+              icon: ALL_PROJECTS_ICON,
+            },
+          ]
+        : []),
+      ...projects.map((project) => ({
+        value: project.id,
+        label: projectName(project),
+        detail: project.canonical,
+        icon: PROJECT_ICON,
+      })),
+    ],
+    [projects, includeAllProjects]
+  )
 
   return (
     <PickerSelect

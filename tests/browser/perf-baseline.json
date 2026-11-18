@@ -1,0 +1,168 @@
+{
+  "status": "measured",
+  "throttleRate": 6,
+  "generatedAt": "2026-11-18T10:48:41.215Z",
+  "browser": "installed Playwright Chromium",
+  "fixtureDir": "/tmp/opencode/ui-browser-perf-reJ1lw",
+  "metrics": [
+    {
+      "name": "model_picker_open_ms",
+      "value": 2425.4,
+      "unit": "ms",
+      "gate": "<=150 ms",
+      "pass": false,
+      "fixture": "perf-models"
+    },
+    {
+      "name": "model_picker_open_longtask_max_ms",
+      "value": 2035,
+      "unit": "ms",
+      "gate": "<=100 ms",
+      "pass": false,
+      "fixture": "perf-models"
+    },
+    {
+      "name": "model_dom_rows",
+      "value": 2000,
+      "unit": "rows",
+      "gate": "informational (2000 synthetic models)",
+      "pass": true,
+      "fixture": "perf-models"
+    },
+    {
+      "name": "favorite_toggle_row_render_delta",
+      "value": 1,
+      "unit": "renders",
+      "gate": "flat (no all-row re-render; <=2)",
+      "pass": true,
+      "fixture": "perf-models",
+      "detail": "native catalog calls unchanged: true"
+    },
+    {
+      "name": "reopen_within_ttl_native_calls",
+      "value": 0,
+      "unit": "calls",
+      "gate": "= 0 native calls",
+      "pass": true,
+      "fixture": "perf-models",
+      "detail": "cumulative catalog calls: 1"
+    },
+    {
+      "name": "query_per_keystroke_inp_ms",
+      "value": 36.02,
+      "unit": "ms",
+      "gate": "<=50 ms",
+      "pass": true,
+      "fixture": "perf-models",
+      "detail": "8 in-page samples; automation-inclusive action avg 62.13 ms"
+    },
+    {
+      "name": "query_longtasks",
+      "value": 1,
+      "unit": "tasks",
+      "gate": "zero long tasks",
+      "pass": false,
+      "fixture": "perf-models",
+      "detail": "max 171 ms"
+    },
+    {
+      "name": "query_filtered_dom_rows",
+      "value": 0,
+      "unit": "rows",
+      "gate": "informational",
+      "pass": true,
+      "fixture": "perf-models"
+    },
+    {
+      "name": "agent_picker_open_ms",
+      "value": 489.9,
+      "unit": "ms",
+      "gate": "<=150 ms",
+      "pass": false,
+      "fixture": "perf-agents"
+    },
+    {
+      "name": "agent_picker_open_longtask_max_ms",
+      "value": 336,
+      "unit": "ms",
+      "gate": "<=100 ms",
+      "pass": false,
+      "fixture": "perf-agents"
+    },
+    {
+      "name": "agent_dom_rows",
+      "value": 200,
+      "unit": "rows",
+      "gate": "informational (200 synthetic agents)",
+      "pass": true,
+      "fixture": "perf-agents"
+    },
+    {
+      "name": "worktree_browse_filter_ms",
+      "value": 417.2,
+      "unit": "ms",
+      "gate": "<=150 ms",
+      "pass": false,
+      "fixture": "perf-worktrees",
+      "detail": "open 258.5 ms + filter 158.7 ms"
+    },
+    {
+      "name": "worktree_dom_rows",
+      "value": 1,
+      "unit": "rows",
+      "gate": "bounded DOM rows (<=500 after filter)",
+      "pass": true,
+      "fixture": "perf-worktrees",
+      "detail": "open rendered 1500 rows"
+    },
+    {
+      "name": "worktree_longtask_max_ms",
+      "value": 338,
+      "unit": "ms",
+      "gate": "informational",
+      "pass": true,
+      "fixture": "perf-worktrees"
+    },
+    {
+      "name": "notes_dom_rows",
+      "value": 1000,
+      "unit": "rows",
+      "gate": "informational (1000 synthetic notes)",
+      "pass": true,
+      "fixture": "perf-notes"
+    },
+    {
+      "name": "notes_row_renders",
+      "value": 1000,
+      "unit": "renders",
+      "gate": "informational",
+      "pass": true,
+      "fixture": "perf-notes"
+    },
+    {
+      "name": "notes_filter_longtask_max_ms",
+      "value": 0,
+      "unit": "ms",
+      "gate": "informational",
+      "pass": true,
+      "fixture": "perf-notes"
+    },
+    {
+      "name": "messages_longtask_max_ms",
+      "value": 5325,
+      "unit": "ms",
+      "gate": "<=100 ms",
+      "pass": false,
+      "fixture": "perf-messages",
+      "detail": "7 long task(s) during the 1k-message mount (includes page load)"
+    },
+    {
+      "name": "messages_assistant_renders",
+      "value": 500,
+      "unit": "renders",
+      "gate": "informational",
+      "pass": true,
+      "fixture": "perf-messages"
+    }
+  ]
+}

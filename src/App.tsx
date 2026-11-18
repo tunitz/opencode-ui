@@ -1,4 +1,12 @@
-import { useEffect, useState } from "react"
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import { XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
@@ -17,7 +25,6 @@ import {
   SettingsProvider,
   useSettingsWorkspace,
 } from "@/components/settings-context"
-import { SettingsWorkspace } from "@/components/settings-workspace"
 import { Button } from "@/components/ui/button"
 import { WorkspaceProvider, useWorkspace } from "@/components/workspace-context"
 import { useUndoToast, UndoToastProvider } from "@/lib/undo-toast"
@@ -27,6 +34,32 @@ import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
 import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
 import { recordPerfRender } from "@/lib/perf-probe"
+
+// Settings is a rarely-opened workspace with a large module graph. Loading it
+// on demand keeps it out of the critical chat bundle. The focus target lives on
+// the wrapper below so a transition can move focus before the chunk resolves.
+const SettingsWorkspace = lazy(() =>
+  import("@/components/settings-workspace").then((module) => ({
+    default: module.SettingsWorkspace,
+  }))
+)
+
+// Top-level consumers receive the shared controller. Memoizing them here (the
+// shell owns this file) keeps a transient status frame from cascading through
+// every subtree when their own props are unchanged. Context subscriptions and
+// the external live-run store still bypass these wrappers, so live state is
+// never frozen.
+const MemoSessionSidebar = memo(SessionSidebar)
+const MemoAppHeader = memo(AppHeader)
+const MemoPendingInbox = memo(PendingInbox)
+const MemoConversation = memo(Conversation)
+const MemoContextStrip = memo(ContextStrip)
+const MemoQueueStrip = memo(QueueStrip)
+const MemoComposer = memo(Composer)
+const MemoSessionInspectorPanel = memo(SessionInspectorPanel)
+const MemoIntegrationCommandDialogs = memo(IntegrationCommandDialogs)
+
+const EMPTY_MESSAGES: never[] = []
 
 export function App() {
   recordPerfRender("App")
@@ -56,7 +89,6 @@ function EngineApp() {
   )
 }
 
-
 function AppShell({ nav }: { nav: OpenCodeController }) {
   const workspace = useWorkspace()
   const notes = useNotesWorkspace()
@@ -66,6 +98,44 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
   const chatActive = workspace.active === "chat"
+
+  // Stable callback/object props let the memoized consumers above skip
+  // unrelated re-renders instead of being defeated by fresh inline identities.
+  const openSettingsAction = settings.openSettings
+  const openSettings = useCallback(
+    () => openSettingsAction(),
+    [openSettingsAction]
+  )
+  const openWorktrees = useCallback(() => setWorktreesOpen(true), [])
+  const closeWorktrees = useCallback(() => setWorktreesOpen(false), [])
+  const showUndo = undo.showUndo
+  const onDialogResult = useCallback(
+    (message: string) => {
+      if (message) showUndo(message)
+    },
+    [showUndo]
+  )
+  const requestWorkspace = workspace.requestWorkspace
+  const onSessionCreated = useCallback(
+    () => requestWorkspace("chat"),
+    [requestWorkspace]
+  )
+  const notesForComposer = useMemo(
+    () => ({ available: notes.available, load: notes.adapter.list }),
+    [notes.available, notes.adapter.list]
+  )
+  const activeSessionID = nav.activeSessionID
+  const onRestorePrompt = useCallback(
+    (text: string) => {
+      showUndo("Prompt restored to the composer.")
+      window.dispatchEvent(
+        new CustomEvent("composer-restore-text", {
+          detail: { sessionID: activeSessionID, text },
+        })
+      )
+    },
+    [activeSessionID, showUndo]
+  )
 
   // Warm the target catalog while the user is still in chat so the New Session
   // and worktree pickers open without a round-trip stall.
@@ -111,12 +181,12 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
         Skip to main content
       </a>
       <div className="app-height app-viewport bg-background md:flex md:h-svh md:overflow-hidden">
-        <SessionSidebar nav={nav} />
+        <MemoSessionSidebar nav={nav} />
         <div className="app-height flex min-w-0 flex-1 flex-col md:h-svh">
-          <AppHeader
+          <MemoAppHeader
             nav={nav}
-            onOpenSettings={() => settings.openSettings()}
-            onOpenWorktrees={() => setWorktreesOpen(true)}
+            onOpenSettings={openSettings}
+            onOpenWorktrees={openWorktrees}
           />
           <main
             id="chat-main"
@@ -150,8 +220,8 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                   </Button>
                 </div>
               ) : null}
-              <PendingInbox nav={nav} />
-              <Conversation
+              <MemoPendingInbox nav={nav} />
+              <MemoConversation
                 sessionKey={nav.activeSessionID}
                 hasSession={nav.activeSessionID !== null}
                 status={nav.historyStatus}
@@ -170,33 +240,23 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                 onOpenDiff={nav.openInspectorDiff}
                 onStageRevert={nav.stageRevert}
                 onClearRevert={nav.clearRevert}
-                onRestorePrompt={(text: string) => {
-                  undo.showUndo("Prompt restored to the composer.")
-                  window.dispatchEvent(
-                    new CustomEvent("composer-restore-text", {
-                      detail: { sessionID: nav.activeSessionID, text },
-                    })
-                  )
-                }}
+                onRestorePrompt={onRestorePrompt}
               />
-              <ContextStrip
+              <MemoContextStrip
                 sessionID={nav.activeSessionID}
                 hasSession={nav.activeSessionID !== null}
                 session={nav.activeSession}
-                messages={nav.historyStatus === "ready" ? nav.messages : []}
+                messages={nav.historyStatus === "ready" ? nav.messages : EMPTY_MESSAGES}
                 models={nav.models}
                 revert={nav.activeSession?.revert ?? null}
               />
-              <QueueStrip nav={nav} />
-              <Composer
+              <MemoQueueStrip nav={nav} />
+              <MemoComposer
                 nav={nav}
-                notes={{
-                  available: notes.available,
-                  load: notes.adapter.list,
-                }}
+                notes={notesForComposer}
                 modelSettingsOpen={modelSettingsOpen}
                 onModelSettingsOpenChange={setModelSettingsOpen}
-                onOpenSettings={() => settings.openSettings()}
+                onOpenSettings={openSettings}
               />
             </div>
             {notes.hasWorkspace && (
@@ -210,32 +270,38 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                     : "hidden"
                 }
               >
-                <NotesWorkspace />
+                {/* The panel is unmounted while another workspace is active.
+                    Drafts survive because NotesPanel stashes them in the
+                    adapter-keyed workspaceDrafts WeakMap on unmount, and the
+                    adapter itself is cached by the NotesProvider above. */}
+                {workspace.active === "notes" ? <NotesWorkspace /> : null}
               </section>
             )}
             {workspace.active === "settings" && (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
-                <SettingsWorkspace nav={nav} />
+              <div
+                data-workspace-focus="settings"
+                tabIndex={-1}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 focus:outline-none md:px-6 lg:px-8"
+              >
+                <Suspense fallback={null}>
+                  <SettingsWorkspace nav={nav} />
+                </Suspense>
               </div>
             )}
           </main>
         </div>
-        <SessionInspectorPanel
+        <MemoSessionInspectorPanel
           nav={nav}
-          onOpenSettings={() => settings.openSettings()}
-          onOpenWorktrees={() => setWorktreesOpen(true)}
+          onOpenSettings={openSettings}
+          onOpenWorktrees={openWorktrees}
         />
       </div>
-      <IntegrationCommandDialogs
+      <MemoIntegrationCommandDialogs
         kind={worktreesOpen ? "worktrees" : null}
         nav={nav}
-        onClose={() => setWorktreesOpen(false)}
-        onResult={(message) => {
-          if (message) undo.showUndo(message)
-        }}
-        onSessionCreated={() => {
-          workspace.requestWorkspace("chat")
-        }}
+        onClose={closeWorktrees}
+        onResult={onDialogResult}
+        onSessionCreated={onSessionCreated}
       />
     </NotificationsProvider>
   )

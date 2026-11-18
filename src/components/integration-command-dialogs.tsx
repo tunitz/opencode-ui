@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { MetricIndicatorInline } from "@openuidev/react-ui/MetricIndicator"
 import { Tag } from "@openuidev/react-ui/Tag"
 import "@openuidev/react-ui/styles/metricIndicator.css"
@@ -283,6 +283,63 @@ function resolveNearestProject(
   )
 }
 
+type WorktreeRowData = { directory: string; name: string }
+
+const WORKTREE_INITIAL_LIMIT = 30
+
+/** One worktree row; memoized so typing a directory path re-renders only the row whose selection changed. */
+const WorktreeRow = memo(function WorktreeRow({
+  row,
+  projectID,
+  disabled,
+  removeDisabled,
+  selected,
+  onSelect,
+  onRemove,
+}: {
+  row: WorktreeRowData
+  projectID: string
+  disabled: boolean
+  removeDisabled: boolean
+  selected: boolean
+  onSelect: (directory: string, projectID: string) => void
+  onRemove: (directory: string, projectID: string) => void
+}) {
+  return (
+    <li className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center">
+      <Button
+        type="button"
+        variant="ghost"
+        className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
+        disabled={disabled}
+        aria-pressed={selected}
+        data-worktree-worktree={row.directory}
+        onClick={() => onSelect(row.directory, projectID)}
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate text-sm font-medium" dir="auto">
+            {row.name}
+          </span>
+          <span className="truncate text-xs text-muted-foreground" dir="auto" title={row.directory}>
+            {row.directory}
+          </span>
+        </span>
+      </Button>
+      <Button
+        type="button"
+        variant="destructive"
+        size="icon-lg"
+        className="size-11 shrink-0"
+        aria-label={`Remove ${row.directory}`}
+        disabled={removeDisabled}
+        onClick={() => onRemove(row.directory, projectID)}
+      >
+        <Trash2Icon aria-hidden="true" className="size-4" />
+      </Button>
+    </li>
+  )
+})
+
 function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionCreated }: Props) {
   // The sessions list already groups by project, so its canonical directories
   // are the authoritative known-project list here. A failed project load leaves
@@ -334,6 +391,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   const sessionPending = useRef(false)
   const [force, setForce] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [showAllWorktrees, setShowAllWorktrees] = useState(false)
   const request = useRef(0)
   const [sourceProjectID, setSourceProjectID] = useState<string | null>(
     preferredProject?.id ?? null
@@ -410,6 +468,20 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     }
     return rows
   }, [entries, entriesMatch, sourceProject])
+
+  const handleWorktreeSelect = useCallback((directory: string, projectID: string) => {
+    setSourceProjectID(projectID)
+    setDirectoryValue(directory)
+    setBrowse(canonicalDirectory(directory))
+  }, [])
+  const handleWorktreeRemove = useCallback((directory: string, projectID: string) => {
+    setForce(false)
+    setDeleteTarget({ directory, projectID })
+  }, [])
+  const visibleWorktreeRows = showAllWorktrees
+    ? worktreeRows
+    : worktreeRows.slice(0, WORKTREE_INITIAL_LIMIT)
+  const hiddenWorktreeCount = worktreeRows.length - visibleWorktreeRows.length
 
   // createWorktreeSession resolves a directory to its own project and rejects a
   // mismatch, so a custom path is bound to the nearest known project prefix.
@@ -649,51 +721,37 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
               ) : worktreeRows.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No saved worktrees.</p>
               ) : (
-                <ul aria-label="Project worktrees" className="min-w-0 divide-y divide-border rounded-lg border border-border">
-                  {worktreeRows.map((row) => (
-                    <li key={row.directory} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="h-auto min-h-11 w-full justify-start rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
+                <>
+                  <ul aria-label="Project worktrees" className="min-w-0 divide-y divide-border rounded-lg border border-border">
+                    {visibleWorktreeRows.map((row) => (
+                      <WorktreeRow
+                        key={row.directory}
+                        row={row}
+                        projectID={activeProject.id}
                         disabled={creating || Boolean(sessionDirectory)}
-                        aria-pressed={typedDirectory === canonicalDirectory(row.directory)}
-                        data-worktree-worktree={row.directory}
-                        onClick={() => {
-                          setSourceProjectID(activeProject.id)
-                          setDirectoryValue(row.directory)
-                          setBrowse(canonicalDirectory(row.directory))
-                        }}
-                      >
-                        <span className="flex min-w-0 flex-col gap-0.5">
-                          <span className="truncate text-sm font-medium" dir="auto">
-                            {row.name}
-                          </span>
-                          <span className="truncate text-xs text-muted-foreground" dir="auto" title={row.directory}>
-                            {row.directory}
-                          </span>
-                        </span>
-                      </Button>
+                        removeDisabled={Boolean(sessionDirectory) || deleting}
+                        selected={typedDirectory === canonicalDirectory(row.directory)}
+                        onSelect={handleWorktreeSelect}
+                        onRemove={handleWorktreeRemove}
+                      />
+                    ))}
+                  </ul>
+                  {hiddenWorktreeCount > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      <p role="status" className="text-[11px] text-muted-foreground">
+                        Showing {visibleWorktreeRows.length} of {worktreeRows.length} worktrees.
+                      </p>
                       <Button
                         type="button"
-                        variant="destructive"
-                        size="icon-lg"
-                        className="size-11 shrink-0"
-                        aria-label={`Remove ${row.directory}`}
-                        disabled={Boolean(sessionDirectory) || deleting}
-                        onClick={() => {
-                          setForce(false)
-                          setDeleteTarget({
-                            directory: row.directory,
-                            projectID: activeProject.id,
-                          })
-                        }}
+                        variant="outline"
+                        className="h-11 px-3 text-xs"
+                        onClick={() => setShowAllWorktrees(true)}
                       >
-                        <Trash2Icon aria-hidden="true" className="size-4" />
+                        Show all {worktreeRows.length} worktrees
                       </Button>
-                    </li>
-                  ))}
-                </ul>
+                    </div>
+                  ) : null}
+                </>
               )}
             </section>
 

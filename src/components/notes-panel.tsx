@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
@@ -210,6 +219,31 @@ export function notePreviewText(
     lastSpace > limit * 0.6 ? truncated.slice(0, lastSpace) : truncated
   return `${cut.trimEnd()}…`
 }
+
+// notePreviewText runs a dozen regex passes over the whole body. Previews are
+// pure functions of (content, title, maxLength), so cache them; a small bounded
+// LRU avoids growing without limit across a long session.
+const NOTE_PREVIEW_CACHE_LIMIT = 2000
+const NOTES_INITIAL_LIMIT = 50
+const notePreviewCache = new Map<string, string>()
+
+function cachedNotePreview(
+  content: string,
+  title: string,
+  maxLength = 160
+): string {
+  const key = `${maxLength}\u0000${title}\u0000${content}`
+  const hit = notePreviewCache.get(key)
+  if (hit !== undefined) return hit
+  const preview = notePreviewText(content, maxLength, title)
+  if (notePreviewCache.size >= NOTE_PREVIEW_CACHE_LIMIT) {
+    const oldest = notePreviewCache.keys().next().value
+    if (oldest !== undefined) notePreviewCache.delete(oldest)
+  }
+  notePreviewCache.set(key, preview)
+  return preview
+}
+
 // In-memory only: retain drafts if the workspace is temporarily unmounted.
 const workspaceDrafts = new WeakMap<NotesAdapter, Map<string, NoteDraft>>()
 type SpaceDraft = { original: NotesSpace | null; value: SpaceInput }
@@ -521,6 +555,122 @@ function StatusSelect({
   )
 }
 
+/**
+ * A single note list row. Memoized because a note body can be long and the
+ * panel re-renders on unrelated draft/form/status changes; stable callbacks
+ * keep a keystroke in another surface from re-rendering every row.
+ */
+const NoteRow = memo(function NoteRow({
+  note,
+  preview,
+  spaceLabel,
+  active,
+  busy,
+  onOpen,
+  onEdit,
+  onTogglePin,
+  onRequestDelete,
+  registerActionRef,
+}: {
+  note: NotesNote
+  preview: string
+  spaceLabel: string
+  active: boolean
+  busy: boolean
+  onOpen: (note: NotesNote) => void
+  onEdit: (note: NotesNote) => void
+  onTogglePin: (note: NotesNote) => void
+  onRequestDelete: (note: NotesNote) => void
+  registerActionRef: (id: string, node: HTMLButtonElement | null) => void
+}) {
+  return (
+    <li className="flex min-w-0 items-start gap-1 py-1">
+      <Button
+        variant="ghost"
+        className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-3 text-start whitespace-normal"
+        aria-label={`Open ${note.title || "untitled note"}`}
+        aria-describedby={
+          preview
+            ? `note-preview-${note.id} note-meta-${note.id}`
+            : `note-meta-${note.id}`
+        }
+        aria-current={active ? "true" : undefined}
+        disabled={busy}
+        onClick={() => onOpen(note)}
+      >
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+          <span className="flex w-full min-w-0 items-center gap-2 font-medium">
+            {note.pinned && <PinIcon aria-hidden="true" />}
+            <span className="min-w-0 break-words" dir="auto">
+              {note.title || "Untitled note"}
+            </span>
+          </span>
+          {preview && (
+            <span
+              id={`note-preview-${note.id}`}
+              className="line-clamp-2 w-full text-sm font-normal break-words text-muted-foreground"
+              dir="auto"
+            >
+              {preview}
+            </span>
+          )}
+          <span
+            id={`note-meta-${note.id}`}
+            className="flex flex-wrap items-center gap-1 text-xs font-normal text-muted-foreground"
+          >
+            {note.pinned && (
+              <span className="sr-only">Pinned. </span>
+            )}
+            <NoteStatusLabel status={note.status} />
+            <span aria-hidden="true">·</span>
+            <span>{spaceLabel}</span>
+          </span>
+        </span>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              ref={(node) => registerActionRef(note.id, node)}
+              type="button"
+              variant="ghost"
+              size="icon-lg"
+              className="size-11"
+              aria-label={`More actions for ${note.title || "untitled note"}`}
+              disabled={busy}
+            />
+          }
+        >
+          <EllipsisIcon aria-hidden="true" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuGroup>
+            <DropdownMenuItem
+              aria-label={`Edit ${note.title || "untitled note"}`}
+              onClick={() => onEdit(note)}
+            >
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              aria-label={`${note.pinned ? "Unpin" : "Pin"} ${note.title || "untitled note"}`}
+              onClick={() => onTogglePin(note)}
+            >
+              {note.pinned ? "Unpin note" : "Pin note"}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant="destructive"
+              aria-label={`Delete ${note.title || "untitled note"}`}
+              onClick={() => onRequestDelete(note)}
+            >
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </li>
+  )
+})
+
 export function NotesPanel({
   adapter,
   className,
@@ -548,6 +698,7 @@ export function NotesPanel({
   const [query, setQuery] = useState("")
   const [status, setStatus] = useState("all")
   const [space, setSpace] = useState("all")
+  const [visibleNotes, setVisibleNotes] = useState(NOTES_INITIAL_LIMIT)
   const [filePickerOpen, setFilePickerOpen] = useState(false)
   const [fileQuery, setFileQuery] = useState("")
   const [fileResults, setFileResults] = useState<ProjectEntry[]>([])
@@ -780,30 +931,84 @@ export function NotesPanel({
     }
   }
 
-  const notes = (snapshot?.notes ?? [])
-    .filter((note) => {
-      const matchesQuery = `${note.title}\n${note.content}`
-        .toLocaleLowerCase()
-        .includes(query.toLocaleLowerCase())
-      return (
-        matchesQuery &&
-        (status === "all" || note.status === status) &&
-        (space === "all" ||
-          (space === noSelection
-            ? note.spaceID === null
-            : note.spaceID === space))
+  // `run` is intentionally recreated per render (it closes over busy/errors).
+  // A ref keeps the memoized rows' callbacks stable without changing behavior.
+  const runRef = useRef(run)
+  // Intentionally runs after every render: `run` closes over the latest busy
+  // and error state, and the ref keeps the row callbacks referentially stable.
+  useEffect(() => {
+    runRef.current = run
+  })
+  const handleToggleNotePin = useCallback(
+    (note: NotesNote) => {
+      void runRef.current(
+        () =>
+          adapter.updateNote(
+            note.id,
+            pinnedNoteInput(note, !note.pinned),
+            note.revision
+          ),
+        () => {},
+        "action"
       )
-    })
-    .slice()
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned))
-  const noteRows = notes.map((note) => ({
-    note,
-    preview: notePreviewText(note.content, 160, note.title),
-  }))
+    },
+    [adapter]
+  )
+  const handleRequestNoteDelete = useCallback((note: NotesNote) => {
+    deletionReturnFocus.current = noteActionRefs.current.get(note.id) ?? null
+    setActionError(null)
+    setDeletion({ kind: "note", item: note })
+  }, [])
+  const registerNoteActionRef = useCallback(
+    (id: string, node: HTMLButtonElement | null) => {
+      if (node) noteActionRefs.current.set(id, node)
+      else noteActionRefs.current.delete(id)
+    },
+    []
+  )
+
+  // Filtering scans every note body; defer it so typing stays responsive, and
+  // memoize so unrelated form/draft renders reuse the same rows and previews.
+  const deferredQuery = useDeferredValue(query)
+  const notesFilterPending = deferredQuery !== query
   const spaces = useMemo(
     () => uniqueByID(snapshot?.spaces ?? []),
     [snapshot]
   )
+  const spaceByID = useMemo(
+    () => new Map(spaces.map((item) => [item.id, item])),
+    [spaces]
+  )
+  const notes = useMemo(
+    () =>
+      (snapshot?.notes ?? [])
+        .filter((note) => {
+          const matchesQuery = `${note.title}\n${note.content}`
+            .toLocaleLowerCase()
+            .includes(deferredQuery.toLocaleLowerCase())
+          return (
+            matchesQuery &&
+            (status === "all" || note.status === status) &&
+            (space === "all" ||
+              (space === noSelection
+                ? note.spaceID === null
+                : note.spaceID === space))
+          )
+        })
+        .slice()
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned)),
+    [snapshot, deferredQuery, status, space]
+  )
+  const noteRows = useMemo(
+    () =>
+      notes.map((note) => ({
+        note,
+        preview: cachedNotePreview(note.content, note.title),
+      })),
+    [notes]
+  )
+  const visibleNoteRows = noteRows.slice(0, visibleNotes)
+  const hiddenNotes = noteRows.length - visibleNoteRows.length
   const workspaceDirectory = snapshot?.workspaceDirectory ?? ""
   const spaceOptions = [
     { value: noSelection, label: "No space" },
@@ -834,16 +1039,11 @@ export function NotesPanel({
 
   function spaceName(spaceID: string | null): string {
     if (spaceID === null) return "No space"
-    return (
-      spaces.find((item) => item.id === spaceID)?.name ?? "Unavailable space"
-    )
+    return spaceByID.get(spaceID)?.name ?? "Unavailable space"
   }
 
   function directoryForSpace(spaceID: string | null): string {
-    const linkedSpace =
-      spaceID === null
-        ? undefined
-        : spaces.find((item) => item.id === spaceID)
+    const linkedSpace = spaceID === null ? undefined : spaceByID.get(spaceID)
     return linkedSpace?.projectDir ?? workspaceDirectory
   }
 
@@ -1316,120 +1516,40 @@ export function NotesPanel({
                     : "No notes yet. Create a note to get started."}
                 </p>
               ) : (
-                <ul className="divide-y divide-border">
-                  {noteRows.map(({ note, preview }) => (
-                    <li
-                      key={note.id}
-                      className="flex min-w-0 items-start gap-1 py-1"
-                    >
+                <>
+                  <ul className="divide-y divide-border" aria-busy={notesFilterPending || undefined}>
+                    {visibleNoteRows.map(({ note, preview }) => (
+                      <NoteRow
+                        key={note.id}
+                        note={note}
+                        preview={preview}
+                        spaceLabel={spaceName(note.spaceID)}
+                        active={activeNoteID === note.id}
+                        busy={busy}
+                        onOpen={openPreview}
+                        onEdit={editNote}
+                        onTogglePin={handleToggleNotePin}
+                        onRequestDelete={handleRequestNoteDelete}
+                        registerActionRef={registerNoteActionRef}
+                      />
+                    ))}
+                  </ul>
+                  {hiddenNotes > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      <p role="status" className="text-xs text-muted-foreground">
+                        Showing {visibleNoteRows.length} of {noteRows.length} notes.
+                      </p>
                       <Button
-                        variant="ghost"
-                        className="h-auto min-h-11 min-w-0 flex-1 justify-start px-3 py-3 text-start whitespace-normal"
-                        aria-label={`Open ${note.title || "untitled note"}`}
-                        aria-describedby={
-                          preview
-                            ? `note-preview-${note.id} note-meta-${note.id}`
-                            : `note-meta-${note.id}`
-                        }
-                        aria-current={
-                          activeNoteID === note.id ? "true" : undefined
-                        }
-                        disabled={busy}
-                        onClick={() => openPreview(note)}
+                        type="button"
+                        variant="outline"
+                        className="h-11 px-3 text-xs"
+                        onClick={() => setVisibleNotes((current) => current + NOTES_INITIAL_LIMIT)}
                       >
-                        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
-                          <span className="flex w-full min-w-0 items-center gap-2 font-medium">
-                            {note.pinned && <PinIcon aria-hidden="true" />}
-                            <span className="min-w-0 break-words" dir="auto">
-                              {note.title || "Untitled note"}
-                            </span>
-                          </span>
-                          {preview && (
-                            <span
-                              id={`note-preview-${note.id}`}
-                              className="line-clamp-2 w-full text-sm font-normal break-words text-muted-foreground"
-                              dir="auto"
-                            >
-                              {preview}
-                            </span>
-                          )}
-                          <span
-                            id={`note-meta-${note.id}`}
-                            className="flex flex-wrap items-center gap-1 text-xs font-normal text-muted-foreground"
-                          >
-                            {note.pinned && (
-                              <span className="sr-only">Pinned. </span>
-                            )}
-                            <NoteStatusLabel status={note.status} />
-                            <span aria-hidden="true">·</span>
-                            <span>{spaceName(note.spaceID)}</span>
-                          </span>
-                        </span>
+                        Show more notes
                       </Button>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          render={
-                            <Button
-                              ref={(node) => {
-                                if (node)
-                                  noteActionRefs.current.set(note.id, node)
-                                else noteActionRefs.current.delete(note.id)
-                              }}
-                              type="button"
-                              variant="ghost"
-                              size="icon-lg"
-                              className="size-11"
-                              aria-label={`More actions for ${note.title || "untitled note"}`}
-                              disabled={busy}
-                            />
-                          }
-                        >
-                          <EllipsisIcon aria-hidden="true" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuGroup>
-                            <DropdownMenuItem
-                              aria-label={`Edit ${note.title || "untitled note"}`}
-                              onClick={() => editNote(note)}
-                            >
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              aria-label={`${note.pinned ? "Unpin" : "Pin"} ${note.title || "untitled note"}`}
-                              onClick={() => {
-                                setActionError(null)
-                                void run(
-                                  () =>
-                                    adapter.updateNote(
-                                      note.id,
-                                      pinnedNoteInput(note, !note.pinned),
-                                      note.revision
-                                    ),
-                                  () => {},
-                                  "action"
-                                )
-                              }}
-                            >
-                              {note.pinned ? "Unpin note" : "Pin note"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              variant="destructive"
-                              aria-label={`Delete ${note.title || "untitled note"}`}
-                              onClick={() => {
-                                deletionReturnFocus.current =
-                                  noteActionRefs.current.get(note.id) ?? null
-                                setActionError(null)
-                                setDeletion({ kind: "note", item: note })
-                              }}
-                            >
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </li>
-                  ))}
-                </ul>
+                    </div>
+                  ) : null}
+                </>
               )}
             </div>
             <div>

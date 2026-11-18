@@ -980,7 +980,11 @@ const LiveToolsItem = memo(function LiveToolsItem({
   sameToolList(previous.tools, next.tools)
 )
 
-function RowView({
+// Durable rows keep referential identity across live tokens (see
+// buildConversationRows), and the context values they read are now memoized,
+// so comparing props stops whole messages from re-rendering per token. Context
+// updates still propagate through memo, so Find/tool-visibility stay correct.
+const RowView = memo(function RowView({
   row,
   sessionKey,
   projectAttachments,
@@ -1051,7 +1055,7 @@ function RowView({
         />
       )
   }
-}
+})
 
 function LiveStatus({
   run,
@@ -1267,6 +1271,18 @@ export function Conversation({
   const runActive =
     liveRun?.status === "running" || liveRun?.status === "submitting"
   const zenHidesIntermediate = toolMode === "zen" && runActive && !findOpen
+  // These providers wrap the whole transcript, and Conversation re-renders on
+  // every live token. Stable values keep the context from invalidating every
+  // memoized tool row in every message on each token (FindMatchContext and
+  // ToolDetailPinContext already pass stable values).
+  const toolVisibilityValue = useMemo(
+    () => ({ mode: toolMode, runActive, findOpen }),
+    [toolMode, runActive, findOpen]
+  )
+  const openDiff = useCallback(
+    (path?: string) => onOpenDiff?.(path ?? null),
+    [onOpenDiff]
+  )
   const projectAttachmentMessages = useMemo(
     () => finalProjectArtifactMessages(visibleMessages, hasOlder),
     [visibleMessages, hasOlder]
@@ -1479,16 +1495,19 @@ export function Conversation({
     }, 120)
   }
 
-  async function startEditFromHere(message: SessionMessageUser) {
-    if (!onStageRevert) return
-    hadRevertRef.current = Boolean(revert)
-    setEditTarget(message)
-    setEditError(null)
-    setEditBusy(true)
-    const failure = await onStageRevert(message.id)
-    setEditError(failure)
-    setEditBusy(false)
-  }
+  const startEditFromHere = useCallback(
+    async (message: SessionMessageUser) => {
+      if (!onStageRevert) return
+      hadRevertRef.current = Boolean(revert)
+      setEditTarget(message)
+      setEditError(null)
+      setEditBusy(true)
+      const failure = await onStageRevert(message.id)
+      setEditError(failure)
+      setEditBusy(false)
+    },
+    [onStageRevert, revert]
+  )
 
   async function finishEdit(keepFiles: boolean) {
     if (!editTarget) return
@@ -1599,8 +1618,8 @@ export function Conversation({
     >
       <ScrollerBridge apiRef={scrollerApiRef} />
       <ToolDetailPinContext.Provider value={setSheetPinnedRowKey}>
-      <ToolVisibilityContext.Provider value={{ mode: toolMode, runActive, findOpen }}>
-      <ToolDiffContext.Provider value={(path) => onOpenDiff?.(path ?? null)}>
+      <ToolVisibilityContext.Provider value={toolVisibilityValue}>
+      <ToolDiffContext.Provider value={openDiff}>
       <FindMatchContext.Provider value={findMatchSet}>
       <div className="relative min-h-0 flex-1">
         <MessageScroller className="flex-1">
@@ -1665,7 +1684,7 @@ export function Conversation({
                     onToolOpenChange={handleToolOpenChange}
                     expandedReasoningGroups={expandedReasoningGroups}
                     onReasoningOpenChange={handleReasoningOpenChange}
-                    onEditFromHere={(message) => void startEditFromHere(message)}
+                    onEditFromHere={startEditFromHere}
                   />
                 </ToolDetailRowContext.Provider>
               ))}

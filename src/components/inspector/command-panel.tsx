@@ -374,6 +374,12 @@ export function CommandPanel({
     [results]
   )
   const flat = useMemo(() => grouped.flatMap((group) => group.items), [grouped])
+  // Each grouped row used to call flat.indexOf(entry), turning the list into an
+  // O(n²) scan on every render. The index is stable for a given flat list.
+  const indexByEntry = useMemo(
+    () => new Map(flat.map((entry, index) => [entry, index])),
+    [flat]
+  )
   const active = flat[Math.min(activeIndex, Math.max(0, flat.length - 1))] ?? null
 
   useEffect(() => {
@@ -481,7 +487,7 @@ export function CommandPanel({
                 </h3>
                 <ul className="flex flex-col gap-0.5">
                   {group.items.map((entry) => {
-                    const index = flat.indexOf(entry)
+                    const index = indexByEntry.get(entry) ?? 0
                     return (
                       <li key={entry.id}>
                         <Button

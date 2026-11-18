@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react"
 import { ArrowUpIcon, FolderPlusIcon, GlobeIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -64,6 +64,52 @@ export function subdirectoryPaths(browse: string, payload: unknown): string[] {
 }
 
 const LIST_DEBOUNCE_MS = 120
+/** Rows rendered before the "show more" affordance; the rest stay off the DOM. */
+const VISIBLE_ROW_LIMIT = 50
+
+const optionClass =
+  "h-auto min-h-11 w-full justify-start gap-2 rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
+
+/** Memoized so browsing/filtering does not rebuild every unchanged row. */
+const DirectoryRow = memo(function DirectoryRow({
+  directory,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  directory: string
+  selected: boolean
+  disabled: boolean
+  onSelect: (directory: string) => void
+}) {
+  return (
+    <li>
+      <Button
+        type="button"
+        variant="ghost"
+        className={optionClass}
+        disabled={disabled}
+        aria-pressed={selected}
+        data-directory={directory}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => onSelect(directory)}
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate text-sm font-medium" dir="auto">
+            {projectBasename(directory)}
+          </span>
+          <span
+            className="truncate text-xs text-muted-foreground"
+            dir="auto"
+            title={directory}
+          >
+            {directory}
+          </span>
+        </span>
+      </Button>
+    </li>
+  )
+})
 
 type ListingState = "idle" | "loading" | "ready" | "error"
 
@@ -117,6 +163,7 @@ export function DirectoryBrowser({
 }: DirectoryBrowserProps) {
   const trimmed = value.trim()
   const query = trimmed.toLocaleLowerCase()
+  const deferredQuery = useDeferredValue(query)
   const canonicalValue = canonicalDirectory(trimmed)
   const errorID = `${id}-error`
   const hintID = `${id}-hint`
@@ -162,6 +209,9 @@ export function DirectoryBrowser({
     canonicalDirectory(controlledBrowse ?? internalBrowse) || "/"
   const [listing, setListing] = useState<ListingState>("idle")
   const [subdirectories, setSubdirectories] = useState<string[]>([])
+  // "Show more" is tied to the current level/query, so it auto-collapses when
+  // either changes without a setState-in-effect cascade.
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   function changeBrowse(next: string) {
     const normalized = canonicalDirectory(next) || "/"
@@ -169,7 +219,20 @@ export function DirectoryBrowser({
     else setInternalBrowse(normalized)
   }
 
-  // One level at a time, so typing never fans out into more requests.
+  // Stable row callback keeps the memoized rows from re-rendering on filter.
+  const handleSelectDirectory = useCallback(
+    (next: string) => {
+      onChange(next)
+      const normalized = canonicalDirectory(next) || "/"
+      if (onBrowseChange) onBrowseChange(normalized)
+      else setInternalBrowse(normalized)
+    },
+    [onChange, onBrowseChange]
+  )
+
+  // One level at a time, so typing never fans out into more requests. Stale
+  // entries stay visible while a new level is fetched instead of flashing an
+  // empty list.
   useEffect(() => {
     if (!open) return
     let active = true
@@ -177,7 +240,6 @@ export function DirectoryBrowser({
     void Promise.resolve().then(() => {
       if (!active) return
       setListing("loading")
-      setSubdirectories([])
     })
     const timer = setTimeout(() => {
       fetch(fsListUrl(browse), { signal: controller.signal })
@@ -192,7 +254,6 @@ export function DirectoryBrowser({
         })
         .catch(() => {
           if (!active || controller.signal.aborted) return
-          setSubdirectories([])
           setListing("error")
         })
     }, LIST_DEBOUNCE_MS)
@@ -211,21 +272,24 @@ export function DirectoryBrowser({
     subdirectories.includes(trimmed) ||
     (parent !== null && parent === trimmed)
   const siblings =
-    query && !exact
+    deferredQuery && !exact
       ? subdirectories.filter(
           (directory) =>
-            directory.toLocaleLowerCase().includes(query) ||
-            projectBasename(directory).toLocaleLowerCase().includes(query)
+            directory.toLocaleLowerCase().includes(deferredQuery) ||
+            projectBasename(directory).toLocaleLowerCase().includes(deferredQuery)
         )
       : subdirectories
+  const resetKey = `${browse}\u0000${deferredQuery}`
+  const showAll = expandedKey === resetKey
+  const visibleSiblings = showAll
+    ? siblings
+    : siblings.slice(0, VISIBLE_ROW_LIMIT)
+  const hiddenCount = siblings.length - visibleSiblings.length
   const custom = trimmed !== "" && !exact
   const optionsID = `${id}-options`
   const describedBy =
     [error ? errorID : null, hint ? hintID : null].filter(Boolean).join(" ") ||
     undefined
-
-  const optionClass =
-    "h-auto min-h-11 w-full justify-start gap-2 rounded-none px-3 py-2 text-start font-normal whitespace-normal aria-pressed:bg-muted"
 
   return (
     <div
@@ -364,36 +428,30 @@ export function DirectoryBrowser({
                 Could not list this directory.
               </li>
             )}
-            {siblings.map((directory) => (
-              <li key={directory}>
+            {visibleSiblings.map((directory) => (
+              <DirectoryRow
+                key={directory}
+                directory={directory}
+                selected={trimmed === directory}
+                disabled={disabled}
+                onSelect={handleSelectDirectory}
+              />
+            ))}
+            {hiddenCount > 0 ? (
+              <li>
                 <Button
                   type="button"
                   variant="ghost"
                   className={optionClass}
                   disabled={disabled}
-                  aria-pressed={trimmed === directory}
-                  data-directory={directory}
+                  data-directory-show-more
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onChange(directory)
-                    changeBrowse(directory)
-                  }}
+                  onClick={() => setExpandedKey(resetKey)}
                 >
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate text-sm font-medium" dir="auto">
-                      {projectBasename(directory)}
-                    </span>
-                    <span
-                      className="truncate text-xs text-muted-foreground"
-                      dir="auto"
-                      title={directory}
-                    >
-                      {directory}
-                    </span>
-                  </span>
+                  Show {hiddenCount} more
                 </Button>
               </li>
-            ))}
+            ) : null}
             {custom && (
               <li>
                 <Button

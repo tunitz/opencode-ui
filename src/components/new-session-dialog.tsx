@@ -1,9 +1,9 @@
 import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, LoaderCircleIcon, PlusIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { PickerSelect } from "@/components/ui/picker-select"
+import { PickerSelect, type PickerOption } from "@/components/ui/picker-select"
 import {
   Dialog,
   DialogClose,
@@ -71,6 +71,20 @@ type SessionDraft = {
   variant: string | null
 }
 
+// All transient target state lives in one object so async location/folder
+// results are applied as a single batched update instead of a render cascade.
+type TargetState = {
+  directory: string
+  selected: { directory: string; id: string | null } | null
+  probe: FolderProbe | null
+  listing: DirectoryListing | null
+  override: { directory: string; value: Partial<SessionDraft> } | null
+}
+
+function initialTarget(directory: string): TargetState {
+  return { directory, selected: null, probe: null, listing: null, override: null }
+}
+
 export type NewSessionButtonProps = {
   nav: OpenCodeController
   onCreated?: () => void
@@ -94,24 +108,25 @@ export function NewSessionDialog({
   expectedProjectID,
   onCreated,
 }: NewSessionDialogProps) {
+  const [target, setTarget] = useState<TargetState>(() =>
+    initialTarget(initialDirectory)
+  )
+  const { directory, selected, probe, listing, override } = target
   // Key the selection to its directory so changing folders immediately
   // invalidates the previous project instead of previewing stale defaults.
-  const [selected, setSelected] = useState<{
-    directory: string
-    id: string | null
-  } | null>(null)
-  const [probe, setProbe] = useState<FolderProbe | null>(null)
-  const [directory, setDirectory] = useState(initialDirectory)
   const selectedID = selected?.directory === directory ? selected.id : null
-  const [listing, setListing] = useState<DirectoryListing | null>(null)
 
   const { createSession } = nav
   const targetCatalog = useTargetCatalog(open ? directory : null)
 
-  const [override, setOverride] = useState<{
-    directory: string
-    value: Partial<SessionDraft>
-  } | null>(null)
+  // Reset transient state on the open transition instead of remounting the
+  // whole dialog (which previously forced fresh native catalog calls).
+  const wasOpenRef = useRef(false)
+  useEffect(() => {
+    const justOpened = open && !wasOpenRef.current
+    wasOpenRef.current = open
+    if (justOpened) setTarget(initialTarget(initialDirectory))
+  }, [open, initialDirectory])
 
   const defaults = useMemo(
     () =>
@@ -142,7 +157,7 @@ export function NewSessionDialog({
     }
   }, [selectedID, defaults, override, directory])
 
-  const agentOptions = useMemo(
+  const agentOptions = useMemo<PickerOption[]>(
     () =>
       targetCatalog.agents.map((agent) => ({
         value: agent.id,
@@ -153,20 +168,36 @@ export function NewSessionDialog({
     [targetCatalog.agents]
   )
   const { favorites, toggle: toggleFavorite } = useModelFavorites()
-  const modelOptions = useMemo(() => {
-    // selectableModels is already key-sorted; a stable sort by favorite keeps
-    // that order inside each group and avoids rebuilding keys per comparison.
-    const ranked = selectableModels(targetCatalog.models).map((model) => {
-      const key = modelKey(model)
-      return { model, key, favorite: favorites.has(key) }
-    })
-    ranked.sort((left, right) => Number(right.favorite) - Number(left.favorite))
-    return ranked.map(({ model, key }) => ({
-      value: key,
-      label: model.id,
-      detail: `${model.providerID}/${model.id}`,
-    }))
-  }, [favorites, targetCatalog.models])
+  // Option objects are built once per catalog identity and reused afterwards;
+  // only their *order* changes when a favorite toggles. Favorites stay ranked
+  // first (the behaviour restored in the prior picker pass) without rebuilding
+  // option objects or recomputing modelKey on every toggle.
+  const stableModelOptions = useMemo(
+    () =>
+      selectableModels(targetCatalog.models).map((model) => {
+        const key = modelKey(model)
+        return {
+          key,
+          option: {
+            value: key,
+            label: model.id,
+            detail: `${model.providerID}/${model.id}`,
+          },
+        }
+      }),
+    [targetCatalog.models]
+  )
+  const modelOptions = useMemo<PickerOption[]>(
+    () =>
+      stableModelOptions
+        .slice()
+        .sort(
+          (left, right) =>
+            Number(favorites.has(right.key)) - Number(favorites.has(left.key))
+        )
+        .map(({ option }) => option),
+    [stableModelOptions, favorites]
+  )
   const selectedModel = draft?.model ?? null
   const selectedModelInfo = useMemo(
     () =>
@@ -201,21 +232,41 @@ export function NewSessionDialog({
       .get(directory, () => loadLocation(directory))
       .then((location) => {
         if (!cancelled) {
-          setSelected({ directory, id: location.project.id })
-          setProbe({ directory, available: true })
+          setTarget((current) =>
+            current.directory === directory
+              ? {
+                  ...current,
+                  selected: { directory, id: location.project.id },
+                  probe: { directory, available: true },
+                }
+              : current
+          )
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setSelected({ directory, id: null })
-          setProbe({ directory, available: false })
+          setTarget((current) =>
+            current.directory === directory
+              ? {
+                  ...current,
+                  selected: { directory, id: null },
+                  probe: { directory, available: false },
+                }
+              : current
+          )
         }
       })
 
     void folderCache
       .get(directory, () => loadFolderEntries(directory))
       .then((value) => {
-        if (!cancelled) setListing({ directory, ...value })
+        if (!cancelled) {
+          setTarget((current) =>
+            current.directory === directory
+              ? { ...current, listing: { directory, ...value } }
+              : current
+          )
+        }
       })
 
     return () => {
@@ -264,14 +315,17 @@ export function NewSessionDialog({
     const agent =
       targetCatalog.agents.find((candidate) => candidate.id === next) ?? null
     const model = agentModelDefaults(agent, targetCatalog.models)
-    setOverride({
-      directory,
-      value: {
-        agentID: next,
-        model: model ?? draft?.model ?? null,
-        variant: model?.variant ?? draft?.variant ?? null,
+    setTarget((current) => ({
+      ...current,
+      override: {
+        directory: current.directory,
+        value: {
+          agentID: next,
+          model: model ?? draft?.model ?? null,
+          variant: model?.variant ?? draft?.variant ?? null,
+        },
       },
-    })
+    }))
   }
 
   async function handleModelChange(next: string) {
@@ -283,19 +337,25 @@ export function NewSessionDialog({
       draft?.variant && variantsForModel(info).includes(draft.variant)
         ? draft.variant
         : null
-    setOverride({
-      directory,
-      value: { model: buildModelRef(info, variant), variant },
-    })
+    setTarget((current) => ({
+      ...current,
+      override: {
+        directory: current.directory,
+        value: { model: buildModelRef(info, variant), variant },
+      },
+    }))
   }
 
   function handleVariantChange(next: string) {
     if (!selectedModelInfo) return
     const variant = next === DEFAULT_VARIANT ? null : next
-    setOverride({
-      directory,
-      value: { model: buildModelRef(selectedModelInfo, variant), variant },
-    })
+    setTarget((current) => ({
+      ...current,
+      override: {
+        directory: current.directory,
+        value: { model: buildModelRef(selectedModelInfo, variant), variant },
+      },
+    }))
   }
 
   async function handleCreate() {
@@ -340,7 +400,12 @@ export function NewSessionDialog({
               variant="outline"
               className="h-11 px-3"
               disabled={directory === "/" || nav.creating}
-              onClick={() => setDirectory(parentDirectory(directory))}
+              onClick={() =>
+                setTarget((current) => ({
+                  ...current,
+                  directory: parentDirectory(current.directory) ?? current.directory,
+                }))
+              }
             >
               ↑ Parent folder
             </Button>
@@ -360,7 +425,7 @@ export function NewSessionDialog({
                 className="flex min-h-11 w-full items-center gap-3 border-b px-3 text-start text-sm last:border-b-0 hover:bg-accent focus-visible:relative focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
                 onClick={() => {
                   const child = childDirectory(directory, entry)
-                  if (child) setDirectory(child)
+                  if (child) setTarget((current) => ({ ...current, directory: child }))
                 }}
               >
                 <FolderIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
@@ -477,18 +542,18 @@ export function NewSessionDialog({
 
 export function NewSessionButton({ nav, onCreated, compact = false }: NewSessionButtonProps) {
   const [open, setOpen] = useState(false)
-  const [sessionKey, setSessionKey] = useState(0)
 
   function handleOpen() {
     // Warm the same caches the dialog reads, so its first render is not the
-    // first catalog/folder/location read.
+    // first catalog/folder/location read. The dialog resets its own transient
+    // state on open instead of remounting, so a reopen within TTL issues no
+    // native calls.
     const directory = nav.location?.directory ?? ""
     if (directory) {
       void locationCache.get(directory, () => loadLocation(directory)).catch(() => {})
       void folderCache.get(directory, () => loadFolderEntries(directory)).catch(() => {})
       prefetchTargetCatalog(directory)
     }
-    setSessionKey((current) => current + 1)
     setOpen(true)
   }
 
@@ -509,7 +574,6 @@ export function NewSessionButton({ nav, onCreated, compact = false }: NewSession
         {compact ? null : "New session"}
       </Button>
       <NewSessionDialog
-        key={sessionKey}
         nav={nav}
         open={open}
         onOpenChange={setOpen}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { createAsyncCache } from "@/lib/async-cache"
 import {
@@ -117,19 +117,23 @@ export function useTargetCatalog(directory: string | null): TargetCatalog {
 
   // The render after a directory change still sees the previous state until
   // the effect runs. Treat that state as loading for the new directory.
-  if (state.directory !== directory) {
-    return {
-      agents: [],
-      models: [],
-      status: directory ? "loading" : "idle",
-      error: null,
+  // Memoized so unrelated re-renders of the host (e.g. a favorite toggle) reuse
+  // the same catalog object and don't rebuild every downstream option list.
+  return useMemo(() => {
+    if (state.directory !== directory) {
+      return {
+        agents: [],
+        models: [],
+        status: directory ? "loading" : "idle",
+        error: null,
+      }
     }
-  }
 
-  return {
-    agents: state.agents,
-    models: state.models,
-    status: state.status,
-    error: state.error,
-  }
+    return {
+      agents: state.agents,
+      models: state.models,
+      status: state.status,
+      error: state.error,
+    }
+  }, [state, directory])
 }

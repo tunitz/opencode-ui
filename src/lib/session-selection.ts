@@ -14,6 +14,44 @@ export function modelKey(model: { providerID: string; id: string }): string {
   return `${model.providerID}/${model.id}`
 }
 
+/**
+ * Catalog lookups used to scan the whole array with `.find`/`.some` on every
+ * render (and once per row in some lists). These indexes are keyed by the
+ * catalog array identity, so a stable catalog is indexed once and every later
+ * lookup is O(1). Catalogs are replaced, never mutated in place, so an index
+ * never outlives the data it describes.
+ */
+const modelIndexByCatalog = new WeakMap<
+  readonly ModelInfo[],
+  Map<string, ModelInfo>
+>()
+function modelIndex(models: readonly ModelInfo[]): Map<string, ModelInfo> {
+  let index = modelIndexByCatalog.get(models)
+  if (!index) {
+    index = new Map<string, ModelInfo>()
+    for (const model of models) index.set(modelKey(model), model)
+    modelIndexByCatalog.set(models, index)
+  }
+  return index
+}
+
+const agentIndexByCatalog = new WeakMap<
+  readonly AgentInfo[],
+  Map<string, AgentInfo>
+>()
+function agentIndex(agents: readonly AgentInfo[]): Map<string, AgentInfo> {
+  let index = agentIndexByCatalog.get(agents)
+  if (!index) {
+    index = new Map<string, AgentInfo>()
+    for (const agent of agents) index.set(agent.id, agent)
+    agentIndexByCatalog.set(agents, index)
+  }
+  return index
+}
+
+const freeModelByCatalog = new WeakMap<readonly ModelInfo[], ModelInfo | null>()
+
+
 export function modelRefKey(model: ModelRef | null | undefined): string {
   return model ? modelKey(model) : ""
 }
@@ -90,11 +128,9 @@ export function effectiveDefaultAgent(
       return typeof value === "string" && value.trim().length > 0
     })?.info.default_agent
 
-  if (
-    configured &&
-    agents.some((agent) => agent.id === configured && isSelectableAgent(agent))
-  ) {
-    return configured
+  if (configured) {
+    const match = agentIndex(agents).get(configured)
+    if (match && isSelectableAgent(match)) return configured
   }
 
   // The backend's Agent.list() puts its selected default first. Use that raw
@@ -108,9 +144,14 @@ export function effectiveDefaultAgent(
  * model as a new session's default.
  */
 export function defaultNewSessionModel(models: ModelInfo[]): ModelRef | null {
-  const free = models.find((model) =>
-    isVerifiedFreeModel({ providerID: model.providerID, id: model.id })
-  )
+  let free = freeModelByCatalog.get(models)
+  if (free === undefined) {
+    free =
+      models.find((model) =>
+        isVerifiedFreeModel({ providerID: model.providerID, id: model.id })
+      ) ?? null
+    freeModelByCatalog.set(models, free)
+  }
 
   return free
     ? { providerID: free.providerID, id: free.id }
@@ -127,11 +168,7 @@ export function agentModelDefaults(
   models: ModelInfo[]
 ): ModelRef | null {
   if (!agent?.model) return null
-  const info = models.find(
-    (candidate) =>
-      candidate.providerID === agent.model!.providerID &&
-      candidate.id === agent.model!.id
-  )
+  const info = modelIndex(models).get(modelRefKey(agent.model))
   if (!info) return null
   const variant = agent.model.variant
   return variant && variantsForModel(info).includes(variant)
@@ -148,10 +185,7 @@ export function isModelInCatalog(
     return true
   }
 
-  return models.some(
-    (candidate) =>
-      candidate.providerID === model.providerID && candidate.id === model.id
-  )
+  return modelIndex(models).has(modelKey(model))
 }
 
 /** True when a session's agent exists in the loaded catalog (honest availability). */
@@ -163,5 +197,5 @@ export function isAgentInCatalog(
     return true
   }
 
-  return agents.some((candidate) => candidate.id === agent)
+  return agentIndex(agents).has(agent)
 }

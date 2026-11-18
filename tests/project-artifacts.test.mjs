@@ -136,7 +136,9 @@ describe("project attachment paths and delivery", () => {
     } })
     expect((await (await huge.handleRequest(resolveRequest())).json()).data.size).toBe(9999999999)
   })
-  test("does not evict earlier capabilities at legacy artifact-count boundary", async () => {
+  // 270 sequential capability resolutions sit at Bun's 5s default timeout on
+  // a loaded host; the boundary assertion itself is unchanged.
+  test("does not evict earlier capabilities at legacy artifact-count boundary", { timeout: 20000 }, async () => {
     const f = fixture()
     const links = Array.from({ length: 270 }, (_, i) => `out/${i}.txt`)
     f.state.messages = [assistant("message_final", links.map((link) => `[file](${link})`).join("\n")), idle()]

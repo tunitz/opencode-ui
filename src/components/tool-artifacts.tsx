@@ -58,30 +58,34 @@ function decodeTextDataUrl(
   return artifact.dataUrl ? decodePreviewText(artifact.dataUrl, MAX_TOOL_ARTIFACT_TEXT_BYTES) : null
 }
 
-function dataUrlToBytes(dataUrl: string): Uint8Array {
-  const comma = dataUrl.indexOf(",")
-  if (comma < 0) throw new Error("Malformed data URL")
-  const header = dataUrl.slice(5, comma)
-  const base64 = header.split(";").some((part) => part.toLowerCase() === "base64")
-  const payload = dataUrl.slice(comma + 1)
-  if (base64) {
-    const binary = atob(payload)
-    return Uint8Array.from(binary, (char) => char.charCodeAt(0))
-  }
-  return new TextEncoder().encode(decodeURIComponent(payload))
+/**
+ * Let the platform decode a data URL instead of running `atob` plus a byte
+ * loop on the main thread. The returned blob is wrapped in an object URL for
+ * download and revoked once the browser has consumed it.
+ */
+async function dataUrlToBlob(dataUrl: string, mime: string): Promise<Blob> {
+  if (dataUrl.indexOf(",") < 0) throw new Error("Malformed data URL")
+  const response = await fetch(dataUrl)
+  if (!response.ok) throw new Error("Unable to decode data URL")
+  const blob = await response.blob()
+  return blob.type ? blob : new Blob([blob], { type: mime })
 }
 
-function downloadArtifact(artifact: ToolArtifact): boolean {
+function clickDownload(url: string, name: string, mime: string): void {
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = sanitizeToolArtifactName(name, mime)
+  anchor.rel = "noopener"
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+async function downloadArtifact(artifact: ToolArtifact): Promise<boolean> {
   if (!artifact.downloadable) return false
   if (artifact.downloadUrl) {
     try {
-      const anchor = document.createElement("a")
-      anchor.href = artifact.downloadUrl
-      anchor.download = sanitizeToolArtifactName(artifact.name, artifact.mime)
-      anchor.rel = "noopener"
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
+      clickDownload(artifact.downloadUrl, artifact.name, artifact.mime)
       return true
     } catch {
       return false
@@ -89,18 +93,9 @@ function downloadArtifact(artifact: ToolArtifact): boolean {
   }
   if (!artifact.dataUrl) return false
   try {
-    const bytes = dataUrlToBytes(artifact.dataUrl)
-    const buffer = new ArrayBuffer(bytes.byteLength)
-    new Uint8Array(buffer).set(bytes)
-    const blob = new Blob([buffer], { type: artifact.mime })
+    const blob = await dataUrlToBlob(artifact.dataUrl, artifact.mime)
     const url = URL.createObjectURL(blob)
-    const anchor = document.createElement("a")
-    anchor.href = url
-    anchor.download = sanitizeToolArtifactName(artifact.name, artifact.mime)
-    anchor.rel = "noopener"
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
+    clickDownload(url, artifact.name, artifact.mime)
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     return true
   } catch {
@@ -543,8 +538,9 @@ export function ArtifactDialog({
                     variant="outline"
                     className="h-11 px-4"
                     onClick={() => {
-                      const ok = downloadArtifact(artifact)
-                      setDownloadFailed(!ok)
+                      void downloadArtifact(artifact).then((ok) =>
+                        setDownloadFailed(!ok)
+                      )
                     }}
                   >
                     <DownloadIcon aria-hidden="true" className="size-4" />

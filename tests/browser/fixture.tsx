@@ -6,7 +6,8 @@
  * static server in run.ts answers the handful of same-origin API routes that
  * the mounted panels request with fixed, synthetic JSON.
  */
-import { StrictMode, useEffect, useState, type ReactNode } from "react"
+import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
+import { StrictMode, memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { AppDirection } from "@/components/app-direction"
@@ -29,6 +30,7 @@ import { WorkspaceProvider } from "@/components/workspace-context"
 import type { FormInfo, SessionInfo, SessionMessageInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
+import { recordPerfMark, recordPerfRender } from "@/lib/perf-probe"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
 
 type QACall = { kind: string; value?: string }
@@ -517,7 +519,7 @@ function ConversationFixture({ history = false, longToolErrors = false }: { hist
       ...current,
       "s-alpha": {
         status: "running", texts: { stream: { assistantMessageID: "live-fixture", ordinal: 0, text, ended: false, seq: 1 } },
-        reasonings: {}, tools: {}, order: [{ kind: "text", key: "stream" }], pendingUsers: [], notices: [], error: null, seen: {}, startedAt: now, nextSeq: 2,
+        reasonings: {}, tools: {}, order: [{ kind: "text", key: "stream" }], pendingUsers: [], notices: [], error: null, seen: new Set<string>(), startedAt: now, nextSeq: 2,
       },
     }))
     qaWindow.__qa.streamText = () => liveRunStore.getRun("s-alpha")?.texts.stream?.text ?? ""
@@ -791,6 +793,353 @@ function SettingsFixture() {
   )
 }
 
+/* -------------------------------------------------------------------------- *
+ * Wave 0 performance fixtures.
+ *
+ * These are test-only, in-memory mirrors of the production row render sites.
+ * They mount real Base UI primitives and the real Conversation component, but
+ * instrument each row with recordPerfRender / data-perf-row so counts are
+ * observable. No engine, provider, filesystem, or network is contacted.
+ * -------------------------------------------------------------------------- */
+
+type PerfOption = { value: string; label: string; detail?: string }
+
+const PERF_TTL_MS = 60_000
+const perfCatalogCache = new Map<string, number>()
+
+type PerfNativeWindow = Window & { __perfNativeCalls?: Record<string, number> }
+
+function perfLoadCatalog(kind: string) {
+  const loadedAt = perfCatalogCache.get(kind)
+  if (loadedAt !== undefined && performance.now() - loadedAt < PERF_TTL_MS) return
+  const target = window as PerfNativeWindow
+  const calls = (target.__perfNativeCalls ??= {})
+  calls[kind] = (calls[kind] ?? 0) + 1
+  recordPerfMark(`native:${kind}`)
+  perfCatalogCache.set(kind, performance.now())
+}
+
+function perfMatches(option: PerfOption, query: string): boolean {
+  const text = `${option.label} ${option.detail ?? ""} ${option.value}`.toLocaleLowerCase()
+  return query
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => text.includes(word))
+}
+
+const PerfPickerRow = memo(function PerfPickerRow({
+  option,
+  favorite,
+  showFavorite,
+  onToggleFavorite,
+}: {
+  option: PerfOption
+  favorite: boolean
+  showFavorite: boolean
+  onToggleFavorite?: (value: string) => void
+}) {
+  recordPerfRender("PickerSelectRow")
+  return (
+    <ComboboxPrimitive.Item
+      value={option}
+      data-perf-row="picker"
+      data-perf-value={option.value}
+      className="relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 pe-14 text-sm outline-hidden select-none data-highlighted:bg-accent"
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span>{option.label}</span>
+        {option.detail ? (
+          <span dir="ltr" className="font-mono text-[11px] text-muted-foreground">
+            {option.detail}
+          </span>
+        ) : null}
+      </span>
+      {showFavorite ? (
+        <button
+          type="button"
+          aria-label={favorite ? `Unfavorite ${option.label}` : `Favorite ${option.label}`}
+          data-perf-favorite={option.value}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onToggleFavorite?.(option.value)
+          }}
+          className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center"
+        >
+          {favorite ? "★" : "☆"}
+        </button>
+      ) : null}
+    </ComboboxPrimitive.Item>
+  )
+})
+
+function PerfPicker({
+  label,
+  options,
+  favorites,
+  onToggleFavorite,
+  catalogKind,
+}: {
+  label: string
+  options: PerfOption[]
+  favorites?: ReadonlySet<string>
+  onToggleFavorite?: (value: string) => void
+  catalogKind?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const filtered = useMemo(
+    () => (query.trim() ? options.filter((option) => perfMatches(option, query)) : options),
+    [options, query]
+  )
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (next && catalogKind) perfLoadCatalog(catalogKind)
+      setOpen(next)
+      if (!next) setQuery("")
+    },
+    [catalogKind]
+  )
+  return (
+    <ComboboxPrimitive.Root
+      items={filtered}
+      value={null}
+      open={open}
+      onOpenChange={handleOpenChange}
+      onValueChange={() => undefined}
+      autoHighlight={false}
+      filter={() => true}
+    >
+      <ComboboxPrimitive.Trigger
+        type="button"
+        aria-label={label}
+        data-perf-trigger={label}
+        className="flex h-11 w-full items-center justify-between rounded-lg border px-3 text-sm"
+      >
+        <span>{open ? "Open" : `Choose ${label}`}</span>
+        <ComboboxPrimitive.Icon>▾</ComboboxPrimitive.Icon>
+      </ComboboxPrimitive.Trigger>
+      <ComboboxPrimitive.Portal>
+        <ComboboxPrimitive.Positioner side="bottom" align="start" sideOffset={6}>
+          <ComboboxPrimitive.Popup
+            aria-label={label}
+            data-perf-popup={label}
+            className="flex max-h-[24rem] w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-lg border bg-popover p-1 shadow-md"
+          >
+            <ComboboxPrimitive.Input
+              aria-label={`Search ${label}`}
+              data-perf-search={label}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={`Search ${label}`}
+              className="h-11 w-full rounded-lg border px-3 text-sm"
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <ComboboxPrimitive.List data-perf-list={label} className="outline-0">
+                {(option: PerfOption) => (
+                  <PerfPickerRow
+                    key={option.value}
+                    option={option}
+                    favorite={favorites?.has(option.value) ?? false}
+                    showFavorite={Boolean(onToggleFavorite)}
+                    onToggleFavorite={onToggleFavorite}
+                  />
+                )}
+              </ComboboxPrimitive.List>
+            </div>
+          </ComboboxPrimitive.Popup>
+        </ComboboxPrimitive.Positioner>
+      </ComboboxPrimitive.Portal>
+    </ComboboxPrimitive.Root>
+  )
+}
+
+function perfModelOptions(count: number): PerfOption[] {
+  return Array.from({ length: count }, (_, index) => {
+    const value = `provider-${index % 12}/model-${index}`
+    return { value, label: `Synthetic Model ${index}`, detail: value }
+  })
+}
+
+function perfAgentOptions(count: number): PerfOption[] {
+  return Array.from({ length: count }, (_, index) => ({
+    value: `agent-${index}`,
+    label: `Synthetic Agent ${index}`,
+    detail: `synthetic/agent-${index}`,
+  }))
+}
+
+function PerfModelsFixture() {
+  const options = useMemo(() => perfModelOptions(2_000), [])
+  const [favorites, setFavorites] = useState<ReadonlySet<string>>(
+    () => new Set<string>(["provider-0/model-0"])
+  )
+  const toggle = useCallback((value: string) => {
+    setFavorites((current) => {
+      const next = new Set(current)
+      if (next.has(value)) next.delete(value)
+      else next.add(value)
+      return next
+    })
+  }, [])
+  return (
+    <div className="p-4" style={{ width: 480 }}>
+      <PerfPicker
+        label="Model"
+        options={options}
+        favorites={favorites}
+        onToggleFavorite={toggle}
+        catalogKind="models"
+      />
+    </div>
+  )
+}
+
+function PerfAgentsFixture() {
+  const options = useMemo(() => perfAgentOptions(200), [])
+  return (
+    <div className="p-4" style={{ width: 480 }}>
+      <PerfPicker label="Agent" options={options} catalogKind="agents" />
+    </div>
+  )
+}
+
+const PerfNoteRow = memo(function PerfNoteRow({ title }: { title: string }) {
+  recordPerfRender("NotesRow")
+  return <li data-perf-row="note">{title}</li>
+})
+
+function PerfNotesFixture() {
+  const notes = useMemo(
+    () => Array.from({ length: 1_000 }, (_, index) => ({ id: `n-${index}`, title: `Synthetic note ${index}` })),
+    []
+  )
+  const [query, setQuery] = useState("")
+  const filtered = useMemo(
+    () => (query.trim() ? notes.filter((note) => note.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : notes),
+    [notes, query]
+  )
+  return (
+    <div className="p-4">
+      <input
+        aria-label="Filter notes"
+        data-perf-filter="notes"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        className="h-11 w-full rounded-lg border px-3 text-sm"
+      />
+      <ul data-perf-list="notes" className="mt-2">
+        {filtered.map((note) => (
+          <PerfNoteRow key={note.id} title={note.title} />
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+const PerfWorktreeRow = memo(function PerfWorktreeRow({ directory }: { directory: string }) {
+  recordPerfRender("WorktreeRow")
+  return <li data-perf-row="worktree">{directory}</li>
+})
+
+function PerfWorktreesFixture() {
+  const directories = useMemo(
+    () => Array.from({ length: 1_500 }, (_, index) => `/synthetic/worktrees/wt-${String(index).padStart(4, "0")}`),
+    []
+  )
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const filtered = useMemo(
+    () => (query.trim() ? directories.filter((directory) => directory.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : directories),
+    [directories, query]
+  )
+  return (
+    <div className="p-4">
+      <button
+        type="button"
+        aria-label="Browse directories"
+        data-perf-browse
+        onClick={() => setOpen(true)}
+        className="h-11 rounded-lg border px-3 text-sm"
+      >
+        Browse directories
+      </button>
+      {open ? (
+        <>
+          <input
+            aria-label="Filter directories"
+            data-perf-filter="worktrees"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="mt-2 h-11 w-full rounded-lg border px-3 text-sm"
+          />
+          <ul data-perf-list="worktrees" className="mt-2">
+            {filtered.map((directory) => (
+              <PerfWorktreeRow key={directory} directory={directory} />
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function perfSyntheticMessages(count: number): SessionMessageInfo[] {
+  const messages: SessionMessageInfo[] = []
+  for (let index = 0; index < count; index += 1) {
+    const created = now - (count - index) * 1_000
+    if (index % 2 === 0) {
+      messages.push({
+        type: "user",
+        id: `perf-u-${index}`,
+        time: { created },
+        text: `Synthetic performance question ${index}`,
+      })
+    } else {
+      messages.push({
+        type: "assistant",
+        id: `perf-a-${index}`,
+        agent: "build",
+        model: { providerID: "synthetic", id: "model" },
+        time: { created, completed: created + 500 },
+        content: [{ type: "text", text: `Synthetic performance response ${index}.` }],
+      })
+    }
+  }
+  return messages
+}
+
+function PerfMessagesFixture() {
+  const nav = useSyntheticNav()
+  const messages = useMemo(() => perfSyntheticMessages(1_000), [])
+  return (
+    <Providers nav={nav}>
+      <div className="flex h-svh min-h-0 flex-col">
+        <Conversation
+          sessionKey="s-alpha"
+          hasSession
+          status="ready"
+          error={null}
+          messages={messages}
+          streamStatus="idle"
+          hasOlder={false}
+          loadingOlder={false}
+          olderError={null}
+          serverVersion="fixture"
+          revert={null}
+          focusMessageID={null}
+          onFocusMessageHandled={() => undefined}
+          onRetry={() => undefined}
+          onLoadOlder={async () => undefined}
+        />
+      </div>
+    </Providers>
+  )
+}
+
 function Fixture() {
   const fixture = new URLSearchParams(window.location.search).get("fixture")
   switch (fixture) {
@@ -816,10 +1165,29 @@ function Fixture() {
       return <PendingFixture />
     case "settings":
       return <SettingsFixture />
+    case "perf-models":
+      return <PerfModelsFixture />
+    case "perf-agents":
+      return <PerfAgentsFixture />
+    case "perf-notes":
+      return <PerfNotesFixture />
+    case "perf-worktrees":
+      return <PerfWorktreesFixture />
+    case "perf-messages":
+      return <PerfMessagesFixture />
     case "nav":
     default:
       return <NavFixture />
   }
+}
+
+// The runner normally installs this global in an init script. Install a local
+// copy as well so a perf fixture also works when opened directly in a browser.
+if (
+  new URLSearchParams(window.location.search).get("fixture")?.startsWith("perf-") &&
+  !window.__opencodePerf
+) {
+  window.__opencodePerf = { enabled: true, counts: {}, longtasks: [], marks: [] }
 }
 
 const root = document.getElementById("root")

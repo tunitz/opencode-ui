@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   BellIcon,
   ChevronRightIcon,
@@ -35,7 +41,9 @@ import {
 import { inboxDeliveryLabel, inboxSummary } from "@/lib/queue"
 import type { SessionInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
-import { useLiveRun } from "@/lib/use-live-run"
+import { liveRunStore } from "@/lib/live-run-store"
+import type { LiveRun, LiveRunStatus } from "@/lib/session-events"
+import { useLiveRunStatus } from "@/lib/use-live-run"
 import { formatDurationMs } from "@/lib/context-usage"
 import { cn } from "@/lib/utils"
 
@@ -80,8 +88,56 @@ function runTraceStatus(status: string | undefined): "running" | "error" | undef
   return undefined
 }
 
+type RunMeta = {
+  startedAt: number | null
+  error: string | null
+  notices: string[]
+}
+
+const EMPTY_RUN_META: RunMeta = { startedAt: null, error: null, notices: [] }
+const noopUnsubscribe = () => {}
+
+// The status hook keeps the panel off the per-token update path; this selector
+// covers the other fields the panel renders (duration/error/notices) with a
+// referentially stable snapshot so text deltas never re-render it either.
+let lastMeta: RunMeta = EMPTY_RUN_META
+function selectRunMeta(run: LiveRun | null): RunMeta {
+  if (!run) return EMPTY_RUN_META
+  if (
+    lastMeta !== EMPTY_RUN_META &&
+    lastMeta.startedAt === run.startedAt &&
+    lastMeta.error === run.error &&
+    lastMeta.notices === run.notices
+  ) {
+    return lastMeta
+  }
+  lastMeta = {
+    startedAt: run.startedAt,
+    error: run.error,
+    notices: run.notices,
+  }
+  return lastMeta
+}
+
+function useRunMeta(sessionID: string | null): RunMeta {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      sessionID
+        ? liveRunStore.subscribe(sessionID, onStoreChange)
+        : noopUnsubscribe,
+    [sessionID]
+  )
+  return useSyncExternalStore(subscribe, () =>
+    selectRunMeta(liveRunStore.getRun(sessionID))
+  )
+}
+
+type ActivityRun = RunMeta & { status: LiveRunStatus }
+
 export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
-  const run = useLiveRun(nav.activeSessionID)
+  const status = useLiveRunStatus(nav.activeSessionID)
+  const runMeta = useRunMeta(nav.activeSessionID)
+  const run: ActivityRun | null = status === null ? null : { status, ...runMeta }
   const children = useMemo(
     () => boundedChildSessions(nav.sessions, nav.activeSessionID),
     [nav.activeSessionID, nav.sessions]

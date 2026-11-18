@@ -55,6 +55,8 @@ coverage/
 /public/icons/.tmp-favicon-*.png
 
 # ── Test and QA artifacts ───────────────────────────────────────
+# Wave 0 perf baseline is a committed "before" snapshot; per-run results are not.
+/tests/browser/perf-results.json
 test-results/
 playwright-report/
 blob-report/

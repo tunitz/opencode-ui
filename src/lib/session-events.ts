@@ -66,7 +66,8 @@ export type LiveRun = {
   pendingUsers: LivePendingUser[]
   notices: string[]
   error: string | null
-  seen: Record<string, true>
+  /** Insertion-ordered, bounded event-id dedupe. Internal; never rendered. */
+  seen: Set<string>
   startedAt: number | null
   nextSeq: number
 }
@@ -133,32 +134,29 @@ function isTerminal(status: LiveRunStatus): boolean {
 
 /**
  * Event ids are deduped for the volatile stream. The set must stay bounded: a
- * long run emits thousands of frames, and copying an ever-growing map per
- * frame turned ingestion quadratic (and pinned every id in memory). The most
- * recent ids are enough to absorb a duplicate/replayed frame; ids older than
- * the window cannot recur without a much larger stream gap.
+ * long run emits thousands of frames, so an insertion-ordered Set absorbs a
+ * duplicate/replayed frame in O(1) and is trimmed only when it grows past the
+ * boundary. Copying a 256-512 entry object and calling Object.keys on every
+ * frame made ingestion quadratic; the most recent ids are all that are needed
+ * because older ids cannot recur without a much larger stream gap.
+ *
+ * The Set is mutated in place across published runs. It is never read outside
+ * dedupe and never rendered, so sharing the single mutable draft is safe and
+ * keeps per-frame allocation constant.
  */
 const SEEN_WINDOW = 256
 const SEEN_TRIM_AT = SEEN_WINDOW * 2
 
-function rememberSeen(
-  seen: Record<string, true>,
-  id: string
-): Record<string, true> {
-  const next = { ...seen, [id]: true as const }
-  const ids = Object.keys(next)
+function rememberSeen(seen: Set<string>, id: string): void {
+  seen.add(id)
+  if (seen.size <= SEEN_TRIM_AT) return
 
-  if (ids.length <= SEEN_TRIM_AT) {
-    return next
+  let remove = seen.size - SEEN_WINDOW
+  for (const key of seen) {
+    if (remove === 0) break
+    seen.delete(key)
+    remove -= 1
   }
-
-  const trimmed: Record<string, true> = {}
-
-  for (const key of ids.slice(-SEEN_WINDOW)) {
-    trimmed[key] = true
-  }
-
-  return trimmed
 }
 
 export function emptyLiveRun(status: LiveRunStatus = "running"): LiveRun {
@@ -171,7 +169,7 @@ export function emptyLiveRun(status: LiveRunStatus = "running"): LiveRun {
     pendingUsers: [],
     notices: [],
     error: null,
-    seen: {},
+    seen: new Set<string>(),
     startedAt: null,
     nextSeq: 0,
   }
@@ -309,12 +307,13 @@ export function applySessionEvent(
     return current
   }
 
-  if (current?.seen[event.id]) {
+  if (current?.seen.has(event.id)) {
     return current
   }
 
   const run = current ?? emptyLiveRun()
-  const seen = rememberSeen(run.seen, event.id)
+  const seen = run.seen
+  rememberSeen(seen, event.id)
   // Every execution.started is a new native execution, so the run clock is
   // reset here instead of inheriting a previous execution's start.
   const executionStartedAt =

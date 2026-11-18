@@ -1,15 +1,20 @@
 "use client"
 
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon, StarIcon } from "lucide-react"
 import {
+  forwardRef,
   memo,
   useCallback,
+  useDeferredValue,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
+  type CSSProperties,
   type ReactNode,
 } from "react"
 
@@ -28,10 +33,27 @@ type TriggerProps = Omit<
   "children" | "className"
 >
 
-export function matchesPickerOption(
-  option: Pick<PickerOption, "label" | "detail" | "value">,
-  query: string
-): boolean {
+/**
+ * Above this many options the popup switches to a windowed list so opening a
+ * large catalog mounts a bounded number of rows. Small pickers (projects,
+ * variants, short agent lists) keep the simpler keyed list below.
+ */
+const VIRTUALIZE_THRESHOLD = 120
+/** Row estimate in px; `measureElement` corrects it from the real DOM height. */
+const ROW_ESTIMATE_PX = 56
+
+/** One lowercase haystack per option, built once per `options` change. */
+export function pickerOptionSearchKey(
+  option: Pick<PickerOption, "label" | "detail" | "value">
+): string {
+  return [option.label, option.detail, option.value]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase()
+}
+
+/** `query` is tokenized once by the caller; the key is already lowercase. */
+export function matchesPickerSearchKey(key: string, query: string): boolean {
   const words = query
     .trim()
     .toLocaleLowerCase()
@@ -39,13 +61,15 @@ export function matchesPickerOption(
     .filter(Boolean)
 
   if (words.length === 0) return true
+  return words.every((word) => key.includes(word))
+}
 
-  const text = [option.label, option.detail, option.value]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase()
-
-  return words.every((word) => text.includes(word))
+/** Kept for callers that have not precomputed a search key. */
+export function matchesPickerOption(
+  option: Pick<PickerOption, "label" | "detail" | "value">,
+  query: string
+): boolean {
+  return matchesPickerSearchKey(pickerOptionSearchKey(option), query)
 }
 
 type PickerOptionRowProps = {
@@ -53,80 +77,190 @@ type PickerOptionRowProps = {
   favorite: boolean
   showFavorite: boolean
   onToggleFavorite?: (value: string) => void
+  /** Supplied only by the virtualized list; keeps index/ARIA contracts exact. */
+  index?: number
+  setSize?: number
+  start?: number
+  size?: number
 }
 
-/** Memoized so highlight/search re-renders do not rebuild every row. */
-const PickerOptionRow = memo(function PickerOptionRow({
-  option,
-  favorite,
-  showFavorite,
-  onToggleFavorite,
-}: PickerOptionRowProps) {
-  return (
-    <ComboboxPrimitive.Item
-      value={option}
-      disabled={option.disabled}
-      className={cn(
-        "relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground",
-        showFavorite ? "pe-14" : "pe-8"
-      )}
-    >
-      {option.icon ? (
-        <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
-          {option.icon}
-        </span>
-      ) : null}
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-[14px] leading-5 break-words">
-          {option.label}
-        </span>
-        {option.detail ? (
-          <span
-            dir="ltr"
-            className="font-mono text-[11px] break-all text-muted-foreground"
-          >
-            {option.detail}
+/** Memoized so highlight/search/favorite re-renders do not rebuild every row. */
+const PickerOptionRow = memo(
+  forwardRef<HTMLDivElement, PickerOptionRowProps>(function PickerOptionRow(
+    { option, favorite, showFavorite, onToggleFavorite, index, setSize, start, size },
+    ref
+  ) {
+    const virtualized = index !== undefined
+    // Built from primitives so the memoized row keeps referential props stable
+    // across a favorite toggle (only the toggled row's `favorite` changes).
+    const style: CSSProperties | undefined = virtualized
+      ? {
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: size ?? ROW_ESTIMATE_PX,
+          transform: `translateY(${start ?? 0}px)`,
+        }
+      : undefined
+    return (
+      <ComboboxPrimitive.Item
+        ref={ref}
+        value={option}
+        index={index}
+        data-index={virtualized ? index : undefined}
+        aria-setsize={virtualized ? setSize : undefined}
+        aria-posinset={virtualized ? (index ?? 0) + 1 : undefined}
+        style={style}
+        disabled={option.disabled}
+        className={cn(
+          "relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+          showFavorite ? "pe-14" : "pe-8"
+        )}
+      >
+        {option.icon ? (
+          <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
+            {option.icon}
           </span>
         ) : null}
-      </span>
-      {showFavorite ? (
-        <button
-          type="button"
-          aria-label={
-            favorite ? `Unfavorite ${option.label}` : `Favorite ${option.label}`
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-[14px] leading-5 break-words">
+            {option.label}
+          </span>
+          {option.detail ? (
+            <span
+              dir="ltr"
+              className="font-mono text-[11px] break-all text-muted-foreground"
+            >
+              {option.detail}
+            </span>
+          ) : null}
+        </span>
+        {showFavorite ? (
+          <button
+            type="button"
+            aria-label={
+              favorite ? `Unfavorite ${option.label}` : `Favorite ${option.label}`
+            }
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onToggleFavorite?.(option.value)
+            }}
+            className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <StarIcon
+              aria-hidden="true"
+              className={cn(
+                "size-4",
+                favorite && "fill-amber-400 text-amber-400"
+              )}
+            />
+          </button>
+        ) : null}
+        <ComboboxPrimitive.ItemIndicator
+          render={
+            <span
+              className={cn(
+                "pointer-events-none absolute top-1/2 flex size-4 -translate-y-1/2 items-center justify-center",
+                showFavorite ? "end-10" : "end-2"
+              )}
+            />
           }
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            onToggleFavorite?.(option.value)
-          }}
-          className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
         >
-          <StarIcon
-            aria-hidden="true"
-            className={cn(
-              "size-4",
-              favorite && "fill-amber-400 text-amber-400"
-            )}
-          />
-        </button>
-      ) : null}
-      <ComboboxPrimitive.ItemIndicator
-        render={
-          <span
-            className={cn(
-              "pointer-events-none absolute top-1/2 flex size-4 -translate-y-1/2 items-center justify-center",
-              showFavorite ? "end-10" : "end-2"
-            )}
-          />
-        }
-      >
-        <CheckIcon className="size-4" />
-      </ComboboxPrimitive.ItemIndicator>
-    </ComboboxPrimitive.Item>
+          <CheckIcon className="size-4" />
+        </ComboboxPrimitive.ItemIndicator>
+      </ComboboxPrimitive.Item>
+    )
+  })
+)
+
+type Virtualizer = ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>
+
+/** Official Base UI windowed-list recipe, wired to the filtered item set. */
+function VirtualizedPickerList({
+  open,
+  virtualizerRef,
+  favorites,
+  showFavorite,
+  onToggleFavorite,
+}: {
+  open: boolean
+  virtualizerRef: React.RefObject<Virtualizer | null>
+  favorites?: ReadonlySet<string>
+  showFavorite: boolean
+  onToggleFavorite?: (value: string) => void
+}) {
+  const filteredItems = ComboboxPrimitive.useFilteredItems<PickerOption>()
+  const scrollElementRef = useRef<HTMLDivElement | null>(null)
+
+  // The official Base UI windowed-list recipe requires TanStack Virtual. Its
+  // instance is intentionally recreated on filter/scroll changes; this leaf
+  // is never passed to a memoized parent, so React Compiler skipping it is safe.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    enabled: open,
+    count: filteredItems.length,
+    getScrollElement: () => scrollElementRef.current,
+    // Stable DOM identity by option value so filtering reuses surviving rows.
+    getItemKey: (index) => filteredItems[index]?.value ?? index,
+    estimateSize: () => ROW_ESTIMATE_PX,
+    overscan: 12,
+    paddingStart: 4,
+    paddingEnd: 4,
+    scrollPaddingStart: 4,
+    scrollPaddingEnd: 4,
+  })
+
+  useImperativeHandle(virtualizerRef, () => virtualizer)
+
+  const handleScrollElementRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      scrollElementRef.current = element
+      if (element) virtualizer.measure()
+    },
+    [virtualizer]
   )
-})
+
+  const totalSize = virtualizer.getTotalSize()
+
+  if (!filteredItems.length) return null
+
+  return (
+    <div
+      role="presentation"
+      ref={handleScrollElementRef}
+      className="h-[min(20rem,var(--total-size))] max-h-[var(--available-height)] overflow-y-auto overscroll-contain px-1 scroll-py-1"
+      style={{ "--total-size": `${totalSize}px` } as CSSProperties}
+    >
+      <div
+        role="presentation"
+        className="relative w-full"
+        style={{ height: totalSize }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const option = filteredItems[virtualRow.index]
+          if (!option) return null
+          return (
+            <PickerOptionRow
+              key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              index={virtualRow.index}
+              setSize={filteredItems.length}
+              start={virtualRow.start}
+              size={virtualRow.size}
+              option={option}
+              favorite={favorites?.has(option.value) ?? false}
+              showFavorite={showFavorite}
+              onToggleFavorite={onToggleFavorite}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 export function PickerSelect({
   value,
@@ -176,8 +310,36 @@ export function PickerSelect({
   onToggleFavorite?: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [inputValue, setInputValue] = useState("")
+  // Filtering is the expensive part on a large catalog; keep the controlled
+  // input itself on the raw value so typed text appears immediately and defer
+  // only the work that derives the visible rows.
+  const deferredQuery = useDeferredValue(inputValue)
+  const virtualizerRef = useRef<Virtualizer | null>(null)
+  const isVirtualized = options.length > VIRTUALIZE_THRESHOLD
   const listRef = useRef<HTMLDivElement | null>(null)
   const resetPendingRef = useRef(false)
+
+  // One lowercase search string per option, rebuilt only when the catalog
+  // changes. Query tokenization happens once per deferred keystroke below.
+  const searchKeys = useMemo(() => {
+    const keys = new Map<PickerOption, string>()
+    for (const option of options) keys.set(option, pickerOptionSearchKey(option))
+    return keys
+  }, [options])
+
+  const filteredOptions = useMemo(() => {
+    const words = deferredQuery
+      .trim()
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+    if (words.length === 0) return options
+    return options.filter((option) => {
+      const key = searchKeys.get(option)
+      return key !== undefined && words.every((word) => key.includes(word))
+    })
+  }, [options, searchKeys, deferredQuery])
 
   // One reset per open. Base UI scrolls its initial highlight into view
   // asynchronously, so the reset happens once in a rAF after the portalled
@@ -206,6 +368,11 @@ export function PickerSelect({
     listRef.current = node
   }, [])
 
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next)
+    if (!next) setInputValue("")
+  }, [])
+
   const selected = useMemo(
     () => options.find((option) => option.value === value) ?? null,
     [options, value]
@@ -216,20 +383,59 @@ export function PickerSelect({
       : selected.label
     : placeholder
 
+  const listChildren: ReactNode | ((option: PickerOption) => ReactNode) =
+    isVirtualized ? (
+      <VirtualizedPickerList
+        open={open}
+        virtualizerRef={virtualizerRef}
+        favorites={favorites}
+        showFavorite={Boolean(onToggleFavorite)}
+        onToggleFavorite={onToggleFavorite}
+      />
+    ) : (
+      (option: PickerOption) => (
+        <PickerOptionRow
+          key={option.value}
+          option={option}
+          favorite={favorites?.has(option.value) ?? false}
+          showFavorite={Boolean(onToggleFavorite)}
+          onToggleFavorite={onToggleFavorite}
+        />
+      )
+    )
+
   return (
     <ComboboxPrimitive.Root
       items={options}
+      filteredItems={filteredOptions}
+      filter={null}
       value={selected}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={handleOpenChange}
+      inputValue={inputValue}
+      onInputValueChange={setInputValue}
       autoHighlight={false}
+      virtualized={isVirtualized}
+      onItemHighlighted={(_item, { reason, index }) => {
+        const virtualizer = virtualizerRef.current
+        if (!virtualizer) return
+        const isEnd = index === virtualizer.options.count - 1
+        const shouldScroll =
+          reason === "none" || (reason === "keyboard" && (index === 0 || isEnd))
+        if (shouldScroll) {
+          queueMicrotask(() => {
+            virtualizer.scrollToIndex(index, {
+              align: isEnd ? "start" : "end",
+            })
+          })
+        }
+      }}
       onValueChange={(next) => {
         const nextOption = Array.isArray(next) ? next[0] : next
         if (nextOption) onValueChange(nextOption.value)
       }}
       isItemEqualToValue={(left, right) => left.value === right.value}
       itemToStringLabel={(option) => option.label}
-      filter={(option, query) => matchesPickerOption(option, query)}
       disabled={disabled}
       modal={modal}
     >
@@ -301,17 +507,13 @@ export function PickerSelect({
             </ComboboxPrimitive.Empty>
             <ComboboxPrimitive.List
               ref={attachList}
-              className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0"
+              className={
+                isVirtualized
+                  ? "min-h-0 flex-1 p-1 outline-0"
+                  : "min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0"
+              }
             >
-              {(option: PickerOption) => (
-                <PickerOptionRow
-                  key={option.value}
-                  option={option}
-                  favorite={favorites?.has(option.value) ?? false}
-                  showFavorite={Boolean(onToggleFavorite)}
-                  onToggleFavorite={onToggleFavorite}
-                />
-              )}
+              {listChildren}
             </ComboboxPrimitive.List>
           </ComboboxPrimitive.Popup>
         </ComboboxPrimitive.Positioner>

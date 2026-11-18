@@ -29,7 +29,11 @@ import { agentModelDefaults } from "@/lib/session-selection"
 import { createStreamWatchdog } from "@/lib/stream-watchdog"
 import { useShallowMemo } from "@/lib/use-shallow-memo"
 import { recordPerfMark } from "@/lib/perf-probe"
-import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
+import {
+  agentCatalogCache,
+  modelCatalogCache,
+  prefetchTargetCatalog,
+} from "@/lib/use-target-catalog"
 import {
   applySessionTitle,
   descendantSessionIDs,
@@ -82,7 +86,6 @@ import {
   fileUri,
   inferMime,
   joinProjectPath,
-  probeProjectFileSize,
 } from "@/lib/files"
 export type ConnectionStatus = "connecting" | "connected" | "offline"
 export type LoadStatus = "idle" | "loading" | "ready" | "error"
@@ -124,6 +127,9 @@ type SessionQuery = {
 
 const SESSION_LIMIT = 50
 const MESSAGE_LIMIT = 50
+// Catalog caches are keyed by directory; this sentinel stands for the
+// all-projects (`location: undefined`) catalog read.
+const ALL_PROJECTS_CATALOG_KEY = "__all_projects__"
 const DESKTOP_VIEWPORT_QUERY = "(min-width: 768px)"
 const DESKTOP_INSPECTOR_COLLAPSED_KEY =
   "opencode-ui:desktop-inspector-collapsed:v2"
@@ -405,6 +411,23 @@ export function useOpenCode(): OpenCodeController {
   const [permissionBusy, setPermissionBusy] = useState<Record<string, true>>({})
   const [formBusy, setFormBusy] = useState<Record<string, true>>({})
   const [wakeKey, setWakeKey] = useState(0)
+  const wakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A wake/reconnect invalidates several durable reads at once (history,
+  // pending, inbox, catalogs, sessions). Coalesce the triggers into one bump so
+  // a burst produces a single refetch cycle instead of many concurrent reads.
+  const bumpWakeKey = useCallback(() => {
+    if (wakeTimerRef.current !== null) return
+    wakeTimerRef.current = setTimeout(() => {
+      wakeTimerRef.current = null
+      setWakeKey((current) => current + 1)
+    }, 50)
+  }, [])
+  useEffect(
+    () => () => {
+      if (wakeTimerRef.current !== null) clearTimeout(wakeTimerRef.current)
+    },
+    []
+  )
   const [draftPruneIds, setDraftPruneIds] = useState<string[]>([])
   const [attachmentsBySession, setAttachmentsBySession] = useState<
     Record<string, ComposerAttachment[]>
@@ -557,6 +580,46 @@ export function useOpenCode(): OpenCodeController {
   const openSessionRequest = useRef(0)
   const selectingFromListRef = useRef(false)
 
+  // A wake/reconnect asks for the same active-execution snapshot twice (the
+  // sidebar running set and the selected-session status check). Share the
+  // in-flight promise instead of issuing two uncached native reads.
+  const activeSessionsInFlight = useRef<
+    ReturnType<typeof openCode.session.active> | null
+  >(null)
+  const fetchActiveSessions = useCallback(() => {
+    const existing = activeSessionsInFlight.current
+    if (existing) return existing
+    const promise = openCode.session.active()
+    activeSessionsInFlight.current = promise
+    const clear = () => {
+      if (activeSessionsInFlight.current === promise) {
+        activeSessionsInFlight.current = null
+      }
+    }
+    void promise.then(clear, clear)
+    return promise
+  }, [])
+
+  // Event reconciliation and list reconciliation often resolve the same
+  // session in the same tick. Share any in-flight get by id; entries are
+  // removed on settle so the next read is fresh (post-mutation reads stay
+  // direct rather than joining an older snapshot).
+  const sessionGetInFlight = useRef<
+    Map<string, ReturnType<typeof openCode.session.get>>
+  >(new Map())
+  const getSessionByID = useCallback((sessionID: string) => {
+    const inflight = sessionGetInFlight.current
+    const existing = inflight.get(sessionID)
+    if (existing) return existing
+    const promise = openCode.session.get({ sessionID })
+    inflight.set(sessionID, promise)
+    const clear = () => {
+      if (inflight.get(sessionID) === promise) inflight.delete(sessionID)
+    }
+    void promise.then(clear, clear)
+    return promise
+  }, [])
+
   const setScope = useCallback((next: ProjectScope) => {
     scopeRef.current = next
     setScopeState(next)
@@ -604,7 +667,7 @@ export function useOpenCode(): OpenCodeController {
     const request = ++activeSessionsRequest.current
 
     try {
-      const active = await openCode.session.active()
+      const active = await fetchActiveSessions()
 
       if (
         request !== activeSessionsRequest.current ||
@@ -622,7 +685,7 @@ export function useOpenCode(): OpenCodeController {
       // Best effort: without the snapshot the sidebar shows no running
       // indicators rather than asserting a stale one.
     }
-  }, [])
+  }, [fetchActiveSessions])
 
   // Stream loss makes the in-memory running set unknowable. Clear it instead
   // of showing stale spinners; the next server.connected snapshot repopulates.
@@ -704,7 +767,7 @@ export function useOpenCode(): OpenCodeController {
       pendingSessionLookup.current = lookup
       let session: SessionInfo
       try {
-        session = await openCode.session.get({ sessionID: target })
+        session = await getSessionByID(target)
       } catch (error) {
         return request === openSessionRequest.current
           ? errorMessage(error)
@@ -721,7 +784,7 @@ export function useOpenCode(): OpenCodeController {
       selectSession(target)
       return null
     },
-    [selectSession]
+    [getSessionByID, selectSession]
   )
 
   const setSessionAttachments = useCallback(
@@ -804,12 +867,10 @@ export function useOpenCode(): OpenCodeController {
       const uri = fileUri(directory, relativePath)
       if (!absolute || !uri) return "That path is outside the session project."
 
-      let size: number | null
-      try {
-        size = await probeProjectFileSize(directory, relativePath)
-      } catch (error) {
-        return errorMessage(error)
-      }
+      // Size limits are gone: probing the file here added a blocking round
+      // trip to every project-file attach. The size is intentionally unknown;
+      // all other path and model validation still runs in `addAttachment`.
+      const size: number | null = null
 
       if (activeSessionRef.current !== sessionID) {
         return "The active session changed before the file was attached."
@@ -926,7 +987,7 @@ export function useOpenCode(): OpenCodeController {
         // it when the list refreshes.
         if (current && !rows.some((session) => session.id === current)) {
           try {
-            const direct = await openCode.session.get({ sessionID: current })
+            const direct = await getSessionByID(current)
             rows = [direct, ...rows]
           } catch {
             // It may genuinely have been deleted; fall through to fallback.
@@ -943,7 +1004,7 @@ export function useOpenCode(): OpenCodeController {
           let nextRows = rows
           if (!nextRows.some((session) => session.id === selected)) {
             try {
-              const direct = await openCode.session.get({ sessionID: selected })
+              const direct = await getSessionByID(selected)
               nextRows = [direct, ...nextRows]
             } catch {
               // The newer selection may have been deleted; keep the fresh list.
@@ -998,7 +1059,7 @@ export function useOpenCode(): OpenCodeController {
         setSessionsError(errorMessage(error))
       }
     },
-    [selectSession]
+    [getSessionByID, selectSession]
   )
 
   const commitLocation = useCallback((next: LocationPublicInfo) => {
@@ -1066,9 +1127,17 @@ export function useOpenCode(): OpenCodeController {
     setModelsStatus((current) => (!changedDirectory && current === "ready" ? current : "loading"))
     setModelsError(null)
 
+    // Agent/model reads share the caches used by the new-session/worktree
+    // pickers, so a wake/refetch cycle does not issue duplicate native catalog
+    // reads. Config stays direct: it is advisory and not cached.
+    const cacheKey = directory ?? ALL_PROJECTS_CATALOG_KEY
     const [agentsResult, modelsResult, configResult] = await Promise.allSettled([
-      openCode.agent.list(location),
-      openCode.model.list(location),
+      agentCatalogCache.get(cacheKey, () =>
+        openCode.agent.list(location).then((response) => response.data)
+      ),
+      modelCatalogCache.get(cacheKey, () =>
+        openCode.model.list(location).then((response) => response.data)
+      ),
       openCode.config.get(location),
     ])
 
@@ -1079,7 +1148,7 @@ export function useOpenCode(): OpenCodeController {
     }
 
     if (agentsResult.status === "fulfilled") {
-      setAgents(agentsResult.value.data)
+      setAgents(agentsResult.value)
       setAgentsStatus("ready")
     } else {
       setAgentsStatus("error")
@@ -1087,7 +1156,7 @@ export function useOpenCode(): OpenCodeController {
     }
 
     if (modelsResult.status === "fulfilled") {
-      setModels(modelsResult.value.data)
+      setModels(modelsResult.value)
       setModelsStatus("ready")
     } else {
       setModelsStatus("error")
@@ -1308,7 +1377,7 @@ export function useOpenCode(): OpenCodeController {
     const watchdog = createStreamWatchdog(() => {
       if (cancelled) return
       setStream("lost", "Event stream stalled.")
-      setWakeKey((current) => current + 1)
+      bumpWakeKey()
       scheduleReconnect(true)
       controller.abort()
     })
@@ -1336,7 +1405,7 @@ export function useOpenCode(): OpenCodeController {
             // that happened while the volatile stream was down are recovered
             // from the backend rather than lost or duplicated.
             if (firstReadyRef.current) {
-              setWakeKey((current) => current + 1)
+              bumpWakeKey()
             }
 
             firstReadyRef.current = true
@@ -1484,7 +1553,7 @@ export function useOpenCode(): OpenCodeController {
             event.type === "session.execution.failed" ||
             event.type === "session.execution.interrupted"
           ) {
-            void openCode.session.get({ sessionID }).then((updated) => {
+            void getSessionByID(sessionID).then((updated) => {
               setSessions((current) => {
                 if (deletedSessionsRef.current.has(updated.id)) return current
                 if (updated.parentID && deletedSessionsRef.current.has(updated.parentID)) {
@@ -1599,8 +1668,10 @@ export function useOpenCode(): OpenCodeController {
       controller.abort()
     }
   }, [
+    bumpWakeKey,
     clearReconnectTimer,
     connection,
+    getSessionByID,
     markSessionRunning,
     scheduleReconnect,
     notifySessionListChange,
@@ -1640,7 +1711,7 @@ export function useOpenCode(): OpenCodeController {
       }
 
       // Refetch durable state on tab wake; the volatile stream never replays.
-      setWakeKey((current) => current + 1)
+      bumpWakeKey()
       retry()
     }
 
@@ -1653,7 +1724,7 @@ export function useOpenCode(): OpenCodeController {
       }
 
       reconnectAttemptRef.current = 0
-      setWakeKey((current) => current + 1)
+      bumpWakeKey()
       scheduleReconnect(true)
     }
 
@@ -1666,7 +1737,7 @@ export function useOpenCode(): OpenCodeController {
       document.removeEventListener("visibilitychange", onVisible)
       window.removeEventListener("pageshow", onPageShow)
     }
-  }, [connection, scheduleReconnect])
+  }, [bumpWakeKey, connection, scheduleReconnect])
 
   useEffect(() => {
     if (!activeSessionID) {
@@ -1745,7 +1816,7 @@ export function useOpenCode(): OpenCodeController {
 
     void (async () => {
       try {
-        const active = await openCode.session.active()
+        const active = await fetchActiveSessions()
 
         if (cancelled || activeSessionRef.current !== activeSessionID) {
           return
@@ -1811,7 +1882,7 @@ export function useOpenCode(): OpenCodeController {
     return () => {
       cancelled = true
     }
-  }, [activeSessionID, connection, updateLiveRuns, wakeKey])
+  }, [activeSessionID, connection, fetchActiveSessions, updateLiveRuns, wakeKey])
 
   // Pending permissions/forms are durable: refetch them from GET on selection
   // instead of relying only on the volatile SSE stream, so a session that had
@@ -2343,13 +2414,13 @@ export function useOpenCode(): OpenCodeController {
         const messages = await openCode.session.context({ sessionID })
         const session =
           sessionsRef.current.find((entry) => entry.id === sessionID) ??
-          (await openCode.session.get({ sessionID }))
+          (await getSessionByID(sessionID))
         return { messages, tokens: session.tokens ?? null }
       } catch {
         return null
       }
     },
-    []
+    [getSessionByID]
   )
 
   const loadSessionStats = useCallback(
@@ -2878,7 +2949,7 @@ export function useOpenCode(): OpenCodeController {
         // backend reports the idle no-op; reconcile the authoritative active
         // snapshot plus durable history/pending so a stale "Responding…"/Stop
         // is removed, without surfacing a red fatal error.
-        setWakeKey((current) => current + 1)
+        bumpWakeKey()
         return null
       }
 
@@ -2889,7 +2960,7 @@ export function useOpenCode(): OpenCodeController {
       interruptingRef.current = false
       setInterrupting(false)
     }
-  }, [])
+  }, [bumpWakeKey])
 
   const switchAgent = useCallback(async (agentID: string) => {
     const sessionID = activeSessionRef.current
@@ -3218,6 +3289,11 @@ export function useOpenCode(): OpenCodeController {
     try {
       await openCode.location.reload()
       setCommandsReloadKey((current) => current + 1)
+      // A configuration reload can change the catalog; drop any cached catalog
+      // for this directory so the reload is authoritative, not a stale SWR hit.
+      const cacheKey = commandDirectory || ALL_PROJECTS_CATALOG_KEY
+      agentCatalogCache.invalidate(cacheKey)
+      modelCatalogCache.invalidate(cacheKey)
       await loadCatalogs(commandDirectory || undefined)
       refreshSessions()
       return null
@@ -3227,6 +3303,9 @@ export function useOpenCode(): OpenCodeController {
   }, [commandDirectory, loadCatalogs, refreshSessions])
 
   const retryCatalogs = useCallback(() => {
+    const cacheKey = commandDirectory || ALL_PROJECTS_CATALOG_KEY
+    agentCatalogCache.invalidate(cacheKey)
+    modelCatalogCache.invalidate(cacheKey)
     void loadCatalogs(commandDirectory || undefined)
   }, [commandDirectory, loadCatalogs])
 

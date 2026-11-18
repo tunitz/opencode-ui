@@ -119,22 +119,34 @@ function useModelSettingsState(
     [explicitAgentID, selectableAgentList]
   )
 
-  const modelOptions = useMemo<Option[]>(
-    () => [
-      ...[...selectableModelList]
-        .sort((left, right) => {
-          const leftFavorite = favorites.has(modelKey(left)) ? 0 : 1
-          const rightFavorite = favorites.has(modelKey(right)) ? 0 : 1
-          return (
-            leftFavorite - rightFavorite ||
-            modelKey(left).localeCompare(modelKey(right))
-          )
-        })
-        .map((candidate) => ({
-          value: modelKey(candidate),
-          label: candidate.id,
-          detail: `${candidate.providerID}/${candidate.id}`,
-        })),
+  // Option objects are built once per catalog identity; modelKey is computed
+  // once per model. Favorites are ranked first without rebuilding those objects
+  // (a stable sort keeps key order inside each group).
+  const stableModelOptions = useMemo(() => {
+    const keyed = selectableModelList.map((candidate) => ({
+      candidate,
+      key: modelKey(candidate),
+    }))
+    keyed.sort((left, right) => left.key.localeCompare(right.key))
+    return keyed.map(({ candidate, key }) => ({
+      key,
+      option: {
+        value: key,
+        label: candidate.id,
+        detail: `${candidate.providerID}/${candidate.id}`,
+      },
+    }))
+  }, [selectableModelList])
+
+  const modelOptions = useMemo<Option[]>(() => {
+    return [
+      ...stableModelOptions
+        .slice()
+        .sort(
+          (left, right) =>
+            Number(favorites.has(right.key)) - Number(favorites.has(left.key))
+        )
+        .map(({ option }) => option),
       ...(model &&
       !nav.models.some(
         (candidate) =>
@@ -149,9 +161,8 @@ function useModelSettingsState(
             },
           ]
         : []),
-    ],
-    [favorites, model, nav.models, selectableModelList]
-  )
+    ]
+  }, [model, nav.models, stableModelOptions, favorites])
 
   const variantOptions = useMemo<Option[]>(
     () => [

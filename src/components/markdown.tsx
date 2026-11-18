@@ -8,7 +8,10 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Components,
+} from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { PaperclipIcon } from "lucide-react"
 import {
@@ -47,6 +50,43 @@ import {
 } from "@/lib/files"
 import { artifactSignature, type ToolArtifact } from "@/lib/tool-artifacts"
 import { recordPerfRender } from "@/lib/perf-probe"
+
+// react-markdown v10 builds a processor on every render. Keeping the plugin
+// list stable avoids needless processor invalidation, and throttling the text
+// fed to it while a token stream runs caps how often that parse happens.
+const REMARK_PLUGINS = [remarkGfm]
+const STREAM_THROTTLE_MS = 150
+const EMPTY_ARTIFACTS: ToolArtifact[] = []
+// Mirror the app-wide inline-image cap used for message attachments so a large
+// note attachment degrades to its paperclip button instead of a huge data URL.
+const MAX_NOTE_ATTACHMENT_IMAGE_CHARS = 4_000_000
+
+function useThrottledValue<T>(value: T, delayMs: number): T {
+  const [throttled, setThrottled] = useState(value)
+  const latestRef = useRef(value)
+  const timerRef = useRef<number | null>(null)
+
+  // State is only ever set from the timer callback (an external-system style
+  // update) so a rapid stream collapses to at most one commit per interval;
+  // the final value is always delivered on the trailing edge.
+  useEffect(() => {
+    latestRef.current = value
+    if (timerRef.current !== null) return
+    timerRef.current = globalThis.setTimeout(() => {
+      timerRef.current = null
+      setThrottled(latestRef.current)
+    }, delayMs > 0 ? delayMs : 0) as unknown as number
+  }, [value, delayMs])
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) globalThis.clearTimeout(timerRef.current)
+    },
+    []
+  )
+
+  return throttled
+}
 
 type TableAlignment = "left" | "center" | "right"
 
@@ -204,22 +244,21 @@ function NoteAttachmentImage({
     readAttachment(id).then(
       (result) => {
         if (!active) return
+        const attachment = result?.attachment
+        const data = typeof result?.data === "string" ? result.data : null
+        const dataUrl =
+          attachment && data ? `data:${attachment.mime};base64,${data}` : null
         if (
-          result &&
-          result.attachment &&
-          isSafeImageMime(result.attachment.mime) &&
-          typeof result.data === "string" &&
-          /^[A-Za-z0-9+/]*={0,2}$/.test(result.data)
+          dataUrl &&
+          attachment &&
+          data &&
+          isSafeImageMime(attachment.mime) &&
+          /^[A-Za-z0-9+/]*={0,2}$/.test(data) &&
+          dataUrl.length <= MAX_NOTE_ATTACHMENT_IMAGE_CHARS
         ) {
-          setState({
-            status: "ready",
-            url: `data:${result.attachment.mime};base64,${result.data}`,
-          })
+          setState({ status: "ready", url: dataUrl })
         } else {
-          setState({
-            status: "fallback",
-            attachment: result?.attachment,
-          })
+          setState({ status: "fallback", attachment })
         }
       },
       () => {
@@ -284,7 +323,14 @@ export const Markdown = memo(function Markdown({
   notes?: MarkdownNotes
 }) {
   recordPerfRender("Markdown")
-  const links = useMemo(() => artifactLinkCandidates(children), [children])
+  // A token stream produces many text values; parse at most once per interval
+  // while streaming. The final settled value is always rendered because the
+  // throttle flushes its trailing value and clears when streaming ends.
+  const renderedText = useThrottledValue(
+    children,
+    streaming ? STREAM_THROTTLE_MS : 0
+  )
+  const links = useMemo(() => artifactLinkCandidates(renderedText), [renderedText])
   const [resolved, setResolved] = useState<{
     sessionID: string | null
     artifacts: ToolArtifact[]
@@ -323,7 +369,7 @@ export const Markdown = memo(function Markdown({
   }, [artifactSessionID, links])
 
   const currentArtifacts =
-    resolved.sessionID === artifactSessionID ? resolved.artifacts : []
+    resolved.sessionID === artifactSessionID ? resolved.artifacts : EMPTY_ARTIFACTS
   const excluded = useMemo(
     () => new Set(artifactExcludeSignatures),
     [artifactExcludeSignatures]
@@ -331,10 +377,171 @@ export const Markdown = memo(function Markdown({
   const rowArtifacts = currentArtifacts.filter(
     (artifact) => !excluded.has(artifactSignature(artifact))
   )
-  const byHref = new Map(
-    currentArtifacts
-      .filter((artifact) => artifact.uri)
-      .map((artifact) => [artifact.uri, artifact])
+  const byHref = useMemo(
+    () =>
+      new Map(
+        currentArtifacts
+          .filter((artifact) => artifact.uri)
+          .map((artifact) => [artifact.uri, artifact])
+      ),
+    [currentArtifacts]
+  )
+
+  // The renderer map is otherwise re-created on every token, which forces
+  // react-markdown to rebuild its element tree. Refs and state setters below
+  // are stable; only these values change the rendered output.
+  const components = useMemo<Components>(
+    () => ({
+      a: ({ href, children }) => {
+        const artifact = href ? byHref.get(href) : undefined
+        if (artifact) {
+          return (
+            <a
+              href={href}
+              ref={(element) => {
+                if (element) linkTriggerRef.current = element
+              }}
+              aria-haspopup="dialog"
+              title={`Preview ${artifact.name}`}
+              onClick={(event) => {
+                event.preventDefault()
+                linkTriggerRef.current = event.currentTarget
+                focusLinkOnCloseRef.current = true
+                setSelectedKey(artifact.key)
+              }}
+            >
+              {children}
+            </a>
+          )
+        }
+        if (notes) {
+          if (href?.startsWith("#"))
+            return <a href={href}>{children}</a>
+          const id = attachmentID(href)
+          if (id) {
+            const name = plainText(children) || "Attachment"
+            return (
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center gap-1 font-medium text-primary underline underline-offset-2"
+                onClick={() =>
+                  notes.onOpenAttachment({ id, name })
+                }
+              >
+                <PaperclipIcon aria-hidden="true" className="size-4" />
+                {children}
+              </button>
+            )
+          }
+          const path = href ? noteProjectPath(href) : null
+          if (path && notes.directory) {
+            return (
+              <a
+                href={fsReadUrl(notes.directory, path)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {children}
+              </a>
+            )
+          }
+          return <span>{children}</span>
+        }
+        return (
+          <a href={href} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        )
+      },
+      img: notes
+        ? ({ src, alt }) => {
+            const id = attachmentID(src)
+            if (id)
+              return <NoteAttachmentImage id={id} alt={alt} notes={notes} />
+            if (src)
+              return (
+                <ProjectImage
+                  directory={notes.directory}
+                  path={src}
+                  alt={alt}
+                />
+              )
+            return (
+              <span className="text-sm text-muted-foreground">
+                {alt || "Image unavailable"}
+              </span>
+            )
+          }
+        : undefined,
+      pre: ({ children }) => {
+        const fenced = extractFencedCode(children)
+        if (!fenced) {
+          const code = plainText(children)
+          return (
+            <CodeBlock className="max-w-full">
+              <CodeBlockHeader>
+                <CodeBlockTitle>Code</CodeBlockTitle>
+                <CodeBlockActions>
+                  <CodeBlockCopyButton value={code} />
+                </CodeBlockActions>
+              </CodeBlockHeader>
+              <CodeBlockContent wrap className="max-h-64">
+                {code}
+              </CodeBlockContent>
+            </CodeBlock>
+          )
+        }
+
+        // OpenUICodeBlock now composes the same shadcn CodeBlock parts and
+        // keeps the bounded-preview and streaming-text behavior.
+        return (
+          <OpenUICodeBlock
+            code={fenced.code}
+            language={fenced.language}
+            streaming={streaming}
+          />
+        )
+      },
+      code: ({ children, className }) => (
+        <code
+          className={`rounded bg-muted/60 px-1 py-0.5 font-mono text-[0.9em] ${className ?? ""}`}
+        >
+          {children}
+        </code>
+      ),
+      table: ({ children, node }) => {
+        const columns = tableColumnCount(node)
+        const compact = columns > 0 && columns <= 3
+        return (
+          <div className="openui-table-scope min-w-0 max-w-full">
+            <Table
+              containerClassName={`openui-markdown-table${compact ? " openui-markdown-table-compact" : ""}`}
+              style={
+                !compact && columns > 3
+                  ? { minWidth: `${columns * 9}rem` }
+                  : undefined
+              }
+            >
+              {children}
+            </Table>
+          </div>
+        )
+      },
+      thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+      tbody: ({ children }) => <TableBody>{children}</TableBody>,
+      tr: ({ children }) => <TableRow>{children}</TableRow>,
+      th: ({ children, align, style }) => (
+        <TableHead align={tableAlignment(align, style)}>
+          {children}
+        </TableHead>
+      ),
+      td: ({ children, align, style }) => (
+        <TableCell align={tableAlignment(align, style)}>
+          {children}
+        </TableCell>
+      ),
+    }),
+    [byHref, notes, streaming]
   )
 
   return (
@@ -346,159 +553,10 @@ export const Markdown = memo(function Markdown({
         skipHtml
         disallowedElements={notes ? [] : ["img"]}
         urlTransform={notes ? notesUrlTransform : defaultUrlTransform}
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children }) => {
-            const artifact = href ? byHref.get(href) : undefined
-            if (artifact) {
-              return (
-                <a
-                  href={href}
-                  ref={(element) => {
-                    if (element) linkTriggerRef.current = element
-                  }}
-                  aria-haspopup="dialog"
-                  title={`Preview ${artifact.name}`}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    linkTriggerRef.current = event.currentTarget
-                    focusLinkOnCloseRef.current = true
-                    setSelectedKey(artifact.key)
-                  }}
-                >
-                  {children}
-                </a>
-              )
-            }
-            if (notes) {
-              if (href?.startsWith("#"))
-                return <a href={href}>{children}</a>
-              const id = attachmentID(href)
-              if (id) {
-                const name = plainText(children) || "Attachment"
-                return (
-                  <button
-                    type="button"
-                    className="inline-flex min-h-11 items-center gap-1 font-medium text-primary underline underline-offset-2"
-                    onClick={() =>
-                      notes.onOpenAttachment({ id, name })
-                    }
-                  >
-                    <PaperclipIcon aria-hidden="true" className="size-4" />
-                    {children}
-                  </button>
-                )
-              }
-              const path = href ? noteProjectPath(href) : null
-              if (path && notes.directory) {
-                return (
-                  <a
-                    href={fsReadUrl(notes.directory, path)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {children}
-                  </a>
-                )
-              }
-              return <span>{children}</span>
-            }
-            return (
-              <a href={href} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            )
-          },
-          img: notes
-            ? ({ src, alt }) => {
-                const id = attachmentID(src)
-                if (id)
-                  return <NoteAttachmentImage id={id} alt={alt} notes={notes} />
-                if (src)
-                  return (
-                    <ProjectImage
-                      directory={notes.directory}
-                      path={src}
-                      alt={alt}
-                    />
-                  )
-                return (
-                  <span className="text-sm text-muted-foreground">
-                    {alt || "Image unavailable"}
-                  </span>
-                )
-              }
-            : undefined,
-          pre: ({ children }) => {
-            const fenced = extractFencedCode(children)
-            if (!fenced) {
-              const code = plainText(children)
-              return (
-                <CodeBlock className="max-w-full">
-                  <CodeBlockHeader>
-                    <CodeBlockTitle>Code</CodeBlockTitle>
-                    <CodeBlockActions>
-                      <CodeBlockCopyButton value={code} />
-                    </CodeBlockActions>
-                  </CodeBlockHeader>
-                  <CodeBlockContent wrap className="max-h-64">
-                    {code}
-                  </CodeBlockContent>
-                </CodeBlock>
-              )
-            }
-
-            // OpenUICodeBlock now composes the same shadcn CodeBlock parts and
-            // keeps the bounded-preview and streaming-text behavior.
-            return (
-              <OpenUICodeBlock
-                code={fenced.code}
-                language={fenced.language}
-                streaming={streaming}
-              />
-            )
-          },
-          code: ({ children, className }) => (
-            <code
-              className={`rounded bg-muted/60 px-1 py-0.5 font-mono text-[0.9em] ${className ?? ""}`}
-            >
-              {children}
-            </code>
-          ),
-          table: ({ children, node }) => {
-            const columns = tableColumnCount(node)
-            const compact = columns > 0 && columns <= 3
-            return (
-              <div className="openui-table-scope min-w-0 max-w-full">
-                <Table
-                  containerClassName={`openui-markdown-table${compact ? " openui-markdown-table-compact" : ""}`}
-                  style={
-                    !compact && columns > 3
-                      ? { minWidth: `${columns * 9}rem` }
-                      : undefined
-                  }
-                >
-                  {children}
-                </Table>
-              </div>
-            )
-          },
-          thead: ({ children }) => <TableHeader>{children}</TableHeader>,
-          tbody: ({ children }) => <TableBody>{children}</TableBody>,
-          tr: ({ children }) => <TableRow>{children}</TableRow>,
-          th: ({ children, align, style }) => (
-            <TableHead align={tableAlignment(align, style)}>
-              {children}
-            </TableHead>
-          ),
-          td: ({ children, align, style }) => (
-            <TableCell align={tableAlignment(align, style)}>
-              {children}
-            </TableCell>
-          ),
-        }}
+        remarkPlugins={REMARK_PLUGINS}
+        components={components}
       >
-        {children}
+        {renderedText}
       </ReactMarkdown>
       <ArtifactRow
         artifacts={rowArtifacts}

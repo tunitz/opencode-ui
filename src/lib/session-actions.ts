@@ -27,20 +27,24 @@ export function descendantSessionIDs(
   sessions: readonly SessionRef[],
   sessionID: string
 ): Set<string> {
+  // Index children by parent once, then walk down from the deleted session.
+  // The old implementation rescanned the whole list for every new descendant,
+  // which was O(n²) on a deep tree; this is O(n) in list size.
+  const childrenByParent = new Map<string, string[]>()
+  for (const session of sessions) {
+    if (!session.parentID) continue
+    const children = childrenByParent.get(session.parentID)
+    if (children) children.push(session.id)
+    else childrenByParent.set(session.parentID, [session.id])
+  }
+
   const removed = new Set([sessionID])
-  let grew = true
-
-  while (grew) {
-    grew = false
-
-    for (const session of sessions) {
-      if (
-        session.parentID &&
-        removed.has(session.parentID) &&
-        !removed.has(session.id)
-      ) {
-        removed.add(session.id)
-        grew = true
+  const queue = [sessionID]
+  for (let index = 0; index < queue.length; index += 1) {
+    for (const child of childrenByParent.get(queue[index]!) ?? []) {
+      if (!removed.has(child)) {
+        removed.add(child)
+        queue.push(child)
       }
     }
   }

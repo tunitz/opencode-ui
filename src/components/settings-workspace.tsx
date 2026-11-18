@@ -185,7 +185,7 @@ export function SettingsWorkspace({ nav }: { nav: OpenCodeController }) {
       aria-label="Settings"
       className="@container flex min-h-0 flex-1 flex-col focus:outline-none"
     >
-      <div className="sticky top-0 z-10 shrink-0 bg-background/95 backdrop-blur">
+      <div className="sticky top-0 z-10 shrink-0 bg-background/95 backdrop-blur max-[39.999rem]:backdrop-blur-none motion-reduce:backdrop-blur-none">
         <div className="relative">
           <div
             ref={tabListRef}

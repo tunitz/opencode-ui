@@ -17,17 +17,30 @@ export type ConversationRow =
     }
   | { kind: "live-tools"; key: string; tools: LiveTool[] }
 
-/** Build the flat row list: durable messages first, then live overlay items. */
-export function buildConversationRows(
-  messages: readonly SessionMessageInfo[],
-  liveItems: readonly LiveItem[]
+/**
+ * Durable messages and the live overlay are rebuilt on different cadences:
+ * `messages` keeps its identity while streamed tokens grow `liveItems`. Cache
+ * each projection by its input identity so a token only rebuilds the live tail
+ * and durable message rows keep referential identity. WeakMap keys let replaced
+ * arrays be collected; nothing here is shared across renders by value.
+ */
+const messageRowsCache = new WeakMap<object, ConversationRow[]>()
+const liveRowsCache = new WeakMap<object, ConversationRow[]>()
+
+function messageRowsFor(
+  messages: readonly SessionMessageInfo[]
 ): ConversationRow[] {
-  const rows: ConversationRow[] = []
+  let rows = messageRowsCache.get(messages)
+  if (rows) return rows
+  rows = messages.map((message) => ({ kind: "message", key: message.id, message }))
+  messageRowsCache.set(messages, rows)
+  return rows
+}
 
-  for (const message of messages) {
-    rows.push({ kind: "message", key: message.id, message })
-  }
-
+function liveRowsFor(liveItems: readonly LiveItem[]): ConversationRow[] {
+  let rows = liveRowsCache.get(liveItems)
+  if (rows) return rows
+  rows = []
   for (let index = 0; index < liveItems.length; index += 1) {
     const item = liveItems[index]
 
@@ -68,8 +81,16 @@ export function buildConversationRows(
     })
     index = last
   }
-
+  liveRowsCache.set(liveItems, rows)
   return rows
+}
+
+/** Build the flat row list: durable messages first, then live overlay items. */
+export function buildConversationRows(
+  messages: readonly SessionMessageInfo[],
+  liveItems: readonly LiveItem[]
+): ConversationRow[] {
+  return [...messageRowsFor(messages), ...liveRowsFor(liveItems)]
 }
 
 /** Prepend an older page, dropping any ids already present (cursor overlap). */

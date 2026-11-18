@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { SearchIcon } from "lucide-react"
 
 import { projectName } from "@/components/project-select"
@@ -75,8 +75,16 @@ export function CommandCenter({
     return () => document.removeEventListener("keydown", onKeyDown)
   }, [open, settingsOpen, nav.activeSession, focusComposer])
 
-  const entries = useMemo<Entry[]>(
-    () => [
+  // `nav` is a fresh controller object on nearly every render (status frames
+  // included). Deferring it keeps the expensive entry list stable while the
+  // user types; the committed value catches up in a low-priority render.
+  const deferredNav = useDeferredValue(nav)
+  const deferredQuery = useDeferredValue(query)
+  const entries = useMemo<Entry[]>(() => {
+    const projectsByID = new Map(
+      deferredNav.projects.map((project) => [project.id, project])
+    )
+    return [
       {
         id: "settings",
         label: "Open settings",
@@ -87,12 +95,12 @@ export function CommandCenter({
         id: "refresh-sessions",
         label: "Refresh sessions",
         detail: "Actions",
-        run: nav.refreshSessions,
+        run: deferredNav.refreshSessions,
       },
-      ...(nav.activeSession?.projectID || nav.location?.project.id ? [{
+      ...(deferredNav.activeSession?.projectID || deferredNav.location?.project.id ? [{
         id: "worktrees",
         label: "Manage project worktrees",
-        detail: nav.activeSession ? "Active session's project · isolation and existing worktrees" : "Selected project · isolation and existing worktrees",
+        detail: deferredNav.activeSession ? "Active session's project · isolation and existing worktrees" : "Selected project · isolation and existing worktrees",
         run: () => setWorktreesOpen(true),
       }] : []),
       {
@@ -101,42 +109,44 @@ export function CommandCenter({
         detail: "Projects",
         run: () => {
           closeNotes()
-          nav.selectAllProjects()
+          deferredNav.selectAllProjects()
         },
       },
-      ...(nav.activeSession
+      ...(deferredNav.activeSession
         ? [{ id: "model-settings", label: "Open model settings", detail: "Session · agent, model and thinking", run: openModelSettings }, ...(["files", "changes"] as const).map((tab) => ({
             id: `inspector:${tab}`,
             label: tab === "files" ? "Open files" : "Open working tree",
             detail: "Session inspector",
             run: () => {
               closeNotes()
-              nav.openInspector(tab)
+              deferredNav.openInspector(tab)
             },
           }))]
         : []),
-      ...nav.projects.map((project) => ({
+      ...deferredNav.projects.map((project) => ({
         id: `project:${project.id}`,
         label: projectName(project),
         detail: `Project · ${project.canonical || project.id}`,
         run: () => {
           closeNotes()
-          void nav.selectProject(project.id)
+          void deferredNav.selectProject(project.id)
         },
       })),
-      ...nav.sessions.map((session) => ({
+      ...deferredNav.sessions.map((session) => ({
         id: `session:${session.id}`,
         label: session.title?.trim() || "Untitled session",
-        detail: `Session · ${projectName(nav.projects.find((project) => project.id === session.projectID) ?? { id: session.projectID, canonical: session.location?.directory, name: undefined })}`,
+        detail: `Session · ${projectName(projectsByID.get(session.projectID) ?? { id: session.projectID, canonical: session.location?.directory, name: undefined })}`,
         run: () => {
           closeNotes()
-          nav.selectSession(session.id)
+          deferredNav.selectSession(session.id)
         },
       })),
-    ],
-    [nav, closeNotes, openModelSettings]
+    ]
+  }, [deferredNav, closeNotes, openModelSettings])
+  const results = useMemo(
+    () => entries.filter((entry) => matchesCommand(entry, deferredQuery)),
+    [entries, deferredQuery]
   )
-  const results = entries.filter((entry) => matchesCommand(entry, query))
 
   function choose(entry: Entry) {
     setPending(() => entry.run)
@@ -192,9 +202,16 @@ export function CommandCenter({
                   ?.querySelector<HTMLButtonElement>("button")
                   ?.focus()
               }
-              if (event.key === "Enter" && results[0]) {
-                event.preventDefault()
-                choose(results[0])
+              if (event.key === "Enter") {
+                // Resolve against the live query so a fast Enter can't act on a
+                // still-pending deferred result list.
+                const first = entries.find((entry) =>
+                  matchesCommand(entry, query)
+                )
+                if (first) {
+                  event.preventDefault()
+                  choose(first)
+                }
               }
             }}
           />
