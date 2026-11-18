@@ -5,13 +5,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { ChevronRightIcon } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card"
+import { Progress } from "@/components/ui/progress"
 import {
   contextLimitForModel,
   elapsedMs,
@@ -31,7 +32,6 @@ import type {
   SessionMessageInfo,
   SessionRevert,
 } from "@/lib/opencode"
-import { cn } from "@/lib/utils"
 
 function Metric({
   label,
@@ -139,10 +139,10 @@ function useElapsedSince(startedAt: number | null): number | null {
 }
 
 /**
- * Composer-adjacent usage strip. It is collapsed by default and only reports
- * native token/timestamp values; any unavailable field is shown as an em dash
- * rather than inferred. Scopes are kept separate: last response, live run,
- * session cumulative totals, and the model context window.
+ * Composer-adjacent usage strip. It is a hover card and only reports native
+ * token/timestamp values; any unavailable field is shown as an em dash rather
+ * than inferred. Scopes are kept separate: last response, live run, session
+ * cumulative totals, and the model context window.
  */
 export function ContextStrip({
   sessionID,
@@ -159,7 +159,6 @@ export function ContextStrip({
   models: readonly ModelInfo[]
   revert: SessionRevert | null
 }) {
-  const [open, setOpen] = useState(false)
   const timing = useLiveRunTiming(sessionID)
   const runElapsed = useElapsedSince(timing.active ? timing.startedAt : null)
   const visibleMessages = useMemo(() => {
@@ -184,10 +183,26 @@ export function ContextStrip({
     return null
   }
 
+  // The last response's native input tokens are the closest available measure
+  // of window occupancy. A missing side stays missing; it is never a zero.
+  const contextUsed = usage.input
+  const contextPercent =
+    contextUsed !== null && contextLimit !== null
+      ? Math.min(100, Math.max(0, (contextUsed / contextLimit) * 100))
+      : null
+
   return (
     <div className="border-t border-border/60 bg-background px-3 md:px-0">
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger className="flex min-h-11 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-start text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 md:text-[13px]">
+      <HoverCard>
+        <HoverCardTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex min-h-11 w-full min-w-0 flex-wrap items-center justify-start gap-x-3 gap-y-0.5 rounded-md px-1 py-1 text-start text-[11px] text-muted-foreground hover:text-foreground md:text-[13px]"
+            />
+          }
+        >
           <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
             <Metric
               label="in"
@@ -222,19 +237,30 @@ export function ContextStrip({
               />
             ) : null}
           </span>
-          <span className="sr-only">
-            {open ? "Hide response usage details" : "Show response usage details"}
-          </span>
-          <ChevronRightIcon
-            aria-hidden="true"
-            className={cn(
-              "size-4 shrink-0 transition-transform",
-              open && "rotate-90"
-            )}
-          />
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="space-y-3 pt-1 pb-3 text-[11px] md:text-[13px]">
+          <span className="sr-only">Show response usage and context details</span>
+        </HoverCardTrigger>
+        <HoverCardContent className="max-h-[70svh] w-[min(92vw,28rem)] overflow-y-auto">
+          <div className="flex flex-col gap-3 text-[11px] md:text-[13px]">
+            <section className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-1">
+                <h4 className="font-medium text-foreground">Context used</h4>
+                <span className="tabular-nums text-muted-foreground">
+                  {formatTokenCount(contextUsed)} / {formatTokenCount(contextLimit)}
+                  {contextLimit !== null ? " tokens" : ""}
+                </span>
+              </div>
+              {contextPercent !== null ? (
+                <Progress
+                  value={contextPercent}
+                  aria-label="Context used"
+                  className="mt-1.5"
+                />
+              ) : (
+                <p className="mt-1.5 text-muted-foreground">
+                  Context usage is unavailable for this model.
+                </p>
+              )}
+            </section>
             <section>
               <h4 className="mb-1 font-medium text-foreground">Last response</h4>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
@@ -338,8 +364,8 @@ export function ContextStrip({
               </section>
             ) : null}
           </div>
-        </CollapsibleContent>
-      </Collapsible>
+        </HoverCardContent>
+      </HoverCard>
     </div>
   )
 }

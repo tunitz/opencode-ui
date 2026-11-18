@@ -2,6 +2,14 @@ import { useState } from "react"
 import { ShieldAlertIcon, WrenchIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item"
 import type { PermissionReply, PermissionRequest } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
@@ -29,96 +37,99 @@ export function PermissionCard({
   return (
     <section
       aria-label={`Permission request: ${request.action}`}
-      className="space-y-3 rounded-xl border border-border/70 p-4"
+      className="flex flex-col gap-3 rounded-xl border border-border/70 p-4"
     >
-      <h3 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-        <ShieldAlertIcon
-          aria-hidden="true"
-          className="size-4 text-muted-foreground"
-        />
-        {request.action}
-      </h3>
+      <Item variant="outline" className="flex-wrap items-start gap-3">
+        <ItemMedia variant="icon" className="self-start text-muted-foreground">
+          <ShieldAlertIcon aria-hidden="true" className="size-4" />
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle className="line-clamp-none text-sm font-semibold tracking-tight">
+            {request.action}
+          </ItemTitle>
 
-      {toolName ? (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <WrenchIcon aria-hidden="true" className="size-3.5" />
-          Tool: <span dir="ltr" className="font-mono">{toolName}</span>
-        </p>
-      ) : null}
+          {toolName ? (
+            <ItemDescription className="flex items-center gap-1.5 text-xs">
+              <WrenchIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              Tool: <span dir="ltr" className="font-mono">{toolName}</span>
+            </ItemDescription>
+          ) : null}
 
-      {request.message ? (
-        <p className="text-xs break-words text-muted-foreground">
-          {request.message}
-        </p>
-      ) : null}
+          {request.message ? (
+            <ItemDescription className="line-clamp-none text-xs break-words">
+              {request.message}
+            </ItemDescription>
+          ) : null}
 
-      <div>
-        <span className="text-xs text-muted-foreground">
-          Requests access to:
-        </span>
-        <ul className="mt-1 space-y-0.5">
-          {request.resources.map((resource) => (
-            <li key={resource} dir="ltr" className="font-mono text-[12px] break-all">
-              {resource}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {savable ? (
-        <p className="text-xs text-muted-foreground">
-          “Always allow” saves{" "}
-          <span dir="ltr" className="font-mono">{request.action}</span> for{" "}
-          {request.save?.map((pattern) => (
-            <span key={pattern} dir="ltr" className="font-mono">
-              {pattern}
-              {request.save && request.save.indexOf(pattern) < request.save.length - 1
-                ? ", "
-                : ""}
+          <div className="min-w-0">
+            <span className="text-xs text-muted-foreground">
+              Requests access to:
             </span>
-          ))}{" "}
-          in this project.
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          This request cannot be saved; “Always allow” would act as “Allow once”.
-        </p>
-      )}
+            <ul className="mt-1 flex flex-col gap-0.5">
+              {request.resources.map((resource) => (
+                <li key={resource} dir="ltr" className="break-all font-mono text-[12px]">
+                  {resource}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {savable ? (
+            <ItemDescription className="line-clamp-none text-xs">
+              “Always allow” saves{" "}
+              <span dir="ltr" className="font-mono">{request.action}</span> for{" "}
+              {request.save?.map((pattern) => (
+                <span key={pattern} dir="ltr" className="font-mono">
+                  {pattern}
+                  {request.save && request.save.indexOf(pattern) < request.save.length - 1
+                    ? ", "
+                    : ""}
+                </span>
+              ))}{" "}
+              in this project.
+            </ItemDescription>
+          ) : (
+            <ItemDescription className="line-clamp-none text-xs">
+              This request cannot be saved; “Always allow” would act as “Allow once”.
+            </ItemDescription>
+          )}
+        </ItemContent>
+
+        <ItemActions className="w-full flex-wrap gap-2 pt-1">
+          <Button
+            variant="outline"
+            onClick={() => void reply("once")}
+            disabled={pending}
+            className="h-11 px-4"
+          >
+            Allow once
+          </Button>
+          {savable ? (
+            <Button
+              onClick={() => void reply("always")}
+              disabled={pending}
+              aria-busy={pending}
+              className="h-11 px-4"
+            >
+              Always allow
+            </Button>
+          ) : null}
+          <Button
+            variant="destructive"
+            onClick={() => void reply("reject")}
+            disabled={pending}
+            className="h-11 px-4"
+          >
+            Reject
+          </Button>
+        </ItemActions>
+      </Item>
 
       {error ? (
-        <p role="alert" className="text-xs break-words text-destructive">
+        <p role="alert" className="break-words text-xs text-destructive">
           {error}
         </p>
       ) : null}
-
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          onClick={() => void reply("once")}
-          disabled={pending}
-          className="h-11 px-4"
-        >
-          Allow once
-        </Button>
-        {savable ? (
-          <Button
-            onClick={() => void reply("always")}
-            disabled={pending}
-            aria-busy={pending}
-            className="h-11 px-4"
-          >
-            Always allow
-          </Button>
-        ) : null}
-        <Button
-          variant="destructive"
-          onClick={() => void reply("reject")}
-          disabled={pending}
-          className="h-11 px-4"
-        >
-          Reject
-        </Button>
-      </div>
 
       <p className="text-xs text-muted-foreground">
         Rejecting denies this action and any other pending requests in this

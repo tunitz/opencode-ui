@@ -9,8 +9,17 @@ import {
   SettingsIcon,
 } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { openCode } from "@/lib/opencode"
 import {
   COMMAND_MESSAGE_CAP,
@@ -443,10 +452,25 @@ export function CommandPanel({
         className="min-h-0 flex-1 overflow-y-auto px-2 pb-4"
         aria-label="Command results"
       >
-        {flat.length === 0 ? (
-          <p role="status" className="px-3 py-4 text-sm text-muted-foreground">
-            {trimmed ? "No matching results." : "Search actions, sessions, messages, and files."}
-          </p>
+        {flat.length === 0 && (searchingSessions || messages.status === "loading") ? (
+          <div role="status" aria-label="Searching" className="flex flex-col gap-2 px-2 py-3">
+            <span className="sr-only">Searching…</span>
+            <Skeleton className="h-11 w-full" aria-hidden="true" />
+            <Skeleton className="h-11 w-full" aria-hidden="true" />
+            <Skeleton className="h-11 w-2/3" aria-hidden="true" />
+          </div>
+        ) : flat.length === 0 ? (
+          <Empty className="border-0 p-4">
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><SearchIcon /></EmptyMedia>
+              <EmptyTitle>{trimmed ? "No matching results." : "Search actions, sessions, messages, and files."}</EmptyTitle>
+              <EmptyDescription>
+                {trimmed
+                  ? "Try a shorter query or a different name."
+                  : "Find actions, sessions, messages, and files in one place."}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           grouped.map((group) => {
             const Icon = GROUP_ICONS[group.group]
@@ -455,7 +479,7 @@ export function CommandPanel({
                 <h3 className="px-2 py-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
                   {group.group}
                 </h3>
-                <ul className="space-y-0.5">
+                <ul className="flex flex-col gap-0.5">
                   {group.items.map((entry) => {
                     const index = flat.indexOf(entry)
                     return (
@@ -479,9 +503,7 @@ export function CommandPanel({
                               {entry.label}
                             </span>
                             {entry.archived ? (
-                              <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                Archived
-                              </span>
+                              <Badge variant="outline">Archived</Badge>
                             ) : null}
                             <ArrowRightIcon
                               aria-hidden="true"

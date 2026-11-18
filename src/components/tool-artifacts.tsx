@@ -23,6 +23,12 @@ import { PdfPreview } from "@/components/pdf-preview"
 import { decodePreviewText, readPreviewText } from "@/components/preview-text-data"
 import { Button } from "@/components/ui/button"
 import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+} from "@/components/ui/code-block"
+import {
   Dialog,
   DialogDescription,
   DialogTitle,
@@ -209,17 +215,22 @@ function RouteTextPreview({ artifact }: { artifact: ToolArtifact }) {
     )
   }
 
+  const text = state.status === "loading" ? "Loading artifact…" : state.text
+
   return (
-    <div className="min-w-0 space-y-2">
+    <div className="flex min-w-0 flex-col gap-2">
       <p className="text-xs text-muted-foreground" dir="ltr">
         {artifact.name}
         {state.truncated ? " · preview truncated" : ""}
       </p>
-      <ScrollArea viewportClassName="max-h-[62svh]" className="rounded-xl border border-border/70 bg-muted/30">
-        <pre className="min-w-full p-3 font-mono text-[12px] leading-5 whitespace-pre" dir="ltr" tabIndex={0}>
-          <code>{state.status === "loading" ? "Loading artifact…" : state.text}</code>
-        </pre>
-      </ScrollArea>
+      <CodeBlock size="sm" className="max-w-full">
+        <CodeBlockActions>
+          <CodeBlockCopyButton value={text} />
+        </CodeBlockActions>
+        <CodeBlockContent wrap className="max-h-64">
+          {text}
+        </CodeBlockContent>
+      </CodeBlock>
     </div>
   )
 }
@@ -256,7 +267,7 @@ function ArtifactImagePreview({ artifact }: { artifact: ToolArtifact }) {
   // use the actual OpenUI Image below.
   if (tall) {
     return (
-      <div className="min-w-0 space-y-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
             type="button"
@@ -360,16 +371,19 @@ function ArtifactBody({ artifact }: { artifact: ToolArtifact }) {
 
   if (artifact.kind === "text") {
     return text ? (
-      <div className="min-w-0 space-y-2">
+      <div className="flex min-w-0 flex-col gap-2">
         <p className="text-xs text-muted-foreground" dir="ltr">
           {artifact.name}
           {text.truncated ? " · preview truncated" : ""}
         </p>
-        <ScrollArea viewportClassName="max-h-[62svh]" className="rounded-xl border border-border/70 bg-muted/30">
-          <pre className="min-w-full p-3 font-mono text-[12px] leading-5 whitespace-pre" dir="ltr" tabIndex={0}>
-            <code>{text.text}</code>
-          </pre>
-        </ScrollArea>
+        <CodeBlock size="sm" className="max-w-full">
+          <CodeBlockActions>
+            <CodeBlockCopyButton value={text.text} />
+          </CodeBlockActions>
+          <CodeBlockContent wrap className="max-h-64">
+            {text.text}
+          </CodeBlockContent>
+        </CodeBlock>
       </div>
     ) : (
       <div role="alert" className="flex min-h-44 items-center justify-center p-6 text-sm text-destructive">
@@ -380,7 +394,7 @@ function ArtifactBody({ artifact }: { artifact: ToolArtifact }) {
 
   if (artifact.kind === "remote") {
     return (
-      <div className="space-y-2">
+      <div className="flex flex-col gap-2">
         <p className="text-sm text-muted-foreground">{artifact.reason}</p>
         {artifact.remoteUrl ? (
           <a

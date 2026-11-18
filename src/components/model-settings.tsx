@@ -1,9 +1,17 @@
 import { useMemo, useRef, useState } from "react"
-import { ChevronDownIcon } from "lucide-react"
+import { ChevronDownIcon, LoaderCircleIcon, StarIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PickerSelect } from "@/components/ui/picker-select"
+import { cn } from "@/lib/utils"
 import {
   Popover,
   PopoverContent,
@@ -453,7 +461,121 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
 }
 
 const INLINE_TRIGGER_CLASS =
-  "h-11 w-auto min-w-11 justify-start gap-1 rounded-lg border-0 bg-transparent py-0 pe-1.5 ps-1.5 text-[14px] leading-6 font-medium text-foreground shadow-none hover:bg-muted/60 dark:bg-transparent dark:hover:bg-muted/60"
+  "h-11 w-auto min-w-11 justify-start gap-1 rounded-lg border-0 bg-transparent py-0 pe-1.5 ps-1.5 text-[14px] leading-6 font-medium text-foreground shadow-none hover:bg-muted/60"
+
+/** ModelSelector pattern: a compact trigger with a radio-group menu. */
+function ModelSelectorDropdown({
+  label,
+  ariaValue,
+  value,
+  options,
+  disabled,
+  busy,
+  side = "top",
+  align = "start",
+  placeholder = "Default",
+  renderValue,
+  favorites,
+  onToggleFavorite,
+  onValueChange,
+  className,
+  iconClassName = "size-3",
+  triggerRef,
+}: {
+  label: string
+  ariaValue: string
+  value: string
+  options: Option[]
+  disabled?: boolean
+  busy?: boolean
+  side?: "top" | "bottom"
+  align?: "start" | "center" | "end"
+  placeholder?: string
+  renderValue?: (option: Option | null) => React.ReactNode
+  favorites?: ReadonlySet<string>
+  onToggleFavorite?: (value: string) => void
+  onValueChange: (value: string) => void
+  className?: string
+  iconClassName?: string
+  triggerRef?: React.Ref<HTMLButtonElement>
+}) {
+  const selected = options.find((option) => option.value === value) ?? null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            role="combobox"
+            ref={triggerRef}
+            aria-label={`${label}, ${ariaValue}`}
+            aria-busy={busy}
+            disabled={disabled}
+            className={cn(INLINE_TRIGGER_CLASS, className)}
+          />
+        }
+      >
+        {busy ? (
+          <LoaderCircleIcon aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+        ) : null}
+        <span dir="auto" className="min-w-0 truncate">
+          {renderValue
+            ? renderValue(selected)
+            : (selected?.label ?? placeholder)}
+        </span>
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn("pointer-events-none shrink-0 text-muted-foreground", iconClassName)}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side={side} align={align} sideOffset={6} className="min-w-48">
+        <DropdownMenuRadioGroup value={value} onValueChange={onValueChange}>
+          {options.map((option) => {
+            const favorite = favorites?.has(option.value) ?? false
+            return (
+              <DropdownMenuRadioItem
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled}
+                className="min-h-11"
+              >
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-[14px] leading-5 break-words">{option.label}</span>
+                  {option.detail ? (
+                    <span dir="ltr" className="font-mono text-[11px] break-all text-muted-foreground">
+                      {option.detail}
+                    </span>
+                  ) : null}
+                </span>
+                {onToggleFavorite ? (
+                  <button
+                    type="button"
+                    aria-label={
+                      favorite ? `Unfavorite ${option.label}` : `Favorite ${option.label}`
+                    }
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      onToggleFavorite(option.value)
+                    }}
+                    className="ms-auto flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <StarIcon
+                      aria-hidden="true"
+                      className={cn("size-4", favorite && "fill-primary text-primary")}
+                    />
+                  </button>
+                ) : null}
+              </DropdownMenuRadioItem>
+            )
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 export function ModelSettingsInline({
   nav,
@@ -479,9 +601,9 @@ export function ModelSettingsInline({
   return (
     <div className="relative flex min-w-0 items-center gap-0.5">
       <SwitchStatus message={state.statusMessage} />
-      <PickerSelect
+      <ModelSelectorDropdown
         label="Agent"
-        ariaLabel={`Agent, ${agentID ?? "None"}`}
+        ariaValue={agentID ?? "None"}
         value={agentID ?? ""}
         options={state.agentOptions}
         disabled={!session || nav.switchingAgent}
@@ -489,14 +611,12 @@ export function ModelSettingsInline({
         side="top"
         align="start"
         placeholder="Default"
-        triggerProps={{ "aria-busy": nav.switchingAgent }}
         onValueChange={(value) => void state.handleAgentChange(value)}
-        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-48`}
-        iconClassName="size-3"
+        className="max-w-48"
       />
-      <PickerSelect
+      <ModelSelectorDropdown
         label="Model"
-        ariaLabel={`Model, ${model ? `${model.providerID}/${model.id}` : "No model"}`}
+        ariaValue={model ? `${model.providerID}/${model.id}` : "No model"}
         value={modelRefKey(model)}
         options={state.modelOptions}
         disabled={!session || nav.switchingModel}
@@ -506,10 +626,6 @@ export function ModelSettingsInline({
         side="top"
         align="start"
         placeholder="No model"
-        triggerProps={{
-          "aria-busy": nav.switchingModel,
-          ref: modelTriggerRef,
-        }}
         renderValue={() =>
           model ? (
             <>
@@ -521,12 +637,12 @@ export function ModelSettingsInline({
           )
         }
         onValueChange={(value) => void state.handleModelChange(value)}
-        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-[20rem]`}
-        iconClassName="size-3"
+        className="max-w-[20rem]"
+        triggerRef={modelTriggerRef}
       />
-      <PickerSelect
+      <ModelSelectorDropdown
         label="Thinking Level"
-        ariaLabel={`Thinking Level, ${thinkingLabel}`}
+        ariaValue={thinkingLabel}
         value={state.variantSelectValue}
         options={state.variantOptions}
         disabled={!session || !state.selectedModelInfo || nav.switchingModel}
@@ -534,10 +650,8 @@ export function ModelSettingsInline({
         side="top"
         align="start"
         placeholder="Default"
-        triggerProps={{ "aria-busy": nav.switchingModel }}
         onValueChange={(value) => void state.handleVariantChange(value)}
-        triggerClassName={`${INLINE_TRIGGER_CLASS} max-w-32`}
-        iconClassName="size-3"
+        className="max-w-32"
       />
       {state.catalogError ? (
         <Button

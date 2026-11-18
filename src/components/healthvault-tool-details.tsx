@@ -136,7 +136,7 @@ function HealthvaultView({ view }: { view: HealthvaultContentView }) {
             </span>
           }
         />
-        <div className="min-w-0 space-y-3">
+        <div className="flex min-w-0 flex-col gap-3">
           {view.blocks.map((block, index) => (
             <Block key={`${block.kind}-${index}`} block={block} />
           ))}

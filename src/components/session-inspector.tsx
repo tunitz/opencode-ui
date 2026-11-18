@@ -15,6 +15,7 @@ import {
   getInspectorTab,
   INSPECTOR_TABS,
 } from "@/components/inspector/registry"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -217,9 +218,9 @@ function TabStrip({
               <Icon aria-hidden="true" className="size-4" />
               <span className="whitespace-nowrap">{tab.label}</span>
               {badge > 0 ? (
-                <span className="rounded-full bg-primary px-1.5 text-[10px] tabular-nums text-primary-foreground">
+                <Badge variant="secondary" className="tabular-nums">
                   {badge > 99 ? "99+" : badge}
-                </span>
+                </Badge>
               ) : null}
               {selected ? (
                 <span

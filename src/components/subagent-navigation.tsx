@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react"
-import { ArrowLeftIcon, ChevronDownIcon } from "lucide-react"
+import { ArrowLeftIcon, ChevronDownIcon, GitMergeIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace"
 import { openCode, type SessionInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
@@ -128,10 +129,21 @@ export function SubagentNavigation({ nav, title, projectLabel = null }: { nav: O
         {busy ? <p role="status" className="px-2 py-3 text-sm text-muted-foreground">{current && !current.error ? "Refreshing subagents…" : "Loading subagents…"}</p> : null}
         {!busy && current?.error ? <><p role="alert" className="px-2 py-2 text-sm text-destructive">{current.error}</p><DropdownMenuItem onClick={(event) => { event.preventDefault(); setBusy(true); setRetry((value) => value + 1) }}>Retry</DropdownMenuItem></> : null}
         {!busy && !current?.error && current?.children.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">No direct subagents found.</p> : null}
-        {!current?.error && current?.children.map((child) => <DropdownMenuItem key={child.id} className="flex-col items-start gap-0" onClick={() => void openChild(child.id)}>
-          <span dir="auto" className="w-full truncate">{child.title?.trim() || "Untitled session"}</span>
-          {child.agent || nav.runningSessionIDs[child.id] ? <span className="text-xs text-muted-foreground">{[child.agent, nav.runningSessionIDs[child.id] ? "Running" : null].filter(Boolean).join(" · ")}</span> : null}
-        </DropdownMenuItem>)}
+        {!current?.error && current?.children.map((child) => {
+          const running = nav.runningSessionIDs[child.id] === true
+          const meta = [child.agent, running ? "Running" : null].filter(Boolean).join(" · ")
+          return (
+            <DropdownMenuItem key={child.id} className="flex-col items-start gap-0" onClick={() => void openChild(child.id)}>
+              <TraceLine status={running ? "running" : undefined}>
+                <TraceIcon>
+                  <GitMergeIcon />
+                </TraceIcon>
+                <TraceTitle>{child.title?.trim() || "Untitled session"}</TraceTitle>
+                {meta ? <TraceDescription>{meta}</TraceDescription> : null}
+              </TraceLine>
+            </DropdownMenuItem>
+          )
+        })}
         {!busy && !current?.error && current?.truncated ? <p role="status" className="px-2 py-2 text-xs text-muted-foreground">Showing the first 50 direct subagents; more may exist.</p> : null}
       </DropdownMenuContent>
     </DropdownMenu>

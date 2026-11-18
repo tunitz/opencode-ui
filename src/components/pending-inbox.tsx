@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { BellIcon, MessageCircleQuestionIcon } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -31,7 +32,7 @@ function PendingList({ nav }: { nav: OpenCodeController }) {
       viewportClassName="max-h-[min(60vh,30rem)]"
       className="min-h-0 min-w-0 flex-1 pe-1"
     >
-      <div className="space-y-4">
+      <div className="flex flex-col gap-4">
         {nav.pendingPermissions.map((request) => (
           <PermissionCard key={request.id} nav={nav} request={request} />
         ))}
@@ -61,15 +62,15 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
   const trigger = questionCount > 0 ? (
     <Button
       variant="outline"
-      className="mx-4 mt-2 h-auto min-h-14 w-[calc(100%-2rem)] justify-between gap-3 whitespace-normal border-amber-500/70 bg-amber-500/15 px-4 py-3 text-start text-foreground shadow-sm ring-1 ring-amber-500/30 hover:bg-amber-500/20 dark:border-amber-400/70 dark:bg-amber-400/15 dark:ring-amber-400/30 dark:hover:bg-amber-400/20"
+      className="mx-4 mt-2 h-auto min-h-14 w-[calc(100%-2rem)] justify-between gap-3 whitespace-normal border-primary/50 bg-primary/10 px-4 py-3 text-start text-foreground shadow-sm ring-1 ring-primary/20 hover:bg-primary/15"
     >
       <span className="flex min-w-0 items-center gap-3">
-        <MessageCircleQuestionIcon aria-hidden="true" className="size-5 text-amber-600 dark:text-amber-400" />
+        <MessageCircleQuestionIcon aria-hidden="true" className="size-5 text-primary" />
         <span className="text-sm font-semibold">
           {questionCount === 1 ? "A question needs your answer" : `${questionCount} questions need your answer`}
         </span>
       </span>
-      <span className="shrink-0 text-sm font-semibold text-amber-700 underline underline-offset-4 dark:text-amber-300">
+      <span className="shrink-0 text-sm font-semibold text-primary underline underline-offset-4">
         Review
       </span>
     </Button>
@@ -80,7 +81,7 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
       className="h-11 gap-2 rounded-full px-4 text-[13px] font-medium"
     >
       <BellIcon aria-hidden="true" className="size-4" />
-      {count}
+      <Badge variant="secondary" className="tabular-nums">{count}</Badge>
     </Button>
   )
 

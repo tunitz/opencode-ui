@@ -78,10 +78,8 @@ import {
   type LastOpenedScope,
 } from "@/lib/web-ui-preferences"
 import {
-  MAX_ATTACHMENT_BYTES,
   basename,
   fileUri,
-  formatFileSize,
   inferMime,
   joinProjectPath,
   probeProjectFileSize,
@@ -815,10 +813,6 @@ export function useOpenCode(): OpenCodeController {
 
       if (activeSessionRef.current !== sessionID) {
         return "The active session changed before the file was attached."
-      }
-
-      if (size !== null && size > MAX_ATTACHMENT_BYTES) {
-        return `${basename(relativePath)} is ${formatFileSize(size)}; the attachment limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`
       }
 
       attachmentSequence.current += 1

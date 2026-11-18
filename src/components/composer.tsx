@@ -57,8 +57,26 @@ import {
 } from "@/components/ui/dropdown-menu"
 import {
   InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
 } from "@/components/ui/input-group"
-import { canSendPrompt, createSessionSubmissionLock, createSessionCompositionState } from "@/lib/composer-state"
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentTitle,
+} from "@/components/ui/attachment"
+import {
+  canSendPrompt,
+  createSessionSubmissionLock,
+  createSessionCompositionState,
+  insertReferenceToken,
+  insertTextAtSelection,
+} from "@/lib/composer-state"
 import {
   filterSlashCommands,
   findSlashCommand,
@@ -73,7 +91,6 @@ import {
   type ComposerAttachment,
 } from "@/lib/attachments"
 import {
-  MAX_ATTACHMENT_COUNT,
   formatFileSize,
   inferMime,
   isSafeImageMime,
@@ -98,8 +115,7 @@ import { NoteReferencePicker } from "@/components/note-reference-picker"
 import { useOptionalNotesWorkspace } from "@/components/notes-sidebar"
 import type { NotesSnapshot } from "@/components/notes-panel"
 import { noteReferenceAttachment } from "@/lib/note-reference"
-import { fileQueryRange, fileReference } from "@/lib/file-references"
-import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer-editor"
+import { fileQueryRange, referenceRanges } from "@/lib/file-references"
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
 import { recordPerfMark, recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
@@ -108,6 +124,14 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 import type { PromptSkillAttachment } from "@/lib/opencode"
 
 type SelectedSkill = PromptSkillAttachment & { key: string }
+
+/** Imperative plain-text handle, equivalent to the old rich-text editor API. */
+type ComposerEditorHandle = {
+  focus: () => void
+  insertPlainText: (text: string) => void
+  selection: () => { start: number; end: number }
+  setCaret: (offset: number) => void
+}
 
 /**
  * The composer offers "Reference note" only with a project directory and an
@@ -330,7 +354,7 @@ export function Composer({
   }, [drafts])
   const pickerId = useId()
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const editorRef = useRef<ComposerEditorHandle>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const attachmentSequenceRef = useRef(0)
   const skillSequenceRef = useRef(0)
   const formRef = useRef<HTMLFormElement>(null)
@@ -416,6 +440,39 @@ export function Composer({
     setDrafts((current) => ({ ...current, [draftKey]: value }))
   }
 
+  // The textarea is the single source of truth for its value and selection;
+  // this handle translates the imperative editor API into DOM operations.
+  const editor: ComposerEditorHandle = {
+    focus: () => textareaRef.current?.focus(),
+    insertPlainText: (text) => {
+      const element = textareaRef.current
+      if (!element) return
+      const { value, caret } = insertTextAtSelection(
+        element.value,
+        text,
+        element.selectionStart,
+        element.selectionEnd
+      )
+      setDraft(value)
+      requestAnimationFrame(() => {
+        element.focus()
+        element.setSelectionRange(caret, caret)
+      })
+    },
+    selection: () => {
+      const element = textareaRef.current
+      return element
+        ? { start: element.selectionStart, end: element.selectionEnd }
+        : { start: 0, end: 0 }
+    },
+    setCaret: (offset) => {
+      const element = textareaRef.current
+      if (!element) return
+      const caret = Math.max(0, Math.min(offset, element.value.length))
+      element.setSelectionRange(caret, caret)
+    },
+  }
+
   function updateFileQuery(value: string, start: number, end: number) {
     const range = fileQueryRange(value, start, end)
     setFileQuery(range ? { ...range, sessionID: draftKey } : null)
@@ -425,18 +482,15 @@ export function Composer({
   }
 
   function insertReference(path: string, range?: { start: number; end: number }) {
-    const selection = editorRef.current?.selection()
+    const selection = editor.selection()
     const start = range?.start ?? selection?.start ?? draft.length
     const end = range?.end ?? selection?.end ?? start
-    const reference = fileReference(path)
-    const prefix = start > 0 && !/\s/.test(draft[start - 1]) ? " " : ""
-    const suffix = end < draft.length && /\s/.test(draft[end]) ? "" : " "
-    setDraft(draft.slice(0, start) + prefix + reference + suffix + draft.slice(end))
+    const { value, caret } = insertReferenceToken(draft, path, start, end)
+    setDraft(value)
     setFileQuery(null)
     requestAnimationFrame(() => {
-      editorRef.current?.focus()
-      const caret = start + prefix.length + reference.length + suffix.length
-      editorRef.current?.setCaret(caret)
+      editor.focus()
+      editor.setCaret(caret)
     })
   }
 
@@ -464,7 +518,7 @@ export function Composer({
         ...state,
         [draftKey]: [...(state[draftKey] ?? []), { id, text: detail.text, quote: detail.quote }],
       }))
-      requestAnimationFrame(() => editorRef.current?.focus())
+      requestAnimationFrame(() => editor.focus())
     }
     window.addEventListener("composer-citation", listener)
     return () => window.removeEventListener("composer-citation", listener)
@@ -477,7 +531,7 @@ export function Composer({
       const detail = (event as CustomEvent<{ sessionID: string | null; text: string }>).detail
       if (!detail || detail.sessionID !== nav.activeSessionID || typeof detail.text !== "string") return
       setDraft(detail.text)
-      requestAnimationFrame(() => editorRef.current?.focus())
+      requestAnimationFrame(() => editor.focus())
     }
     window.addEventListener("composer-restore-text", listener)
     return () => window.removeEventListener("composer-restore-text", listener)
@@ -504,7 +558,7 @@ export function Composer({
         })
       }
       nav.clearComposerRestore()
-      requestAnimationFrame(() => editorRef.current?.focus())
+      requestAnimationFrame(() => editor.focus())
     })
     return () => {
       cancelled = true
@@ -684,7 +738,7 @@ export function Composer({
         : null)
 
   function focusComposer() {
-    requestAnimationFrame(() => editorRef.current?.focus())
+    requestAnimationFrame(() => editor.focus())
   }
 
   function isVisible(element: HTMLElement) {
@@ -823,14 +877,14 @@ export function Composer({
     if (next.text === null) {
       if (recallIndex >= 0) setDraft("")
       setRecallIndex(-1)
-      requestAnimationFrame(() => editorRef.current?.focus())
+      requestAnimationFrame(() => editor.focus())
       return
     }
     setRecallIndex(next.index)
     setDraft(next.text)
     requestAnimationFrame(() => {
-      editorRef.current?.focus()
-      editorRef.current?.setCaret(next.text!.length)
+      editor.focus()
+      editor.setCaret(next.text!.length)
     })
   }
 
@@ -875,8 +929,8 @@ export function Composer({
       setDraft(previous)
     })
     requestAnimationFrame(() => {
-      editorRef.current?.focus()
-      editorRef.current?.setCaret(entry.text.length)
+      editor.focus()
+      editor.setCaret(entry.text.length)
     })
   }
 
@@ -1343,22 +1397,11 @@ export function Composer({
     }
 
     setAttachmentError(null)
-    const remaining = MAX_ATTACHMENT_COUNT - nav.attachments.length
-    if (remaining <= 0) {
-      setAttachmentError(
-        `You can attach up to ${MAX_ATTACHMENT_COUNT} files at a time.`
-      )
-      if (source === "picker" && fileInputRef.current) {
-        fileInputRef.current.value = ""
-      }
-      return
-    }
-
     setAttaching(true)
     const failures: string[] = []
     const knownUris = new Set(nav.attachments.map((item) => item.uri))
 
-    for (const [index, file] of files.slice(0, remaining).entries()) {
+    for (const [index, file] of files.entries()) {
       try {
         attachmentSequenceRef.current += 1
         const extension = mimeExtension(file)
@@ -1381,12 +1424,6 @@ export function Composer({
       } catch (failure) {
         failures.push(failure instanceof Error ? failure.message : String(failure))
       }
-    }
-
-    if (files.length > remaining) {
-      failures.push(
-        `Only ${remaining} more file${remaining === 1 ? "" : "s"} can be attached.`
-      )
     }
 
     setAttaching(false)
@@ -1414,7 +1451,7 @@ export function Composer({
     )
   }
 
-  function handlePaste(event: ReactClipboardEvent<HTMLDivElement>) {
+  function handlePaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
     const clipboard = event.clipboardData
     if (!clipboard) return
 
@@ -1454,7 +1491,6 @@ export function Composer({
         : null
       const canAttach =
         Boolean(targetSessionID) &&
-        nav.attachments.length < MAX_ATTACHMENT_COUNT &&
         modelSupportsAttachment(model, "text/plain")
       const beforePaste = draftsRef.current[draftKey] ?? ""
       const pasteBytes = new TextEncoder().encode(plainText).length
@@ -1470,7 +1506,7 @@ export function Composer({
           .then((attachment) => {
             const failure = nav.addAttachment(attachment, targetSessionID)
             if (failure) {
-              editorRef.current?.insertPlainText(plainText)
+              editor.insertPlainText(plainText)
               setAttachmentError(failure)
               return
             }
@@ -1479,22 +1515,22 @@ export function Composer({
             })
           })
           .catch(() => {
-            editorRef.current?.insertPlainText(plainText)
+            editor.insertPlainText(plainText)
             undo.showUndo("Large paste kept inline", () => setDraft(beforePaste))
           })
         return
       }
-      editorRef.current?.insertPlainText(plainText)
+      editor.insertPlainText(plainText)
       undo.showUndo("Large paste kept inline", () => setDraft(beforePaste))
       return
     }
 
-    // Lexical's normal paste path normalizes CRLF. Insert the clipboard's
-    // literal plain text instead so drafts and prompt bytes remain unchanged.
+    // Insert the clipboard's literal plain text so prompt bytes stay unchanged;
+    // a textarea must not silently normalize CRLF in pasted drafts.
     if (plainText.includes("\r")) {
       event.preventDefault()
       event.stopPropagation()
-      editorRef.current?.insertPlainText(plainText)
+      editor.insertPlainText(plainText)
     }
   }
 
@@ -1566,7 +1602,7 @@ export function Composer({
     void submit(responding ? "steer" : null)
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const native = event.nativeEvent
     if (composingRef.current.isComposing(draftKey) || native.isComposing || native.keyCode === 229) {
       return
@@ -1748,112 +1784,115 @@ export function Composer({
           </Button>
         </div>
       ) : null}
-      {citations.length > 0 ? (
-        <div className="mb-1.5 px-4">
-          <ul aria-label="Citations in this draft" className="flex gap-1.5 overflow-x-auto pb-0.5">
-            {citations.map((citation) => (
-              <li
-                key={citation.id}
-                className="flex min-h-11 max-w-72 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-background/70 py-0.5 ps-3 pe-0.5"
-              >
-                <span className="min-w-0 truncate text-xs" dir="auto">
-                  {citation.quote}
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Remove citation ${citation.quote.slice(0, 40)}`}
-                  className="size-11 shrink-0 rounded-full text-muted-foreground"
-                  onClick={() => {
-                    const at = draft.lastIndexOf(citation.text)
-                    setDraft(
-                      at >= 0
-                        ? (draft.slice(0, at) + draft.slice(at + citation.text.length)).trimEnd()
-                        : draft
-                    )
-                    setCitationsBySession((current) => ({
-                      ...current,
-                      [draftKey]: (current[draftKey] ?? []).filter((item) => item.id !== citation.id),
-                    }))
-                  }}
-                >
-                  <XIcon aria-hidden="true" className="size-4" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-          <p role="status" className="text-[11px] text-muted-foreground">
-            Citations are sent as attributed plain text.
-          </p>
-        </div>
-      ) : null}
-      {selectedSkills.length > 0 ? (
-        <div className="mb-1.5 px-4">
-          <ul aria-label="Selected skills" className="flex gap-1.5 overflow-x-auto pb-0.5">
-            {selectedSkills.map((skill) => (
-              <li
-                key={skill.key}
-                className="flex min-h-11 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-background/70 py-0.5 ps-3 pe-0.5"
-              >
-                <span className="max-w-48 truncate text-xs font-medium">
-                  {skill.name}
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Remove skill ${skill.name}`}
-                  onClick={() => removeSkill(skill.key)}
-                  className="size-11 shrink-0 rounded-full text-muted-foreground"
-                >
-                  <XIcon aria-hidden="true" className="size-4" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-          <p role="status" className="text-[11px] text-muted-foreground">
-            Skills are sent only with your next explicit Send.
-          </p>
-        </div>
-      ) : null}
-      {nav.attachments.length > 0 ? (
-        <div className="mb-1.5 space-y-1 px-4">
-          <ul aria-label="Pending attachments" className="flex gap-2 overflow-x-auto pb-0.5">
-            {nav.attachments.map((attachment) => (
-              <li
-                key={attachment.id}
-                className="flex min-h-11 max-w-[18rem] shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background/70 p-1.5"
-              >
-                <AttachmentPreview attachment={attachment} />
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-medium">
-                    {attachment.name}
-                  </span>
-                  <span className="block text-[10px] text-muted-foreground">
-                    {attachment.mime}
-                    {attachment.size !== null
-                      ? ` · ${formatFileSize(attachment.size)}`
-                      : ""}
-                  </span>
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Remove attachment ${attachment.name}`}
-                  onClick={() => nav.removeAttachment(attachment.id)}
-                  className="size-11 shrink-0 rounded-full text-muted-foreground"
-                >
-                  <XIcon aria-hidden="true" className="size-4" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-          <p role="status" className="text-[11px] break-words text-muted-foreground">
-            Files stay in this tab and are not saved with drafts.
-          </p>
-        </div>
+      {(citations.length > 0 || selectedSkills.length > 0 || nav.attachments.length > 0) ? (
+        <InputGroupAddon align="block-start" className="flex flex-col gap-1.5">
+          {citations.length > 0 ? (
+            <>
+              <ul aria-label="Citations in this draft" className="flex gap-1.5 overflow-x-auto pb-0.5">
+                {citations.map((citation) => (
+                  <li
+                    key={citation.id}
+                    className="flex min-h-11 max-w-72 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-background/70 py-0.5 ps-3 pe-0.5"
+                  >
+                    <span className="min-w-0 truncate text-xs" dir="auto">
+                      {citation.quote}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Remove citation ${citation.quote.slice(0, 40)}`}
+                      className="size-11 shrink-0 rounded-full text-muted-foreground"
+                      onClick={() => {
+                        const at = draft.lastIndexOf(citation.text)
+                        setDraft(
+                          at >= 0
+                            ? (draft.slice(0, at) + draft.slice(at + citation.text.length)).trimEnd()
+                            : draft
+                        )
+                        setCitationsBySession((current) => ({
+                          ...current,
+                          [draftKey]: (current[draftKey] ?? []).filter((item) => item.id !== citation.id),
+                        }))
+                      }}
+                    >
+                      <XIcon aria-hidden="true" className="size-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <p role="status" className="text-[11px] text-muted-foreground">
+                Citations are sent as attributed plain text.
+              </p>
+            </>
+          ) : null}
+          {selectedSkills.length > 0 ? (
+            <>
+              <ul aria-label="Selected skills" className="flex gap-1.5 overflow-x-auto pb-0.5">
+                {selectedSkills.map((skill) => (
+                  <li
+                    key={skill.key}
+                    className="flex min-h-11 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-background/70 py-0.5 ps-3 pe-0.5"
+                  >
+                    <span className="max-w-48 truncate text-xs font-medium">
+                      {skill.name}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Remove skill ${skill.name}`}
+                      onClick={() => removeSkill(skill.key)}
+                      className="size-11 shrink-0 rounded-full text-muted-foreground"
+                    >
+                      <XIcon aria-hidden="true" className="size-4" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+              <p role="status" className="text-[11px] text-muted-foreground">
+                Skills are sent only with your next explicit Send.
+              </p>
+            </>
+          ) : null}
+          {nav.attachments.length > 0 ? (
+            <>
+              <AttachmentGroup aria-label="Pending attachments">
+                {nav.attachments.map((attachment) => (
+                  <Attachment
+                    key={attachment.id}
+                    size="sm"
+                    state={attaching ? "processing" : "done"}
+                    className="max-w-[18rem]"
+                  >
+                    <AttachmentPreview attachment={attachment} />
+                    <AttachmentContent>
+                      <AttachmentTitle>{attachment.name}</AttachmentTitle>
+                      <AttachmentDescription>
+                        {attachment.mime}
+                        {attachment.size !== null
+                          ? ` · ${formatFileSize(attachment.size)}`
+                          : ""}
+                      </AttachmentDescription>
+                    </AttachmentContent>
+                    <AttachmentActions>
+                      <AttachmentAction
+                        aria-label={`Remove attachment ${attachment.name}`}
+                        className="size-11 shrink-0 rounded-full text-muted-foreground"
+                        onClick={() => nav.removeAttachment(attachment.id)}
+                      >
+                        <XIcon aria-hidden="true" className="size-4" />
+                      </AttachmentAction>
+                    </AttachmentActions>
+                  </Attachment>
+                ))}
+              </AttachmentGroup>
+              <p role="status" className="text-[11px] break-words text-muted-foreground">
+                Files stay in this tab and are not saved with drafts.
+              </p>
+            </>
+          ) : null}
+        </InputGroupAddon>
       ) : null}
       <input
         ref={fileInputRef}
@@ -1879,30 +1918,52 @@ export function Composer({
             />
           }
         />
-        <ComposerEditor
-          ref={editorRef}
-          sessionKey={draftKey}
+        <InputGroupTextarea
+          ref={textareaRef}
+          data-composer-input
           value={draft}
-          onChange={(value, start, end) => { setDraft(value); if (!composingRef.current.isComposing(draftKey)) updateFileQuery(value, start, end) }}
-          onSelection={(value, start, end) => { if (!composingRef.current.isComposing(draftKey)) updateFileQuery(value, start, end) }}
-          onPreview={(path) => { if (activeSession) { setFileQuery(null); setPreview({ sessionID: draftKey, path }) } }}
+          aria-label="Message"
+          aria-multiline="true"
+          aria-describedby="composer-status"
+          aria-autocomplete="list"
+          aria-controls={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults.length > 0 ? `${pickerId}-files-list` : pickerOpen && filteredCommands.length > 0 ? `${pickerId}-list` : undefined}
+          aria-activedescendant={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults[fileIndex] ? `${pickerId}-file-${fileIndex}` : pickerOpen && activeCommandIndex >= 0 ? `${pickerId}-option-${activeCommandIndex}` : undefined}
+          onChange={(event) => {
+            const { value, selectionStart, selectionEnd } = event.currentTarget
+            setDraft(value)
+            if (!composingRef.current.isComposing(draftKey)) updateFileQuery(value, selectionStart, selectionEnd)
+          }}
+          onSelect={(event) => {
+            if (composingRef.current.isComposing(draftKey)) return
+            const { value, selectionStart, selectionEnd } = event.currentTarget
+            updateFileQuery(value, selectionStart, selectionEnd)
+          }}
           onKeyDown={handleKeyDown}
           onPointerDown={(event) => { touchInputRef.current = event.pointerType === "touch" }}
+          onClick={(event) => {
+            if (!activeSession || !(event.ctrlKey || event.metaKey)) return
+            const offset = textareaRef.current?.selectionStart
+            if (offset === undefined) return
+            const range = referenceRanges(draft).find(
+              (candidate) => offset > candidate.start && offset <= candidate.end
+            )
+            if (!range) return
+            setFileQuery(null)
+            setPreview({ sessionID: draftKey, path: range.path })
+          }}
           onPaste={handlePaste}
           onCompositionStart={() => { composingRef.current.start(draftKey) }}
           onCompositionEnd={() => { composingRef.current.end(draftKey) }}
-          controls={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults.length > 0 ? `${pickerId}-files-list` : pickerOpen && filteredCommands.length > 0 ? `${pickerId}-list` : undefined}
-          activeDescendant={fileQuery?.sessionID === draftKey && fileStatus === "ready" && fileResults[fileIndex] ? `${pickerId}-file-${fileIndex}` : pickerOpen && activeCommandIndex >= 0 ? `${pickerId}-option-${activeCommandIndex}` : undefined}
+          className="max-h-40 min-h-10 w-full overflow-y-auto px-4 pt-3 pb-1 text-base leading-6 whitespace-pre-wrap"
         />
 
-        <div data-composer-footer className="flex w-full min-w-0 items-center gap-1 px-2 pb-2">
+        <InputGroupAddon align="block-end" data-composer-footer className="flex w-full min-w-0 items-center gap-1 px-2 pb-2">
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
               render={
-                <Button
+                <InputGroupButton
                   type="button"
-                  variant="ghost"
-                  size="icon-lg"
+                  size="icon-sm"
                   aria-label={
                     activeSession
                       ? "Attach files"
@@ -2009,7 +2070,7 @@ export function Composer({
                 setError("Dictation text was not inserted during text composition. Please try again.")
                 return
               }
-              editorRef.current?.insertPlainText(text)
+              editor.insertPlainText(text)
             }}
           />
 
@@ -2027,10 +2088,10 @@ export function Composer({
           )}
 
           {responding ? (
-            <Button
+            <InputGroupButton
               type="button"
               variant="ghost"
-              size="icon-lg"
+              size="icon-sm"
               aria-label="Stop response"
               aria-busy={nav.interrupting}
               onClick={() => void handleInterrupt()}
@@ -2045,12 +2106,12 @@ export function Composer({
               ) : (
                 <SquareIcon aria-hidden="true" className="size-4" />
               )}
-            </Button>
+            </InputGroupButton>
           ) : null}
 
-          <Button
+          <InputGroupButton
             type="submit"
-            size="icon-lg"
+            size="icon-sm"
             aria-label={responding ? "Send message (steer)" : "Send message"}
             aria-describedby="composer-status"
             aria-busy={nav.sending}
@@ -2065,8 +2126,8 @@ export function Composer({
             ) : (
               <ArrowUpIcon aria-hidden="true" className="size-5" />
             )}
-          </Button>
-        </div>
+          </InputGroupButton>
+        </InputGroupAddon>
       </InputGroup>
       </form>
       <PopoverContent
@@ -2106,7 +2167,7 @@ export function Composer({
             id={`${pickerId}-list`}
             role="listbox"
             aria-label="Slash commands"
-            className="space-y-0.5"
+            className="flex flex-col gap-0.5"
           >
             {filteredCommands.map((command, index) => (
               <Button
@@ -2154,7 +2215,7 @@ export function Composer({
             ))}
           </div>
         ) : (
-          <div className="space-y-1 px-2 py-1">
+          <div className="flex flex-col gap-1 px-2 py-1">
             <p className="text-[12px] text-muted-foreground">
               No matching command.
             </p>
@@ -2190,7 +2251,7 @@ export function Composer({
               No stashed drafts for this session.
             </p>
           ) : (
-            <ul className="max-h-72 space-y-1 overflow-y-auto">
+            <ul className="flex max-h-72 flex-col gap-1 overflow-y-auto">
               {stashed.map((entry) => (
                 <li key={entry.id} className="flex items-center gap-1 rounded-lg border border-border/70 p-1">
                   <Button

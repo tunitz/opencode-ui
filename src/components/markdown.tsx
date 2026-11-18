@@ -24,6 +24,14 @@ import "@openuidev/react-ui/styles/table.css"
 import type { NoteAttachmentReference } from "@/components/note-attachment-dialog"
 import { OpenUICodeBlock } from "@/components/openui-code-block"
 import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "@/components/ui/code-block"
+import {
   ArtifactDialog,
   ArtifactRow,
 } from "@/components/tool-artifacts"
@@ -332,7 +340,7 @@ export const Markdown = memo(function Markdown({
   return (
     <div
       dir="auto"
-      className="markdown-content min-w-0 space-y-3 text-base leading-6 break-words [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-s-2 [&_blockquote]:border-border [&_blockquote]:ps-3 [&_blockquote]:text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-base [&_h3]:font-medium [&_hr]:border-border [&_li]:my-1 [&_ol]:list-decimal [&_ol]:ps-5 [&_ul]:list-disc [&_ul]:ps-5"
+      className="markdown-content flex min-w-0 flex-col gap-3 text-base leading-6 break-words [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:border-s-2 [&_blockquote]:border-border [&_blockquote]:ps-3 [&_blockquote]:text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-base [&_h3]:font-medium [&_hr]:border-border [&_li]:my-1 [&_ol]:list-decimal [&_ol]:ps-5 [&_ul]:list-disc [&_ul]:ps-5"
     >
       <ReactMarkdown
         skipHtml
@@ -424,13 +432,24 @@ export const Markdown = memo(function Markdown({
           pre: ({ children }) => {
             const fenced = extractFencedCode(children)
             if (!fenced) {
+              const code = plainText(children)
               return (
-                <pre className="max-w-full overflow-x-auto rounded-lg bg-muted/60 p-3 font-mono text-[13px] leading-5">
-                  {children}
-                </pre>
+                <CodeBlock className="max-w-full">
+                  <CodeBlockHeader>
+                    <CodeBlockTitle>Code</CodeBlockTitle>
+                    <CodeBlockActions>
+                      <CodeBlockCopyButton value={code} />
+                    </CodeBlockActions>
+                  </CodeBlockHeader>
+                  <CodeBlockContent wrap className="max-h-64">
+                    {code}
+                  </CodeBlockContent>
+                </CodeBlock>
               )
             }
 
+            // OpenUICodeBlock now composes the same shadcn CodeBlock parts and
+            // keeps the bounded-preview and streaming-text behavior.
             return (
               <OpenUICodeBlock
                 code={fenced.code}

@@ -3,6 +3,11 @@ import { ExternalLinkIcon, LoaderCircleIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { PickerSelect } from "@/components/ui/picker-select"
 import { Textarea } from "@/components/ui/textarea"
@@ -39,18 +44,6 @@ function formatInputType(format: string | undefined): string | undefined {
     default:
       return undefined
   }
-}
-
-function FieldError({ id, error }: { id: string; error?: string }) {
-  if (!error) {
-    return null
-  }
-
-  return (
-    <p id={`${id}-error`} role="alert" className="text-xs break-words text-destructive">
-      {error}
-    </p>
-  )
 }
 
 function Title({
@@ -99,12 +92,13 @@ export function FieldRenderer({
   onChange: (value: FormValue | undefined) => void
 }) {
   const id = fieldId(formID, field.key)
-  const describedBy = error ? `${id}-error` : undefined
+  const errorID = `${id}-error`
+  const describedBy = error ? errorID : undefined
 
   if (field.type === "external") {
     const externalUrl = safeExternalUrl(field.url)
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <Title field={field} />
         <Description field={field} />
         {externalUrl ? (
@@ -137,14 +131,14 @@ export function FieldRenderer({
           />
           <span className="text-[13px]">I completed this step</span>
         </label>
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
   if (field.type === "boolean") {
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <label
           htmlFor={id}
           className="flex min-h-11 items-center gap-2 rounded-lg px-1 py-2"
@@ -159,8 +153,8 @@ export function FieldRenderer({
           <Title field={field} />
         </label>
         <Description field={field} />
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
@@ -169,7 +163,7 @@ export function FieldRenderer({
     const max = typeof field.maximum === "number" ? field.maximum : undefined
 
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <label htmlFor={id} className="block">
           <Title field={field} required={field.required} />
         </label>
@@ -190,8 +184,8 @@ export function FieldRenderer({
           }}
           className="h-11"
         />
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
@@ -199,13 +193,13 @@ export function FieldRenderer({
     const selected = Array.isArray(value) ? value : []
 
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <span className="block">
           <Title field={field} required={field.required} />
         </span>
         <Description field={field} />
         <div
-          className="space-y-0.5"
+          className="flex flex-col gap-0.5"
           aria-describedby={describedBy}
           aria-invalid={Boolean(error)}
         >
@@ -238,8 +232,8 @@ export function FieldRenderer({
             )
           })}
         </div>
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
@@ -248,7 +242,7 @@ export function FieldRenderer({
 
   if (field.options && !field.custom) {
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <label htmlFor={id} className="block">
           <Title field={field} required={field.required} />
         </label>
@@ -269,8 +263,8 @@ export function FieldRenderer({
             "aria-invalid": Boolean(error),
           }}
         />
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
@@ -278,7 +272,7 @@ export function FieldRenderer({
 
   if (field.options && field.custom) {
     return (
-      <div className="space-y-1.5">
+      <Field className="flex flex-col gap-1.5">
         <label htmlFor={id} className="block">
           <Title field={field} required={field.required} />
         </label>
@@ -300,8 +294,8 @@ export function FieldRenderer({
             </option>
           ))}
         </datalist>
-        <FieldError id={id} error={error} />
-      </div>
+        <FieldError id={errorID}>{error}</FieldError>
+      </Field>
     )
   }
 
@@ -333,14 +327,14 @@ export function FieldRenderer({
   )
 
   return (
-    <div className="space-y-1.5">
+    <Field className="flex flex-col gap-1.5">
       <label htmlFor={id} className="block">
         <Title field={field} required={field.required} />
       </label>
       <Description field={field} />
       {control}
-      <FieldError id={id} error={error} />
-    </div>
+      <FieldError id={errorID}>{error}</FieldError>
+    </Field>
   )
 }
 
@@ -407,12 +401,12 @@ export function FormView({
   return (
     <section
       aria-label={form.title}
-      className="space-y-3 rounded-xl border border-border/70 p-4"
+      className="flex flex-col gap-3 rounded-xl border border-border/70 p-4"
     >
       <h3 className="text-sm break-words font-semibold tracking-tight">
         {form.title}
       </h3>
-      <div className="space-y-3">
+      <FieldGroup className="gap-3">
         {visible.map((field) => (
           <FieldRenderer
             key={field.key}
@@ -423,19 +417,12 @@ export function FormView({
             onChange={(value) => setValue(field.key, value)}
           />
         ))}
-      </div>
-      {submitError ? (
-        <p role="alert" className="text-xs break-words text-destructive">
-          {submitError}
-        </p>
-      ) : null}
-      {cancelError ? (
-        <p role="alert" className="text-xs break-words text-destructive">
-          {cancelError}
-        </p>
-      ) : null}
+      </FieldGroup>
+      <FieldError>{submitError}</FieldError>
+      <FieldError>{cancelError}</FieldError>
       <div className="flex justify-end gap-2">
         <Button
+          type="button"
           variant="outline"
           onClick={() => void cancel()}
           disabled={pending}
@@ -444,6 +431,7 @@ export function FormView({
           Cancel
         </Button>
         <Button
+          type="submit"
           onClick={() => void submit()}
           disabled={pending}
           aria-busy={pending}

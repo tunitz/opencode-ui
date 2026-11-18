@@ -7,7 +7,9 @@ import {
   PinOffIcon,
 } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   contextLimitForModel,
   formatCost,
@@ -155,7 +157,7 @@ export function SessionPanel({ nav }: { nav: OpenCodeController }) {
   }
 
   return (
-    <div className="space-y-4 px-3 pb-6">
+    <div className="flex flex-col gap-4 px-3 pb-6">
       <section aria-label="Session details">
         <dl className="divide-y divide-border/60">
           <Row label="Title">
@@ -199,9 +201,9 @@ export function SessionPanel({ nav }: { nav: OpenCodeController }) {
         </dl>
       </section>
 
-      <section aria-label="Context and token usage" className="space-y-1.5">
+      <section aria-label="Context and token usage" className="flex flex-col gap-1.5">
         <h3 className="text-xs font-medium text-muted-foreground">Context &amp; tokens</h3>
-        <div className="space-y-1">
+        <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
             <span>Context window</span>
             <span className="tabular-nums">
@@ -243,16 +245,18 @@ export function SessionPanel({ nav }: { nav: OpenCodeController }) {
           <Row label="Cost (native)">{formatCost(totals.cost)}</Row>
         </dl>
         {stats ? (
-          <div className="rounded-lg border border-border/70 p-2">
-            <p className="text-[11px] font-medium">Native usage stats</p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {stats.sessions} sessions · {stats.prompts} prompts · {formatTokenCount(stats.tokens.input)} input ·{" "}
-              {formatTokenCount(stats.tokens.output)} output · {formatCost(stats.cost)}
-            </p>
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Account-wide native aggregate, not this session's cost.
-            </p>
-          </div>
+          <Card size="sm">
+            <CardContent className="flex flex-col gap-0.5">
+              <p className="text-[11px] font-medium">Native usage stats</p>
+              <p className="text-[11px] text-muted-foreground">
+                {stats.sessions} sessions · {stats.prompts} prompts · {formatTokenCount(stats.tokens.input)} input ·{" "}
+                {formatTokenCount(stats.tokens.output)} output · {formatCost(stats.cost)}
+              </p>
+              <p className="text-[10px] text-muted-foreground">
+                Account-wide native aggregate, not this session's cost.
+              </p>
+            </CardContent>
+          </Card>
         ) : statsError ? (
           <p className="text-[10px] text-muted-foreground">Native usage stats are unavailable.</p>
         ) : (
@@ -263,7 +267,7 @@ export function SessionPanel({ nav }: { nav: OpenCodeController }) {
         )}
       </section>
 
-      <section aria-label="Local session actions" className="space-y-2">
+      <section aria-label="Local session actions" className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">Session</h3>
         <Button
           type="button"
@@ -323,14 +327,14 @@ export function SessionPanel({ nav }: { nav: OpenCodeController }) {
         >
           <ArchiveRestoreIcon aria-hidden="true" className="size-4" />
           {showArchived ? "Hide archived sessions" : "Archived sessions"}
-          <span className="ms-auto tabular-nums text-muted-foreground">
+          <Badge variant="secondary" className="ms-auto tabular-nums">
             {nav.archivedStatus === "loading" ? "…" : nav.archivedSessions.length}
-          </span>
+          </Badge>
         </Button>
         {showArchived ? (
-          <div className="space-y-1">
+          <div className="flex flex-col gap-1">
             {nav.archivedStatus === "error" ? (
-              <div role="alert" className="space-y-1 text-[11px] text-destructive">
+              <div role="alert" className="flex flex-col gap-1 text-[11px] text-destructive">
                 <p className="break-words">{nav.archivedError}</p>
                 <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => void nav.loadArchivedSessions()}>
                   Retry

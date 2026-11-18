@@ -115,3 +115,85 @@ test("unsupported photo formats fail with an actionable message", async () => {
     restore()
   }
 })
+
+test("any number of attachments is accepted regardless of total size", () => {
+  const attachment = {
+    id: "new",
+    name: "large.txt",
+    mime: "text/plain",
+    size: 20 * 1024 * 1024,
+    uri: "data:text/plain;base64,e30=",
+    source: "inline",
+  }
+  const existing = Array.from({ length: 12 }, (_, index) => ({
+    ...attachment,
+    id: `existing-${index}`,
+  }))
+  expect(validateComposerAttachment(attachment, null, existing)).toBeNull()
+})
+
+test("files larger than the old attachment cap are accepted", async () => {
+  const restore = fakeFileReader()
+  try {
+    const large = new File(
+      [new Uint8Array(12 * 1024 * 1024)],
+      "large.txt",
+      { type: "text/plain" }
+    )
+    const attachment = await attachmentFromBrowserFile(large, "large-1")
+    expect(attachment.name).toBe("large.txt")
+    expect(attachment.size).toBe(large.size)
+    expect(validateComposerAttachment(attachment, null, [])).toBeNull()
+  } finally {
+    restore()
+  }
+})
+
+test("unsafe types and invalid inline data are still rejected", async () => {
+  const restore = fakeFileReader()
+  try {
+    await expect(
+      attachmentFromBrowserFile(
+        new File(["<svg onload=alert(1)>"], "payload.svg", { type: "image/svg+xml" }),
+        "svg"
+      )
+    ).rejects.toThrow("not a supported")
+    await expect(
+      attachmentFromBrowserFile(
+        new File(["MZ"], "payload.exe", { type: "application/octet-stream" }),
+        "exe"
+      )
+    ).rejects.toThrow("not a supported")
+  } finally {
+    restore()
+  }
+
+  expect(
+    validateComposerAttachment(
+      {
+        id: "bad-image",
+        name: "bad.png",
+        mime: "image/png",
+        size: 1,
+        uri: "data:image/png,not-base64",
+        source: "inline",
+      },
+      { capabilities: { input: ["text", "image"] } },
+      []
+    )
+  ).toBe("Image attachment data is invalid.")
+  expect(
+    validateComposerAttachment(
+      {
+        id: "bad-uri",
+        name: "bad.txt",
+        mime: "text/plain",
+        size: 1,
+        uri: "https://example.test/bad.txt",
+        source: "uri",
+      },
+      null,
+      []
+    )
+  ).toBe("Project attachments must use a local file URI.")
+})

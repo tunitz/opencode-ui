@@ -1,3 +1,5 @@
+import { fileReference } from "@/lib/file-references"
+
 export type ComposerSendGate = {
   hasSession: boolean
   connected: boolean
@@ -41,6 +43,56 @@ export function createSessionSubmissionLock() {
     release(sessionID: string) {
       pending.delete(sessionID)
     },
+  }
+}
+
+/**
+ * Plain-text editing helpers for the composer textarea. All operations slice
+ * the original string directly, so CRLF, indentation and `@"path"` reference
+ * bytes survive untouched — the same guarantees the old rich-text editor had.
+ */
+
+function clampOffset(value: string, offset: number): number {
+  if (!Number.isFinite(offset)) return value.length
+  return Math.max(0, Math.min(Math.trunc(offset), value.length))
+}
+
+export type TextInsertion = { value: string; caret: number }
+
+/** Insert raw text at a selection without normalising any characters. */
+export function insertTextAtSelection(
+  value: string,
+  text: string,
+  start: number,
+  end: number
+): TextInsertion {
+  const from = clampOffset(value, start)
+  const to = Math.max(from, clampOffset(value, end))
+  return {
+    value: value.slice(0, from) + text + value.slice(to),
+    caret: from + text.length,
+  }
+}
+
+/**
+ * Insert a file reference as a plain `@"path"` token at a selection, adding
+ * separating whitespace only when the surrounding characters need it.
+ */
+export function insertReferenceToken(
+  value: string,
+  path: string,
+  start: number,
+  end: number
+): TextInsertion {
+  const from = clampOffset(value, start)
+  const to = Math.max(from, clampOffset(value, end))
+  const reference = fileReference(path)
+  const prefix = from > 0 && !/\s/.test(value[from - 1]) ? " " : ""
+  const suffix = to < value.length && /\s/.test(value[to]) ? "" : " "
+  const inserted = prefix + reference + suffix
+  return {
+    value: value.slice(0, from) + inserted + value.slice(to),
+    caret: from + inserted.length,
   }
 }
 

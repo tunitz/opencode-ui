@@ -3,9 +3,10 @@
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon, StarIcon } from "lucide-react"
 import {
+  memo,
   useCallback,
-  useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -46,6 +47,86 @@ export function matchesPickerOption(
 
   return words.every((word) => text.includes(word))
 }
+
+type PickerOptionRowProps = {
+  option: PickerOption
+  favorite: boolean
+  showFavorite: boolean
+  onToggleFavorite?: (value: string) => void
+}
+
+/** Memoized so highlight/search re-renders do not rebuild every row. */
+const PickerOptionRow = memo(function PickerOptionRow({
+  option,
+  favorite,
+  showFavorite,
+  onToggleFavorite,
+}: PickerOptionRowProps) {
+  return (
+    <ComboboxPrimitive.Item
+      value={option}
+      disabled={option.disabled}
+      className={cn(
+        "relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        showFavorite ? "pe-14" : "pe-8"
+      )}
+    >
+      {option.icon ? (
+        <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
+          {option.icon}
+        </span>
+      ) : null}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-[14px] leading-5 break-words">
+          {option.label}
+        </span>
+        {option.detail ? (
+          <span
+            dir="ltr"
+            className="font-mono text-[11px] break-all text-muted-foreground"
+          >
+            {option.detail}
+          </span>
+        ) : null}
+      </span>
+      {showFavorite ? (
+        <button
+          type="button"
+          aria-label={
+            favorite ? `Unfavorite ${option.label}` : `Favorite ${option.label}`
+          }
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            onToggleFavorite?.(option.value)
+          }}
+          className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <StarIcon
+            aria-hidden="true"
+            className={cn(
+              "size-4",
+              favorite && "fill-amber-400 text-amber-400"
+            )}
+          />
+        </button>
+      ) : null}
+      <ComboboxPrimitive.ItemIndicator
+        render={
+          <span
+            className={cn(
+              "pointer-events-none absolute top-1/2 flex size-4 -translate-y-1/2 items-center justify-center",
+              showFavorite ? "end-10" : "end-2"
+            )}
+          />
+        }
+      >
+        <CheckIcon className="size-4" />
+      </ComboboxPrimitive.ItemIndicator>
+    </ComboboxPrimitive.Item>
+  )
+})
 
 export function PickerSelect({
   value,
@@ -96,38 +177,39 @@ export function PickerSelect({
 }) {
   const [open, setOpen] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const resetPendingRef = useRef(false)
 
-  // The list is portalled and mounts after `open` flips, so reset from several
-  // hooks: when it attaches, after the open layout, and when Base UI sets the
-  // initial highlight. The picker must always open at the very first row.
-  const scrollToTop = useCallback(() => {
+  // One reset per open. Base UI scrolls its initial highlight into view
+  // asynchronously, so the reset happens once in a rAF after the portalled
+  // list has mounted and that scroll has been applied.
+  const resetScroll = useCallback(() => {
     const list = listRef.current
-    if (!list) return
-    requestAnimationFrame(() => {
-      list.scrollTop = 0
-      list.scrollTo?.({ top: 0 })
-    })
+    if (list) list.scrollTop = 0
   }, [])
-  const attachList = useCallback(
-    (node: HTMLDivElement | null) => {
-      listRef.current = node
-      if (node && open) scrollToTop()
-    },
-    [open, scrollToTop]
-  )
-  useLayoutEffect(() => {
-    if (!open) return
-    scrollToTop()
-    const frame = requestAnimationFrame(scrollToTop)
-    return () => cancelAnimationFrame(frame)
-  }, [open, options, scrollToTop])
-  useEffect(() => {
-    if (!open) return
-    const frame = requestAnimationFrame(scrollToTop)
-    return () => cancelAnimationFrame(frame)
-  }, [open, scrollToTop])
 
-  const selected = options.find((option) => option.value === value) ?? null
+  useLayoutEffect(() => {
+    if (!open) {
+      resetPendingRef.current = false
+      return
+    }
+    resetPendingRef.current = true
+    const frame = requestAnimationFrame(() => {
+      if (!resetPendingRef.current) return
+      resetPendingRef.current = false
+      resetScroll()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, resetScroll])
+
+  // The ref callback only stores the node; all resets go through the effect.
+  const attachList = useCallback((node: HTMLDivElement | null) => {
+    listRef.current = node
+  }, [])
+
+  const selected = useMemo(
+    () => options.find((option) => option.value === value) ?? null,
+    [options, value]
+  )
   const selectedLabel = selected
     ? showDetail && selected.detail
       ? selected.detail
@@ -141,9 +223,6 @@ export function PickerSelect({
       open={open}
       onOpenChange={setOpen}
       autoHighlight={false}
-      onItemHighlighted={(_item, details) => {
-        if (open && details.reason === "none") scrollToTop()
-      }}
       onValueChange={(next) => {
         const nextOption = Array.isArray(next) ? next[0] : next
         if (nextOption) onValueChange(nextOption.value)
@@ -225,72 +304,13 @@ export function PickerSelect({
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0"
             >
               {(option: PickerOption) => (
-                <ComboboxPrimitive.Item
+                <PickerOptionRow
                   key={option.value}
-                  value={option}
-                  disabled={option.disabled}
-                  className={cn(
-                    "relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground",
-                    onToggleFavorite ? "pe-14" : "pe-8"
-                  )}
-                >
-                  {option.icon ? (
-                    <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
-                      {option.icon}
-                    </span>
-                  ) : null}
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="text-[14px] leading-5 break-words">
-                      {option.label}
-                    </span>
-                    {option.detail ? (
-                      <span
-                        dir="ltr"
-                        className="font-mono text-[11px] break-all text-muted-foreground"
-                      >
-                        {option.detail}
-                      </span>
-                    ) : null}
-                  </span>
-                  {onToggleFavorite ? (
-                    <button
-                      type="button"
-                      aria-label={
-                        favorites?.has(option.value)
-                          ? `Unfavorite ${option.label}`
-                          : `Favorite ${option.label}`
-                      }
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onToggleFavorite(option.value)
-                      }}
-                      className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                    >
-                      <StarIcon
-                        aria-hidden="true"
-                        className={cn(
-                          "size-4",
-                          favorites?.has(option.value) &&
-                            "fill-amber-400 text-amber-400"
-                        )}
-                      />
-                    </button>
-                  ) : null}
-                  <ComboboxPrimitive.ItemIndicator
-                    render={
-                      <span
-                        className={cn(
-                          "pointer-events-none absolute top-1/2 flex size-4 -translate-y-1/2 items-center justify-center",
-                          onToggleFavorite ? "end-10" : "end-2"
-                        )}
-                      />
-                    }
-                  >
-                    <CheckIcon className="size-4" />
-                  </ComboboxPrimitive.ItemIndicator>
-                </ComboboxPrimitive.Item>
+                  option={option}
+                  favorite={favorites?.has(option.value) ?? false}
+                  showFavorite={Boolean(onToggleFavorite)}
+                  onToggleFavorite={onToggleFavorite}
+                />
               )}
             </ComboboxPrimitive.List>
           </ComboboxPrimitive.Popup>

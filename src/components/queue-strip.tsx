@@ -1,5 +1,6 @@
 import { BellIcon, ListEndIcon } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
@@ -23,18 +24,26 @@ export function QueueStrip({ nav }: { nav: OpenCodeController }) {
         type="button"
         variant="outline"
         onClick={() => nav.openInspector("activity")}
-        className={
-          attention > 0
-            ? "h-11 w-full justify-start gap-2 border-amber-500/70 bg-amber-500/10 px-3 text-xs text-foreground"
-            : "h-11 w-full justify-start gap-2 px-3 text-xs"
-        }
+        aria-label={`${parts.join(" · ")}. Open activity`}
+        className="h-11 w-full justify-start gap-2 px-3 text-xs"
       >
         {attention > 0 ? (
-          <BellIcon aria-hidden="true" className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <BellIcon aria-hidden="true" className="size-4 shrink-0 text-destructive" />
         ) : (
           <ListEndIcon aria-hidden="true" className="size-4 shrink-0" />
         )}
-        <span className="min-w-0 truncate">{parts.join(" · ")}</span>
+        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          {queued > 0 ? (
+            <Badge variant="secondary" className="min-w-0 shrink-0">
+              {queued} queued
+            </Badge>
+          ) : null}
+          {attention > 0 ? (
+            <Badge variant="destructive" className="min-w-0 truncate">
+              {attention} need{attention === 1 ? "s" : ""} an answer
+            </Badge>
+          ) : null}
+        </span>
         <span className="ms-auto shrink-0 text-muted-foreground">Activity</span>
       </Button>
     </div>

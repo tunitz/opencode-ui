@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { resolveNewSessionDefaults } from "@/lib/new-session-defaults"
 import { newSessionProjectError } from "@/lib/new-session-target"
-import { useTargetCatalog } from "@/lib/use-target-catalog"
+import { prefetchTargetCatalog, useTargetCatalog } from "@/lib/use-target-catalog"
 import {
   agentModelDefaults,
   buildModelRef,
@@ -35,6 +35,31 @@ type ResolvedLocation = { project: { id: string }; directory?: string | null }
 type FolderEntries = { entries: string[]; error: boolean }
 const locationCache = createAsyncCache<ResolvedLocation>(30_000)
 const folderCache = createAsyncCache<FolderEntries>(30_000)
+
+function loadLocation(directory: string): Promise<ResolvedLocation> {
+  return openCode
+    .location.get({ location: { directory } })
+    .then((location) => location as ResolvedLocation)
+}
+
+async function loadFolderEntries(directory: string): Promise<FolderEntries> {
+  try {
+    const result = await openCode.file.list({ location: { directory } })
+    return {
+      entries: result.data
+        .filter((entry) => entry.type === "directory")
+        .map((entry) => directoryEntryName(entry.path))
+        .filter(
+          (path): path is string =>
+            path !== null && !path.startsWith(".")
+        )
+        .sort((a, b) => a.localeCompare(b)),
+      error: false,
+    }
+  } catch {
+    return { entries: [], error: true }
+  }
+}
 
 type FolderState = "checking" | "available" | "unavailable"
 
@@ -128,32 +153,32 @@ export function NewSessionDialog({
     [targetCatalog.agents]
   )
   const { favorites, toggle: toggleFavorite } = useModelFavorites()
-  const modelOptions = useMemo(
-    () =>
-      [...selectableModels(targetCatalog.models)]
-        .sort((left, right) => {
-          const leftFavorite = favorites.has(modelKey(left)) ? 0 : 1
-          const rightFavorite = favorites.has(modelKey(right)) ? 0 : 1
-          return (
-            leftFavorite - rightFavorite ||
-            modelKey(left).localeCompare(modelKey(right))
-          )
-        })
-        .map((model) => ({
-          value: modelKey(model),
-          label: model.id,
-          detail: `${model.providerID}/${model.id}`,
-        })),
-    [favorites, targetCatalog.models]
-  )
+  const modelOptions = useMemo(() => {
+    // selectableModels is already key-sorted; a stable sort by favorite keeps
+    // that order inside each group and avoids rebuilding keys per comparison.
+    const ranked = selectableModels(targetCatalog.models).map((model) => {
+      const key = modelKey(model)
+      return { model, key, favorite: favorites.has(key) }
+    })
+    ranked.sort((left, right) => Number(right.favorite) - Number(left.favorite))
+    return ranked.map(({ model, key }) => ({
+      value: key,
+      label: model.id,
+      detail: `${model.providerID}/${model.id}`,
+    }))
+  }, [favorites, targetCatalog.models])
   const selectedModel = draft?.model ?? null
-  const selectedModelInfo = selectedModel
-    ? (targetCatalog.models.find(
-        (candidate) =>
-          candidate.providerID === selectedModel.providerID &&
-          candidate.id === selectedModel.id
-      ) ?? null)
-    : null
+  const selectedModelInfo = useMemo(
+    () =>
+      selectedModel
+        ? (targetCatalog.models.find(
+            (candidate) =>
+              candidate.providerID === selectedModel.providerID &&
+              candidate.id === selectedModel.id
+          ) ?? null)
+        : null,
+    [targetCatalog.models, selectedModel]
+  )
   const variantOptions = useMemo(
     () => [
       { value: DEFAULT_VARIANT, label: "Default", detail: "No explicit variant" },
@@ -173,11 +198,7 @@ export function NewSessionDialog({
     let cancelled = false
 
     void locationCache
-      .get(directory, () =>
-        openCode
-          .location.get({ location: { directory } })
-          .then((location) => location as ResolvedLocation)
-      )
+      .get(directory, () => loadLocation(directory))
       .then((location) => {
         if (!cancelled) {
           setSelected({ directory, id: location.project.id })
@@ -192,24 +213,7 @@ export function NewSessionDialog({
       })
 
     void folderCache
-      .get(directory, async () => {
-        try {
-          const result = await openCode.file.list({ location: { directory } })
-          return {
-            entries: result.data
-              .filter((entry) => entry.type === "directory")
-              .map((entry) => directoryEntryName(entry.path))
-              .filter(
-                (path): path is string =>
-                  path !== null && !path.startsWith(".")
-              )
-              .sort((a, b) => a.localeCompare(b)),
-            error: false,
-          }
-        } catch {
-          return { entries: [], error: true }
-        }
-      })
+      .get(directory, () => loadFolderEntries(directory))
       .then((value) => {
         if (!cancelled) setListing({ directory, ...value })
       })
@@ -476,6 +480,14 @@ export function NewSessionButton({ nav, onCreated, compact = false }: NewSession
   const [sessionKey, setSessionKey] = useState(0)
 
   function handleOpen() {
+    // Warm the same caches the dialog reads, so its first render is not the
+    // first catalog/folder/location read.
+    const directory = nav.location?.directory ?? ""
+    if (directory) {
+      void locationCache.get(directory, () => loadLocation(directory)).catch(() => {})
+      void folderCache.get(directory, () => loadFolderEntries(directory)).catch(() => {})
+      prefetchTargetCatalog(directory)
+    }
     setSessionKey((current) => current + 1)
     setOpen(true)
   }

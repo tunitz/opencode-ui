@@ -1,10 +1,6 @@
 import type { ModelInfo } from "@/lib/opencode"
 import {
-  MAX_ATTACHMENT_BYTES,
-  MAX_ATTACHMENT_COUNT,
-  MAX_TOTAL_ATTACHMENT_BYTES,
   attachmentKind,
-  formatFileSize,
   inferMime,
   isSafeImageMime,
   modelSupportsAttachment,
@@ -117,24 +113,10 @@ export function liveAttachmentFor(
 export function validateComposerAttachment(
   attachment: ComposerAttachment,
   model: ModelInfo | null | undefined,
+  // Kept for callers; attachment count and size are deliberately unbounded.
   existing: ComposerAttachment[]
 ): string | null {
-  if (existing.length >= MAX_ATTACHMENT_COUNT) {
-    return `You can attach up to ${MAX_ATTACHMENT_COUNT} files at a time.`
-  }
-
-  if (attachment.size !== null && attachment.size > MAX_ATTACHMENT_BYTES) {
-    return `${attachment.name} is ${formatFileSize(attachment.size)}; the attachment limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`
-  }
-
-  const total = existing.reduce((sum, item) => sum + (item.size ?? 0), 0)
-  if (
-    attachment.size !== null &&
-    total + attachment.size > MAX_TOTAL_ATTACHMENT_BYTES
-  ) {
-    return `These attachments exceed the ${formatFileSize(MAX_TOTAL_ATTACHMENT_BYTES)} total limit.`
-  }
-
+  void existing
   if (!modelSupportsAttachment(model, attachment.mime)) {
     const kind = attachmentKind(attachment.mime)
     return kind === "binary"
@@ -181,12 +163,6 @@ export async function attachmentFromBrowserFile(
   fallbackName?: string
 ): Promise<ComposerAttachment> {
   const displayName = file.name.trim() || fallbackName || "clipboard-image"
-
-  if (file.size > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `${displayName} is ${formatFileSize(file.size)}; the attachment limit is ${formatFileSize(MAX_ATTACHMENT_BYTES)}.`
-    )
-  }
 
   const declaredRaw = file.type.toLowerCase().split(";", 1)[0].trim()
   const declared = IMAGE_MIME_ALIASES[declaredRaw] ?? declaredRaw

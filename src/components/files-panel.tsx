@@ -115,12 +115,12 @@ function ProjectFileList({
   onInsert: (path: string) => void
 }) {
   return (
-    <section className="space-y-1" aria-label={title}>
+    <section className="flex flex-col gap-1" aria-label={title}>
       <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
       {entries.length === 0 ? (
         <p className="text-xs text-muted-foreground">{empty}</p>
       ) : (
-        <ul className="space-y-0.5">
+        <ul className="flex flex-col gap-0.5">
           {entries.map((entry) => (
             <EntryButton key={`${entry.type}:${entry.path}`} entry={entry} onOpen={onOpen} onInsert={onInsert} />
           ))}
@@ -444,7 +444,7 @@ export function FilesPanel({
   }
 
   return (
-    <div className="min-w-0 space-y-4">
+    <div className="flex min-w-0 flex-col gap-4">
       {attachError ? (
         <p role="alert" className="text-xs break-words text-destructive">
           {attachError}
@@ -452,7 +452,7 @@ export function FilesPanel({
       ) : null}
 
       {view ? (
-        <section className="space-y-2" aria-label={`File ${view.path}`}>
+        <section className="flex flex-col gap-2" aria-label={`File ${view.path}`}>
           <div className="flex items-start gap-2">
             <Button
               type="button"
@@ -483,7 +483,7 @@ export function FilesPanel({
             <p role="status" className="text-xs text-muted-foreground">Refreshing file preview…</p>
           ) : null}
           {viewStatus === "error" ? (
-            <div role="alert" className="space-y-2 text-xs text-destructive">
+            <div role="alert" className="flex flex-col gap-2 text-xs text-destructive">
               <p className="break-words">Refresh failed: {viewError}. Showing the previous preview.</p>
               <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => void openFile(view.path)}>
                 Retry preview
@@ -591,7 +591,7 @@ export function FilesPanel({
                 </p>
               ) : null}
               {listStatus === "error" ? (
-                <div role="alert" className="space-y-2 text-xs text-destructive">
+                <div role="alert" className="flex flex-col gap-2 text-xs text-destructive">
                   <p className="break-words">{listError}</p>
                   <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => void loadDirectory(cwd)}>
                     Retry
@@ -621,7 +621,7 @@ export function FilesPanel({
             </p>
           ) : null}
           {viewStatus === "error" ? (
-            <div role="alert" className="space-y-2 text-xs text-destructive">
+            <div role="alert" className="flex flex-col gap-2 text-xs text-destructive">
               <p className="break-words">{viewError}</p>
               <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => {
                 if (viewPath) void openFile(viewPath)
@@ -702,8 +702,8 @@ function HighlightedLine({
         key={`${match}:${index}`}
         data-diff-match={match}
         className={cn(
-          "rounded-sm bg-amber-300/70 text-foreground dark:bg-amber-400/40",
-          selected && "outline-2 outline-amber-500"
+          "rounded-sm bg-muted-foreground/30 text-foreground",
+          selected && "outline-2 outline-foreground"
         )}
       >
         {text.slice(index, index + needle.length)}
@@ -765,7 +765,7 @@ function DiffPatch({
                 "block",
                 line.kind === "addition" && "bg-diff-added/10 text-diff-added",
                 line.kind === "deletion" && "bg-diff-removed/10 text-diff-removed",
-                line.kind === "hunk" && "text-sky-700 dark:text-sky-300",
+                line.kind === "hunk" && "text-foreground",
                 line.kind === "meta" && "text-muted-foreground"
               )}
             >
@@ -937,7 +937,7 @@ export function ChangesPanel({
 
   return (
     <div
-      className="space-y-3"
+      className="flex flex-col gap-3"
       data-diff-scope
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing) return
@@ -985,7 +985,7 @@ export function ChangesPanel({
           : "Native session diff for the latest turn."}
       </p>
       {fallbackReason ? (
-        <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-foreground">
+        <p role="status" className="rounded-lg border border-border bg-muted/40 px-2 py-1.5 text-[11px] text-foreground">
           {fallbackReason}
         </p>
       ) : null}
@@ -1035,7 +1035,7 @@ export function ChangesPanel({
         </p>
       ) : null}
       {status === "error" ? (
-        <div role="alert" className="space-y-2 text-xs text-destructive">
+        <div role="alert" className="flex flex-col gap-2 text-xs text-destructive">
           <p className="break-words">{error}</p>
           {visibleFiles.length > 0 ? <p>Showing previous results for this working tree.</p> : null}
           <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => {
@@ -1058,7 +1058,7 @@ export function ChangesPanel({
           <p className="text-[11px] text-muted-foreground">
             {visibleFiles.length} file{visibleFiles.length === 1 ? "" : "s"} · <DiffCounts additions={totals.additions} deletions={totals.deletions} />
           </p>
-          <ul className="space-y-1" aria-label="Changed files">
+          <ul className="flex flex-col gap-1" aria-label="Changed files">
             {visibleFiles.map((file) => (
               <li key={file.file}>
                 <Button
@@ -1085,7 +1085,7 @@ export function ChangesPanel({
             ))}
           </ul>
           {selected ? (
-            <section className="space-y-2" aria-label={`Diff ${selected.file}`}>
+            <section className="flex flex-col gap-2" aria-label={`Diff ${selected.file}`}>
               <h3 dir="ltr" className="text-xs font-medium break-words">{selected.file}</h3>
               {onOpenFile && selected.status !== "deleted" && isSafeReferencePath(selected.file) ? (
                 <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => onOpenFile(selected.file)}>

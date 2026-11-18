@@ -5,18 +5,20 @@ import {
   useContext,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react"
-import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowDownIcon,
   ArrowUpIcon,
   BrainIcon,
+  CheckIcon,
   CircleAlertIcon,
   ChevronRightIcon,
+  CopyIcon,
   EyeIcon,
   LoaderCircleIcon,
   PencilLineIcon,
@@ -26,19 +28,17 @@ import {
   XIcon,
 } from "lucide-react"
 
-import {
-  hasOffscreenBelow,
-  prefersReducedMotion,
-  scrollBehavior,
-} from "@/lib/accessibility"
+import { prefersReducedMotion } from "@/lib/accessibility"
 import { Markdown } from "@/components/markdown"
 import { MessageFiles } from "@/components/message-files"
 import { HealthvaultToolDetails } from "@/components/healthvault-tool-details"
 import { ToolArtifacts } from "@/components/tool-artifacts"
 import { ProjectArtifacts } from "@/components/project-artifacts"
 import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
+import { CodeBlock, CodeBlockContent } from "@/components/ui/code-block"
 import {
   Dialog,
   DialogContent,
@@ -53,10 +53,31 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
+import { Marker, MarkerContent } from "@/components/ui/marker"
+import {
+  Message,
+  MessageContent,
+  MessageFooter,
+} from "@/components/ui/message"
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+} from "@/components/ui/message-scroller"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
-import { Message, MessageContent } from "@/components/ui/message"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Trace,
   TraceCollapsible,
@@ -67,6 +88,7 @@ import {
   TraceLine,
   TraceTitle,
 } from "@/components/ui/trace"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   buildConversationRows,
   type ConversationRow,
@@ -113,6 +135,13 @@ import {
 import { useUndoToast } from "@/lib/undo-toast"
 import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
+import {
+  toCheckpointView,
+  toReasoningLine,
+  toTraceLine,
+  toolLabel,
+  traceValue,
+} from "@/lib/shadcn-ai"
 
 type ToolLike = {
   id: string
@@ -124,76 +153,100 @@ type ToolLike = {
   files: ToolFileContent[]
 }
 
-// Only select short, human-readable fields; never render prompts, commands,
-// paths, arbitrary parameters, or raw streamed input in the trace heading.
-function traceValue(value: unknown, max: number): string | null {
-  if (typeof value !== "string") return null
-  const text = value.trim()
-  if (
-    !text ||
-    text.length > max ||
-    !/^[\p{L}\p{N} .,_()&+:’'-]+$/u.test(text)
-  ) {
-    return null
-  }
-  if (/\b(?:secret|password|token|credential|api[ -]?key|private[ -]?key)\b/i.test(text)) return null
-  if (/\S{32,}/u.test(text)) return null
-  return text
+/** Ghost icon action wrapped in a tooltip; always a 44px touch target. */
+function RowAction({
+  label,
+  icon,
+  onClick,
+  disabled,
+}: {
+  label: string
+  icon: ReactNode
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            disabled={disabled}
+            onClick={onClick}
+            className="size-11 shrink-0 p-0"
+          />
+        }
+      >
+        {icon}
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  )
 }
 
-function toolLabel(tool: ToolLike): string {
-  const name = tool.name ?? `tool ${tool.id}`
-  const input = tool.input
-  if (!input) return name
-
-  if (name === "subagent" || name === "task") {
-    const agent =
-      traceValue(input.agent, 40) ?? traceValue(input.subagent_type, 40)
-    const description = traceValue(input.description, 100)
-    const detail = [agent, description].filter(Boolean).join(" — ")
-    return detail ? `${detail} · ${name}` : name
-  }
-  if (name === "skill") {
-    const skill = traceValue(input.id, 60) ?? traceValue(input.name, 60)
-    return skill ? `${skill} · ${name}` : name
-  }
-  // HealthVault tools already show a parsed result summary; a bare limit is noise.
-  if (isHealthvaultTool(name)) return name
-  // Numeric pagination arguments distinguish calls without revealing content.
-  for (const key of ["offset", "limit"]) {
-    const value = input[key]
-    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
-      return `${key} ${value} · ${name}`
-    }
-  }
-  return name
+function CopyMessageAction({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  return (
+    <RowAction
+      label={copied ? "Copied" : "Copy message"}
+      icon={
+        copied ? (
+          <CheckIcon aria-hidden="true" className="size-4" />
+        ) : (
+          <CopyIcon aria-hidden="true" className="size-4" />
+        )
+      }
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(value)
+          .then(() => setCopied(true))
+          .catch(() => {})
+      }}
+    />
+  )
 }
 
-function ItemWrap({
+/**
+ * A transcript row is a MessageScrollerItem: the primitive owns measurement,
+ * anchoring and visibility, while the data attributes stay on the same wrapper
+ * so find/disclosure/focus behavior keeps working.
+ */
+function ConversationItem({
   messageId,
   author,
+  scrollAnchor = false,
   children,
 }: {
   messageId: string
   author: "You" | "Assistant"
+  scrollAnchor?: boolean
   children: ReactNode
 }) {
   const findMatches = useContext(FindMatchContext)
   const highlighted = findMatches?.has(messageId) === true
   return (
-    <div
-      data-message-id={messageId}
+    <MessageScrollerItem
+      messageId={messageId}
+      scrollAnchor={scrollAnchor}
       data-author={author === "Assistant" ? "assistant" : "user"}
       data-find-match={highlighted ? "" : undefined}
       tabIndex={-1}
       className={cn(
-        "min-w-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        highlighted && "bg-amber-300/10 ring-1 ring-amber-400/50"
+        "min-w-0 rounded-lg outline-none [content-visibility:visible] focus-visible:ring-2 focus-visible:ring-ring/50",
+        highlighted && "bg-primary/10 ring-1 ring-primary/50"
       )}
     >
       <span className="sr-only">{author}:</span>
       {children}
-    </div>
+    </MessageScrollerItem>
   )
 }
 
@@ -215,7 +268,7 @@ const UserMessage = memo(function UserMessage({
   }
 
   return (
-    <ItemWrap messageId={message.id} author="You">
+    <ConversationItem messageId={message.id} author="You" scrollAnchor>
       <Message align="end">
         <MessageContent>
           <MessageFiles files={files} />
@@ -226,20 +279,19 @@ const UserMessage = memo(function UserMessage({
               </BubbleContent>
             </Bubble>
           ) : null}
-          {onEditFromHere ? (
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-11 self-end px-2 text-[11px] text-muted-foreground"
-              onClick={() => onEditFromHere(message)}
-            >
-              <PencilLineIcon aria-hidden="true" className="size-3.5" />
-              Edit from here
-            </Button>
-          ) : null}
+          <MessageFooter className="gap-0.5 px-0">
+            {message.text.trim() ? <CopyMessageAction value={message.text} /> : null}
+            {onEditFromHere ? (
+              <RowAction
+                label="Edit from here"
+                icon={<PencilLineIcon aria-hidden="true" className="size-4" />}
+                onClick={() => onEditFromHere(message)}
+              />
+            ) : null}
+          </MessageFooter>
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 })
 
@@ -295,7 +347,7 @@ function ToolErrorDetails({ error, name }: { error: string; name: string }) {
         <SheetContent side="bottom" style={fixedMobileDrawerStyle()} className="gap-0 overflow-hidden rounded-t-xl bg-card p-0">
           <SheetHeader className="shrink-0 pe-14">
             <SheetTitle>Tool error details</SheetTitle>
-            <SheetDescription dir="auto">{name}</SheetDescription>
+            <SheetDescription dir="auto">{traceValue(name, 80) ?? "Tool"}</SheetDescription>
           </SheetHeader>
           <div role="region" aria-label="Full tool error" tabIndex={0} dir="auto" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 text-sm break-words whitespace-pre-wrap text-destructive focus-visible:outline-2 focus-visible:outline-ring">{error}</div>
         </SheetContent>
@@ -355,7 +407,7 @@ export function ToolTrace({
           </TraceLine>
         </TraceCollapsibleTrigger>
         <TraceCollapsibleContent>
-          <ul className="space-y-1.5">
+          <ul className="flex min-w-0 flex-col gap-1.5">
             {tools.map((tool) => {
               const summary = toolCallSummary(
                 tool.name,
@@ -363,6 +415,8 @@ export function ToolTrace({
                 tool.output,
                 tool.status
               )
+              // The mapper maps SDK statuses to "running" | "error" | undefined.
+              const line = toTraceLine(tool, tool.status === "running")
               return (
               <li
                 key={tool.id}
@@ -371,11 +425,16 @@ export function ToolTrace({
                 <Collapsible>
                   <CollapsibleTrigger className="group/tool flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md text-start focus-visible:outline-2 focus-visible:outline-ring">
                     <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 transition-transform group-aria-expanded/tool:rotate-90 motion-reduce:transition-none" />
-                    <span className="min-w-0 flex-1">
-                      <span dir="auto" className="block truncate font-mono">{tool.name ?? `tool ${tool.id}`}</span>
-                      {summary ? <span dir="auto" className="block truncate font-mono text-xs">{summary}</span> : null}
+                    <TraceLine status={line.status} className="min-w-0 flex-1">
+                      <TraceIcon>
+                        <WrenchIcon aria-hidden="true" />
+                      </TraceIcon>
+                      <TraceTitle className="font-mono">{traceValue(tool.name, 80) ?? `tool ${tool.id}`}</TraceTitle>
+                      {summary ? <TraceDescription className="truncate font-mono text-xs">{summary}</TraceDescription> : null}
+                    </TraceLine>
+                    <span className={cn("shrink-0 text-xs text-muted-foreground", line.status === "error" && "text-destructive")}>
+                      {line.status === "error" ? "error" : line.status === "running" ? "running" : "completed"}
                     </span>
-                    <span className={cn("shrink-0 text-xs text-muted-foreground", tool.status === "error" && "text-destructive")}>{tool.status}</span>
                   </CollapsibleTrigger>
                   <CollapsibleContent className="min-w-0 ps-6">
                     <ToolCallDetails tool={tool} />
@@ -432,7 +491,16 @@ function ToolCallDetails({ tool }: { tool: ToolLike }) {
 }
 
 function ToolDetail({ label, text }: { label: string; text: string }) {
-  return <div className="mt-2 min-w-0"><div className="text-xs font-medium">{label}</div><pre dir="auto" tabIndex={0} aria-label={label} className="mt-1 max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-ring">{text}</pre></div>
+  return (
+    <div className="mt-2 min-w-0">
+      <div className="text-xs font-medium">{label}</div>
+      <CodeBlock size="sm" className="mt-1">
+        <CodeBlockContent wrap aria-label={label} className="max-h-64">
+          {text}
+        </CodeBlockContent>
+      </CodeBlock>
+    </div>
+  )
 }
 
 function ReasoningTrace({
@@ -448,22 +516,21 @@ function ReasoningTrace({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const line = toReasoningLine(text, Boolean(streaming))
   const description =
     durationMs !== null && durationMs !== undefined
       ? formatDurationMs(durationMs)
-      : streaming
-        ? "thinking"
-        : null
+      : line.description ?? null
 
   return (
     <Trace>
       <TraceCollapsible open={open} onOpenChange={onOpenChange}>
         <TraceCollapsibleTrigger className="min-h-11 rounded-lg px-1.5">
-          <TraceLine>
+          <TraceLine status={line.status}>
             <TraceIcon>
               <BrainIcon aria-hidden="true" />
             </TraceIcon>
-            <TraceTitle>Thought process</TraceTitle>
+            <TraceTitle>{line.title}</TraceTitle>
             {description ? (
               <TraceDescription>{description}</TraceDescription>
             ) : null}
@@ -493,18 +560,12 @@ function ResponseError({
   className?: string
 }) {
   return (
-    <div
-      role="alert"
-      className={cn(
-        "rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5 text-destructive",
-        className
-      )}
-    >
-      <p className="text-sm font-medium" dir="auto">Response failed</p>
-      <p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5" dir="auto">
+    <Alert variant="destructive" className={cn("px-3 py-2.5", className)}>
+      <AlertTitle dir="auto">Response failed</AlertTitle>
+      <AlertDescription dir="auto" className="break-words whitespace-pre-wrap text-xs leading-5">
         {message}
-      </p>
-    </div>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -647,16 +708,20 @@ const AssistantMessage = memo(function AssistantMessage({
     }
   }
   const artifactExcludeSignatures = [...toolSignatures]
+  const answerText = message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n")
 
   return (
-    <ItemWrap messageId={message.id} author="Assistant">
+    <ConversationItem messageId={message.id} author="Assistant">
       <Message>
         <MessageContent>
           {groups.map((group) => {
             if (group.kind === "text") {
               return (
                 <Bubble key={group.key} variant="ghost">
-                  <BubbleContent className="message-markdown space-y-3.5 p-0 text-base leading-6">
+                  <BubbleContent className="message-markdown flex flex-col gap-3.5 p-0 text-base leading-6">
                     <Markdown
                       artifactSessionID={sessionKey}
                       artifactExcludeSignatures={artifactExcludeSignatures}
@@ -682,7 +747,7 @@ const AssistantMessage = memo(function AssistantMessage({
             }
 
             return (
-              <div key={group.key} className="min-w-0 space-y-1">
+              <div key={group.key} className="flex min-w-0 flex-col gap-1">
                 <ToolTrace
                   tools={group.tools}
                   open={Boolean(expandedToolGroups[`${sessionKey ?? "none"}:${group.key}`])}
@@ -694,16 +759,21 @@ const AssistantMessage = memo(function AssistantMessage({
               </div>
             )
           })}
-          {projectAttachments && sessionKey ? <ProjectArtifacts sessionID={sessionKey} messageID={message.id} text={message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n")} streamStatus={streamStatus} /> : null}
+          {projectAttachments && sessionKey ? <ProjectArtifacts sessionID={sessionKey} messageID={message.id} text={answerText} streamStatus={streamStatus} /> : null}
           {errorText ? (
             <ResponseError
               message={errorText}
               className={groups.length > 0 ? "mt-3" : undefined}
             />
           ) : null}
+          {answerText.trim() ? (
+            <MessageFooter className="gap-0.5 px-0">
+              <CopyMessageAction value={answerText} />
+            </MessageFooter>
+          ) : null}
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 })
 
@@ -770,7 +840,7 @@ function LiveUserItem({
   const status = deliveryCaption(item)
 
   return (
-    <ItemWrap messageId={`live-user-${item.key}`} author="You">
+    <ConversationItem messageId={`live-user-${item.key}`} author="You" scrollAnchor>
       <Message align="end">
         <MessageContent>
           <MessageFiles files={item.files ?? []} />
@@ -782,45 +852,35 @@ function LiveUserItem({
             </Bubble>
           ) : null}
           {status ? (
-            <p
-              role="status"
-              className="pe-1 text-end text-xs text-muted-foreground"
-            >
-              {status}
-            </p>
+            <MessageFooter role="status" className="pe-0 text-xs">
+              <bdi>{status}</bdi>
+            </MessageFooter>
           ) : null}
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 }
 
 function LiveTextItem({
   item,
   sessionKey,
-  onGrow,
 }: {
   item: Extract<LiveItem, { kind: "text" }>
   sessionKey: string | null
-  onGrow?: () => void
 }) {
   // Parsing a growing Markdown answer is the dominant cost of a long stream on
   // a slow device. Deferring the text keeps typing/Stop urgent while React
   // batches or skips intermediate parses; the settled text is still shown.
+  // MessageScroller's content observer follows the resulting height growth.
   const text = useDeferredValue(item.text)
 
-  // The deferred text can grow after the parent's live-run follow ran, so the
-  // conversation must re-pin after this commit when the reader is at the end.
-  useEffect(() => {
-    onGrow?.()
-  }, [onGrow, text])
-
   return (
-    <ItemWrap messageId={`live-${item.key}`} author="Assistant">
+    <ConversationItem messageId={`live-${item.key}`} author="Assistant">
       <Message>
         <MessageContent>
           <Bubble variant="ghost">
-            <BubbleContent className="message-markdown space-y-3.5 p-0 text-base leading-6">
+            <BubbleContent className="message-markdown flex flex-col gap-3.5 p-0 text-base leading-6">
               <Markdown artifactSessionID={sessionKey} streaming>
                 {text}
               </Markdown>
@@ -828,7 +888,7 @@ function LiveTextItem({
           </Bubble>
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 }
 
@@ -846,7 +906,7 @@ function LiveReasoningItem({
   const key = `${sessionKey ?? "none"}:reasoning-${item.key}`
 
   return (
-    <ItemWrap messageId={`live-reasoning-${item.key}`} author="Assistant">
+    <ConversationItem messageId={`live-reasoning-${item.key}`} author="Assistant">
       <Message>
         <MessageContent>
           <ReasoningTrace
@@ -857,7 +917,7 @@ function LiveReasoningItem({
           />
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 }
 
@@ -899,7 +959,7 @@ const LiveToolsItem = memo(function LiveToolsItem({
 }) {
   const key = `${sessionKey ?? "none"}:${groupKey}`
   return (
-    <ItemWrap messageId={`live-tools-${tools[0]?.id ?? "group"}`} author="Assistant">
+    <ConversationItem messageId={`live-tools-${tools[0]?.id ?? "group"}`} author="Assistant">
       <Message>
         <MessageContent>
           <ToolTrace
@@ -910,7 +970,7 @@ const LiveToolsItem = memo(function LiveToolsItem({
           <ToolArtifacts tools={tools} />
         </MessageContent>
       </Message>
-    </ItemWrap>
+    </ConversationItem>
   )
 }, (previous, next) =>
   previous.groupKey === next.groupKey &&
@@ -929,7 +989,6 @@ function RowView({
   onToolOpenChange,
   expandedReasoningGroups,
   onReasoningOpenChange,
-  onLiveTextGrow,
   onEditFromHere,
 }: {
   row: ConversationRow
@@ -940,7 +999,6 @@ function RowView({
   onToolOpenChange: (key: string, open: boolean) => void
   expandedReasoningGroups: Record<string, true>
   onReasoningOpenChange: (key: string, open: boolean) => void
-  onLiveTextGrow?: () => void
   onEditFromHere?: (message: SessionMessageUser) => void
 }) {
   const visibility = useContext(ToolVisibilityContext)
@@ -972,13 +1030,7 @@ function RowView({
     case "live-user":
       return <LiveUserItem item={row.item} />
     case "live-text":
-      return (
-        <LiveTextItem
-          item={row.item}
-          sessionKey={sessionKey}
-          onGrow={onLiveTextGrow}
-        />
-      )
+      return <LiveTextItem item={row.item} sessionKey={sessionKey} />
     case "live-reasoning":
       return (
         <LiveReasoningItem
@@ -1042,7 +1094,7 @@ function LiveStatus({
 
   if (run.notices.length > 0 && run.status === "notice") {
     return (
-      <div role="status" className="space-y-1 px-1 text-xs text-muted-foreground">
+      <div role="status" className="flex flex-col gap-1 px-1 text-xs text-muted-foreground">
         {run.notices.map((notice) => (
           <p key={notice}>
             <bdi>{notice}</bdi>
@@ -1080,20 +1132,16 @@ function ConversationNotice({
 }) {
   return (
     <div className="relative min-h-0 flex-1">
-      <div
-        className={cn(
-          "absolute inset-0 flex items-center justify-center overflow-hidden px-6 py-10 text-center text-sm",
-          tone === "error" ? "text-destructive" : "text-muted-foreground"
+      <div className="absolute inset-0 flex items-center justify-center overflow-hidden px-6 py-10 text-center text-sm">
+        {tone === "error" ? (
+          <Alert variant="destructive" className="max-w-sm text-start">{children}</Alert>
+        ) : (
+          <Empty className="border-0 p-0"><EmptyContent>{children}</EmptyContent></Empty>
         )}
-      >
-        {children}
       </div>
     </div>
   )
 }
-
-const SCROLL_EDGE_THRESHOLD = 48
-const PREPEND_TRIGGER = 160
 
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() => {
@@ -1114,6 +1162,19 @@ function useReducedMotion(): boolean {
   }, [])
 
   return reduced
+}
+
+/** Bridges the scroller hooks into Conversation, which renders the provider. */
+function ScrollerBridge({
+  apiRef,
+}: {
+  apiRef: { current: ReturnType<typeof useMessageScroller> | null }
+}) {
+  const api = useMessageScroller()
+  useEffect(() => {
+    apiRef.current = api
+  }, [api, apiRef])
+  return null
 }
 
 export function Conversation({
@@ -1243,593 +1304,115 @@ export function Conversation({
   )
 
   const viewportRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const [atBottom, setAtBottom] = useState(true)
-  const atBottomRef = useRef(true)
-  const [showJump, setShowJump] = useState(false)
+  const scrollerApiRef = useRef<ReturnType<typeof useMessageScroller> | null>(null)
   const reducedMotion = useReducedMotion()
-  const anchorRef = useRef<{
-    key: string
-    top: number
+  const olderRequestRef = useRef<Promise<void> | null>(null)
+  // Kept for ToolErrorDetails: a sheet portaled outside a row must not lose its
+  // trigger. Without virtualization every row stays mounted, so this is only a
+  // liveness signal for the details component, not a virtualization pin.
+  const [, setSheetPinnedRowKey] = useState<string | null>(null)
+
+  // The scroller's generic prepend heuristic over-corrects when the "load older"
+  // row also changes. Capture a real visible row instead and restore its exact
+  // viewport offset as soon as the older rows are committed.
+  const prependAnchorRef = useRef<{
+    id: string
+    offset: number
     baseCount: number
   } | null>(null)
-  const prevCountRef = useRef(rows.length)
-  const focusedRowKeyRef = useRef<string | null>(null)
-  const [sheetPinnedRowKey, setSheetPinnedRowKey] = useState<string | null>(null)
-  const didInitialScrollRef = useRef(false)
-  const initialSettlingRef = useRef(true)
-  const autoScrollingRef = useRef(false)
-  const jumpTimerRef = useRef<number | null>(null)
-  const followFrameRef = useRef<number | null>(null)
-  const pinnedBottomRef = useRef<{ top: number; height: number } | null>(null)
-  const sessionKeyRef = useRef(sessionKey)
-  const loadingOlderRef = useRef(loadingOlder)
-  loadingOlderRef.current = loadingOlder
-  const olderRequestRef = useRef<Promise<void> | null>(null)
-  const hasOlderRef = useRef(hasOlder)
-  hasOlderRef.current = hasOlder
-  const rowsRef = useRef(rows)
-  rowsRef.current = rows
-  const disclosureRef = useRef<{ frame: number; session: string | null } | null>(null)
-  const prependRestoreRef = useRef<number | null>(null)
-  const syncScrollStateRef = useRef<() => void>(() => {})
-
-  const cancelPrependRestore = useCallback(() => {
-    if (prependRestoreRef.current === null) return
-    cancelAnimationFrame(prependRestoreRef.current)
-    prependRestoreRef.current = null
-    autoScrollingRef.current = false
-    syncScrollStateRef.current()
-  }, [])
-
-  const cancelDisclosureAnchor = useCallback(() => {
-    if (!disclosureRef.current) return
-    cancelAnimationFrame(disclosureRef.current.frame)
-    disclosureRef.current = null
-    syncScrollStateRef.current()
-  }, [])
-
-  // Keep the activated trigger in place while the panel animates and the
-  // virtualizer measures it. This is deliberately short-lived: it must never
-  // turn into another bottom-follow mechanism or fight a reader's scrolling.
-  const handleDisclosureClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target as Element
-    const trigger = target.closest<HTMLElement>('[data-slot="trace-collapsible-trigger"]')
-    const viewport = viewportRef.current
-    if (!trigger || !viewport || !viewport.contains(trigger) || anchorRef.current || initialSettlingRef.current) return
-
-    cancelDisclosureAnchor()
-    cancelPrependRestore()
-    if (followFrameRef.current !== null) {
-      cancelAnimationFrame(followFrameRef.current)
-      followFrameRef.current = null
-    }
-    pinnedBottomRef.current = null
-    atBottomRef.current = false
-    setAtBottom(false)
-    const top = trigger.getBoundingClientRect().top - viewport.getBoundingClientRect().top
-    const started = performance.now()
-    const anchor = { frame: 0, session: sessionKey }
-    disclosureRef.current = anchor
-    const settle = () => {
-      if (disclosureRef.current !== anchor) return
-      if (!trigger.isConnected || viewportRef.current !== viewport || sessionKeyRef.current !== anchor.session) {
-        disclosureRef.current = null
-        if (viewportRef.current === viewport && sessionKeyRef.current === anchor.session) {
-          syncScrollStateRef.current()
-        }
-        return
-      }
-      const delta = trigger.getBoundingClientRect().top - viewport.getBoundingClientRect().top - top
-      if (Math.abs(delta) > 0.5) viewport.scrollTop += delta
-      // The panel transition is 200ms; allow time for deferred RO measurement.
-      if (performance.now() - started < 400) {
-        anchor.frame = requestAnimationFrame(settle)
-      } else {
-        disclosureRef.current = null
-        syncScrollStateRef.current()
-      }
-    }
-    anchor.frame = requestAnimationFrame(settle)
-  }, [cancelDisclosureAnchor, cancelPrependRestore, sessionKey])
-  useEffect(() => () => {
-    if (disclosureRef.current) cancelAnimationFrame(disclosureRef.current.frame)
-  }, [])
-
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual returns a live instance that React Compiler cannot memoize; the windowed render is handled by the virtualizer itself, and Conversation is intentionally not memoized.
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => viewportRef.current,
-    estimateSize: () => 116,
-    overscan: 12,
-    // Defer ResizeObserver measurements to the next frame. The virtualizer's
-    // dynamic row measurements otherwise re-enter synchronously with the
-    // browser's RO delivery while prepending/streaming rows; WebKit reports
-    // "ResizeObserver loop completed with undelivered notifications".
-    useAnimationFrameWithResizeObserver: true,
-    getItemKey: (index) => rows[index]?.key ?? index,
-    measureElement: (el) => el.getBoundingClientRect().height,
-    rangeExtractor: (range) => {
-      const start = Math.max(0, range.startIndex - range.overscan)
-      const end = Math.min(range.count - 1, range.endIndex + range.overscan)
-      const indices: number[] = []
-
-      for (let i = start; i <= end; i += 1) {
-        indices.push(i)
-      }
-
-      // Keep the row holding keyboard focus mounted even when it leaves the
-      // window, so focusing a tool/link inside a message never unmounts focus.
-      // Track it by key so prepending history cannot pin the wrong row.
-      const focusedKey = focusedRowKeyRef.current
-      const focused = focusedKey
-        ? rowsRef.current.findIndex((row) => row.key === focusedKey)
-        : -1
-
-      if (
-        focused >= 0 &&
-        focused < range.count &&
-        !indices.includes(focused)
-      ) {
-        indices.push(focused)
-      }
-
-      // A sheet is portaled outside its virtual row; keep that row mounted
-      // until the sheet has closed and focus can return to the trigger.
-      const sheetPinned = sheetPinnedRowKey
-        ? rowsRef.current.findIndex((row) => row.key === sheetPinnedRowKey)
-        : -1
-      if (sheetPinned >= 0 && sheetPinned < range.count && !indices.includes(sheetPinned)) {
-        indices.push(sheetPinned)
-      }
-      indices.sort((a, b) => a - b)
-
-      return indices
-    },
-  })
-
-  const handleFocus = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement | null
-    const row = target?.closest("[data-index]")
-    const index = row?.getAttribute("data-index")
-    focusedRowKeyRef.current =
-      index === null || index === undefined
-        ? null
-        : (rowsRef.current[Number(index)]?.key ?? null)
-  }, [])
-
-  const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    const next = event.relatedTarget as Node | null
-
-    if (next && event.currentTarget.contains(next)) {
-      return
-    }
-
-    focusedRowKeyRef.current = null
-  }, [])
-
-  const syncScrollState = useCallback(() => {
-    const el = viewportRef.current
-
-    if (!el) {
-      return
-    }
-
-    // A pin we just performed can be followed by more content (including a
-    // deferred Markdown commit) before its scroll event is delivered. Only an
-    // upward scrollTop movement proves the reader left the bottom; height
-    // changes alone are our own growth and stay followed.
-    const pinned = pinnedBottomRef.current
-    if (pinned !== null) {
-      if (el.scrollTop >= pinned.top - 1) {
-        return
-      }
-      pinnedBottomRef.current = null
-    }
-
-    const metrics = {
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-      scrollTop: el.scrollTop,
-    }
-    const nextAtBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_EDGE_THRESHOLD
-    atBottomRef.current = nextAtBottom
-    setAtBottom(nextAtBottom)
-    setShowJump(hasOffscreenBelow(metrics, SCROLL_EDGE_THRESHOLD))
-  }, [])
-  syncScrollStateRef.current = syncScrollState
-
-  const scrollToLatest = useCallback(() => {
-    cancelDisclosureAnchor()
-    const el = viewportRef.current
-    if (!el) {
-      return
-    }
-
-    pinnedBottomRef.current = null
-    const behavior = scrollBehavior(reducedMotion)
-    el.scrollTo({ top: el.scrollHeight, behavior })
-
-    const settle = () => {
-      const current = viewportRef.current
-
-      if (!current) {
-        return
-      }
-
-      // Dynamic virtual rows can grow the scroll extent while a smooth jump is
-      // in flight. Finish from the measured virtualizer end, not the stale
-      // scrollHeight captured at click time.
-      virtualizer.scrollToIndex(rowsRef.current.length - 1, { align: "end" })
-      current.scrollTop = current.scrollHeight
-      syncScrollState()
-    }
-
-    if (jumpTimerRef.current !== null) {
-      window.clearTimeout(jumpTimerRef.current)
-    }
-    if (behavior === "auto") {
-      requestAnimationFrame(settle)
-    } else {
-      jumpTimerRef.current = window.setTimeout(settle, 250)
-    }
-  }, [cancelDisclosureAnchor, reducedMotion, syncScrollState, virtualizer])
-
-  useEffect(() => {
-    return () => {
-      if (jumpTimerRef.current !== null) {
-        window.clearTimeout(jumpTimerRef.current)
-      }
-    }
-  }, [])
 
   const loadOlder = useCallback(() => {
-    if (!hasOlderRef.current || loadingOlderRef.current || olderRequestRef.current) return
-
-    cancelDisclosureAnchor()
-    cancelPrependRestore()
-
-    const el = viewportRef.current
-    const first = virtualizer.getVirtualItems().find((item) =>
-      item.end + (contentRef.current?.offsetTop ?? 0) > (el?.scrollTop ?? 0)
-    )
-    if (el && first) {
-      anchorRef.current = {
-        key: rowsRef.current[first.index]?.key ?? "",
-        top: first.start + (contentRef.current?.offsetTop ?? 0) - el.scrollTop,
-        baseCount: rowsRef.current.length,
+    if (!hasOlder || loadingOlder || olderRequestRef.current) return
+    const viewport = viewportRef.current
+    if (viewport) {
+      const bounds = viewport.getBoundingClientRect()
+      const candidates = [
+        ...viewport.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ]
+      const anchorElement =
+        candidates.find((element) => {
+          const rect = element.getBoundingClientRect()
+          return rect.bottom > bounds.top && rect.top < bounds.bottom
+        }) ??
+        candidates.find((element) => element.getBoundingClientRect().bottom > bounds.top)
+      if (anchorElement?.dataset.messageId) {
+        prependAnchorRef.current = {
+          id: anchorElement.dataset.messageId,
+          offset: anchorElement.getBoundingClientRect().top - bounds.top,
+          baseCount: rows.length,
+        }
       }
     }
-    // An explicit request must not be overridden by initial placement or
-    // bottom-follow, including when the current page does not scroll.
-    initialSettlingRef.current = false
-    pinnedBottomRef.current = null
-    atBottomRef.current = false
-    setAtBottom(false)
     const request = Promise.resolve().then(onLoadOlder)
     olderRequestRef.current = request
     void request.catch(() => {}).finally(() => {
       if (olderRequestRef.current === request) olderRequestRef.current = null
     })
-  }, [cancelDisclosureAnchor, cancelPrependRestore, onLoadOlder, virtualizer])
+  }, [hasOlder, loadingOlder, onLoadOlder, rows.length])
 
-  const handleScroll = useCallback(() => {
-    const el = viewportRef.current
-    if (!el) {
-      return
-    }
-
-    if (disclosureRef.current) return
-    syncScrollState()
-
-    // Initial bottom placement fires scroll events while dynamic rows are
-    // still being measured; never treat those as a request for older history.
-    if (initialSettlingRef.current || autoScrollingRef.current) {
-      return
-    }
-
-    const scrollable = el.scrollHeight - el.clientHeight
-
-    if (
-      scrollable > PREPEND_TRIGGER &&
-      el.scrollTop < PREPEND_TRIGGER &&
-      hasOlderRef.current &&
-      !loadingOlderRef.current &&
-      !olderError
-    ) {
-      loadOlder()
-    }
-  }, [loadOlder, olderError, syncScrollState])
-
-  useEffect(() => {
-    if (!focusMessageID) return
-    cancelDisclosureAnchor()
-    cancelPrependRestore()
-    pinnedBottomRef.current = null
-    const index = rows.findIndex((row) => row.key === focusMessageID)
-    if (index < 0) return
-
-    autoScrollingRef.current = true
-    atBottomRef.current = false
-    setAtBottom(false)
-    virtualizer.scrollToIndex(index, { align: "center" })
-    let frame = 0
-    const timer = window.setTimeout(() => {
-      frame = requestAnimationFrame(() => {
-        const element = viewportRef.current?.querySelector<HTMLElement>(
-          `[data-message-id="${focusMessageID}"]`
-        )
-        element?.focus({ preventScroll: true })
-        autoScrollingRef.current = false
-        onFocusMessageHandled()
-      })
-    }, 200)
-    return () => {
-      window.clearTimeout(timer)
-      cancelAnimationFrame(frame)
-      autoScrollingRef.current = false
-    }
-  }, [cancelDisclosureAnchor, cancelPrependRestore, focusMessageID, onFocusMessageHandled, rows, virtualizer])
-
-  // Bottom-follow: autoscroll only when the reader is already near the bottom.
-  useEffect(() => {
-    const prev = prevCountRef.current
-    prevCountRef.current = rows.length
-
-    if (focusMessageID || disclosureRef.current) return
-
-    if (rows.length > prev && !anchorRef.current) {
-      if (atBottom) {
-        // New rows can move the virtualizer's offset for a frame. Mark this
-        // programmatic follow so its scroll events are not read as a request
-        // for older history, then pin to the measured end.
-        autoScrollingRef.current = true
-        virtualizer.scrollToIndex(rows.length - 1, { align: "end" })
-
-        requestAnimationFrame(() => {
-          const el = viewportRef.current
-
-          if (el) {
-            el.scrollTop = el.scrollHeight
-          }
-
-          requestAnimationFrame(() => {
-            autoScrollingRef.current = false
-          })
-        })
-      }
-    }
-  }, [focusMessageID, rows.length, atBottom, virtualizer])
-
-  // Coalesced follow for live growth (tool rows, streamed text, and deferred
-  // text commits). Never cancels a pending frame: a commit can outpace the
-  // next animation frame while a large answer is rendering.
-  const followIfAtBottom = useCallback(() => {
-    if (focusMessageID || initialSettlingRef.current || disclosureRef.current) return
-    if (!atBottomRef.current) return
-    if (followFrameRef.current !== null) return
-    followFrameRef.current = requestAnimationFrame(() => {
-      followFrameRef.current = null
-      const el = viewportRef.current
-      if (!el || !atBottomRef.current) return
-      if (el.scrollHeight - el.scrollTop - el.clientHeight > 0.5) {
-        el.scrollTop = el.scrollHeight
-      }
-      pinnedBottomRef.current = {
-        top: el.scrollTop,
-        height: el.scrollHeight,
-      }
-      syncScrollState()
-    })
-  }, [focusMessageID, syncScrollState])
-
-  useEffect(() => {
-    if (!liveRun) return
-    followIfAtBottom()
-  }, [followIfAtBottom, liveRun])
-
-  useEffect(() => {
-    return () => {
-      if (followFrameRef.current !== null) {
-        cancelAnimationFrame(followFrameRef.current)
-        followFrameRef.current = null
-      }
-    }
-  }, [])
-
-  // A freshly opened long session starts at its newest message. Dynamic row
-  // heights arrive over several frames, so keep pinning to the real end until
-  // the measured height is stable, then record the true scroll state.
-  const hasRows = rows.length > 0
-
-  useEffect(() => {
-    if (!hasRows) {
-      didInitialScrollRef.current = false
-      initialSettlingRef.current = true
-      return
-    }
-
-    if (didInitialScrollRef.current) {
-      return
-    }
-
-    didInitialScrollRef.current = true
-    initialSettlingRef.current = true
-    pinnedBottomRef.current = null
-    let cancelled = false
-    let frame = 0
-    let lastHeight = -1
-    let stableFrames = 0
-
-    const settle = (attempt: number) => {
-      if (cancelled || !initialSettlingRef.current) {
-        return
-      }
-
-      const el = viewportRef.current
-
-      if (!el) {
-        return
-      }
-
-      virtualizer.scrollToIndex(rowsRef.current.length - 1, {
-        align: "end",
-      })
-      el.scrollTop = el.scrollHeight
-
-      const height = el.scrollHeight
-      stableFrames = Math.abs(height - lastHeight) < 1 ? stableFrames + 1 : 0
-      lastHeight = height
-
-      if (attempt < 90 && (attempt < 3 || stableFrames < 3)) {
-        frame = requestAnimationFrame(() => settle(attempt + 1))
-        return
-      }
-
-      initialSettlingRef.current = false
-      autoScrollingRef.current = false
-      syncScrollState()
-    }
-
-    frame = requestAnimationFrame(() => settle(0))
-
-    return () => {
-      cancelled = true
-      didInitialScrollRef.current = false
-      cancelAnimationFrame(frame)
-    }
-  }, [hasRows, syncScrollState, virtualizer])
-
-  // Keep the jump affordance tied to the measured scroll range, including
-  // after virtualizer measurements, live text/tool growth, keyboard/orientation
-  // resizes, and session transitions. It is false until real metrics exist.
-  useEffect(() => {
-    if (!hasRows || status !== "ready") {
-      return
-    }
-
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current
+    if (!anchor || rows.length <= anchor.baseCount) return
     const viewport = viewportRef.current
-
-    if (!viewport) {
-      return
-    }
-
-    let frame = 0
-    const sync = () => {
-      const el = viewportRef.current
-
-      // A keyboard/orientation resize changes clientHeight without scrolling.
-      // If the reader was at the bottom, keep them pinned there instead of
-      // exposing a jump arrow for content that was already read.
-      if (el && atBottomRef.current) {
-        el.scrollTop = el.scrollHeight
-      }
-
-      syncScrollState()
-    }
-    const scheduleSync = () => {
-      if (frame) return
-      frame = requestAnimationFrame(() => {
-        frame = 0
-        sync()
-      })
-    }
-    sync()
-
-    const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleSync)
-    observer?.observe(viewport)
-    // Content observer intentionally omitted while diagnosing RO loops.
-    window.addEventListener("resize", scheduleSync)
-    window.visualViewport?.addEventListener("resize", scheduleSync)
-
-    return () => {
-      observer?.disconnect()
-      if (frame) cancelAnimationFrame(frame)
-      window.removeEventListener("resize", scheduleSync)
-      window.visualViewport?.removeEventListener("resize", scheduleSync)
-    }
-  }, [hasRows, rows.length, sessionKey, status, syncScrollState])
-
-  // Preserve the logical anchor after older messages are prepended.
-  useEffect(() => {
-    if (!anchorRef.current) {
-      return
-    }
-
-    const anchor = anchorRef.current
-    if (rows.length <= anchor.baseCount) {
-      // No new page yet. If loading already ended, this request produced no
-      // rows (or failed), so the anchor must not block later auto-follow.
-      if (!loadingOlderRef.current) anchorRef.current = null
-      return
-    }
-
-    const index = rows.findIndex((row) => row.key === anchor.key)
-    anchorRef.current = null
-    if (index <= 0) return
-    const el = viewportRef.current
-    if (!el) {
-      return
-    }
-
+    if (!viewport) return
     const started = performance.now()
+    let frame = 0
+    let cancelled = false
     const restore = () => {
-      if (prependRestoreRef.current === null || viewportRef.current !== el) return
-      const index = rowsRef.current.findIndex((row) => row.key === anchor.key)
-      if (index >= 0) {
-        const entry = virtualizer.getOffsetForIndex(index, "start")
-        if (entry) {
-          autoScrollingRef.current = true
-          el.scrollTop = entry[0] + (contentRef.current?.offsetTop ?? 0) - anchor.top
+      if (cancelled || viewportRef.current !== viewport) return
+      const element = viewport.querySelector<HTMLElement>(
+        `[data-message-id="${anchor.id}"]`
+      )
+      if (element) {
+        const delta =
+          element.getBoundingClientRect().top -
+          viewport.getBoundingClientRect().top -
+          anchor.offset
+        if (Number.isFinite(delta) && Math.abs(delta) > 0.5) {
+          viewport.scrollTop += delta
         }
       }
       if (performance.now() - started < 600) {
-        prependRestoreRef.current = requestAnimationFrame(restore)
+        frame = requestAnimationFrame(restore)
       } else {
-        prependRestoreRef.current = null
-        autoScrollingRef.current = false
-        syncScrollStateRef.current()
+        prependAnchorRef.current = null
       }
     }
-    prependRestoreRef.current = requestAnimationFrame(restore)
-    return cancelPrependRestore
-  }, [cancelPrependRestore, rows, virtualizer])
-
-  useEffect(() => {
-    // A completed request that produced no new rows must release the anchor so
-    // later messages can follow normally. Successful prepends are released by
-    // the anchor-restore effect above.
-    if (loadingOlder) return
-    const anchor = anchorRef.current
-    if (anchor && rowsRef.current.length <= anchor.baseCount) {
-      anchorRef.current = null
+    frame = requestAnimationFrame(restore)
+    const cancel = () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+      prependAnchorRef.current = null
     }
-  }, [loadingOlder])
-
-  // Cross-session guard: forget the pinned row and hide the jump control until
-  // the next session's real scroll metrics are measured.
-  useEffect(() => {
-    if (sessionKeyRef.current === sessionKey) {
-      return
+    viewport.addEventListener("wheel", cancel, { once: true, passive: true })
+    viewport.addEventListener("touchmove", cancel, { once: true, passive: true })
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+      viewport.removeEventListener("wheel", cancel)
+      viewport.removeEventListener("touchmove", cancel)
     }
+  }, [rows])
 
-    sessionKeyRef.current = sessionKey
-    cancelDisclosureAnchor()
-    cancelPrependRestore()
-    focusedRowKeyRef.current = null
-    setSheetPinnedRowKey(null)
-    anchorRef.current = null
-    olderRequestRef.current = null
-    pinnedBottomRef.current = null
-    didInitialScrollRef.current = false
-    initialSettlingRef.current = true
-    autoScrollingRef.current = false
-    atBottomRef.current = true
-    setAtBottom(true)
-    setShowJump(false)
-  }, [cancelDisclosureAnchor, cancelPrependRestore, sessionKey])
+  // Center a message requested by the parent (inspector "jump to message").
+  // MessageScroller owns the scroll geometry; we only focus the row afterwards.
+  useEffect(() => {
+    if (!focusMessageID) return
+    scrollerApiRef.current?.scrollToMessage(focusMessageID, { align: "center" })
+    let frame = 0
+    const timer = window.setTimeout(() => {
+      frame = requestAnimationFrame(() => {
+        viewportRef.current
+          ?.querySelector<HTMLElement>(`[data-message-id="${focusMessageID}"]`)
+          ?.focus({ preventScroll: true })
+        onFocusMessageHandled()
+      })
+    }, 120)
+    return () => {
+      window.clearTimeout(timer)
+      cancelAnimationFrame(frame)
+    }
+  }, [focusMessageID, onFocusMessageHandled])
 
   // Cmd/Ctrl+F opens in-thread find only when the conversation owns focus.
   useEffect(() => {
@@ -1886,9 +1469,9 @@ export function Conversation({
     const wrapped = (index + findMatches.length) % findMatches.length
     setFindIndex(wrapped)
     const target = findMatches[wrapped]
-    const rowIndex = rowsRef.current.findIndex((row) => row.key === target)
-    if (rowIndex < 0) return
-    virtualizer.scrollToIndex(rowIndex, { align: "center" })
+    // The scroller keeps its own element registry and aligns by message id, so
+    // find jumps no longer need virtual-index arithmetic.
+    scrollerApiRef.current?.scrollToMessage(target, { align: "center" })
     window.setTimeout(() => {
       viewportRef.current
         ?.querySelector<HTMLElement>(`[data-message-id="${target}"]`)
@@ -1954,16 +1537,22 @@ export function Conversation({
   }
 
   // Keep the current find result visible when the query or row set changes.
+  // Deferred so the imperative scroller jump does not set state inside the
+  // effect body; its cleanup also prevents a stale jump on a fast retype.
   useEffect(() => {
     if (!findOpen || findMatches.length === 0) return
-    jumpToFindMatch(Math.min(findIndex, findMatches.length - 1))
+    const frame = requestAnimationFrame(() => {
+      jumpToFindMatch(Math.min(findIndex, findMatches.length - 1))
+    })
+    return () => cancelAnimationFrame(frame)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- jumpToFindMatch is intentionally ephemeral
   }, [findOpen, findMatches.length, findQuery])
 
   if (!hasSession) {
     return (
       <ConversationNotice>
-        Select a session to view its history.
+        <EmptyTitle>No session selected</EmptyTitle>
+        <EmptyDescription>Select a session to view its history.</EmptyDescription>
       </ConversationNotice>
     )
   }
@@ -1971,7 +1560,10 @@ export function Conversation({
   if (status === "loading" && rows.length === 0 && !liveRun) {
     return (
       <ConversationNotice>
-        <span role="status">Loading history…</span>
+        <p role="status" className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+          Loading history…
+          <Skeleton className="h-2 w-40" />
+        </p>
       </ConversationNotice>
     )
   }
@@ -1979,416 +1571,431 @@ export function Conversation({
   if (status === "error") {
     return (
       <ConversationNotice tone="error">
-        <div role="alert" className="max-w-sm space-y-3">
+        <AlertTitle>Could not load history</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3">
           <p className="break-words">{error ?? "Could not load history."}</p>
           <Button variant="outline" onClick={onRetry} className="h-11 px-4">
             Retry history
           </Button>
-        </div>
+        </AlertDescription>
       </ConversationNotice>
     )
   }
 
   if (rows.length === 0 && !liveRun && !revert && !hasOlder && !loadingOlder && !olderError) {
-    return <ConversationNotice>No messages yet.</ConversationNotice>
+    return (
+      <ConversationNotice>
+        <EmptyTitle>No messages yet</EmptyTitle>
+        <EmptyDescription>Send a message to start the conversation.</EmptyDescription>
+      </ConversationNotice>
+    )
   }
 
   return (
-    <ToolDetailPinContext.Provider value={setSheetPinnedRowKey}>
-    <ToolVisibilityContext.Provider value={{ mode: toolMode, runActive, findOpen }}>
-    <ToolDiffContext.Provider value={(path) => onOpenDiff?.(path ?? null)}>
-    <FindMatchContext.Provider value={findMatchSet}>
-    <div className="relative min-h-0 flex-1">
-      <div
-        ref={viewportRef}
-        onScroll={handleScroll}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        onMouseUp={captureSelection}
-        onKeyUp={captureSelection}
-        onClickCapture={handleDisclosureClick}
-        onWheelCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
-        onTouchStartCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
-        onPointerDownCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
-        onKeyDownCapture={() => { cancelDisclosureAnchor(); cancelPrependRestore() }}
-        aria-label="Conversation"
-        role="region"
-        tabIndex={0}
-        className="safe-horizontal h-full min-h-0 min-w-0 overflow-y-auto overscroll-contain scrollbar-thin scrollbar-gutter-stable md:px-0"
-      >
-        {findOpen ? (
-          <div
-            data-find-bar
-            className="sticky top-0 z-30 mx-1 mb-1 flex items-center gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-sm backdrop-blur"
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={64}
+    >
+      <ScrollerBridge apiRef={scrollerApiRef} />
+      <ToolDetailPinContext.Provider value={setSheetPinnedRowKey}>
+      <ToolVisibilityContext.Provider value={{ mode: toolMode, runActive, findOpen }}>
+      <ToolDiffContext.Provider value={(path) => onOpenDiff?.(path ?? null)}>
+      <FindMatchContext.Provider value={findMatchSet}>
+      <div className="relative min-h-0 flex-1">
+        <MessageScroller className="flex-1">
+          <MessageScrollerViewport
+            ref={viewportRef}
+            preserveScrollOnPrepend={false}
+            aria-label="Conversation"
+            role="region"
+            onMouseUp={captureSelection}
+            onKeyUp={captureSelection}
+            className="safe-horizontal"
           >
-            <SearchIcon aria-hidden="true" className="ms-1 size-4 shrink-0 text-muted-foreground" />
-            <Input
-              ref={findInputRef}
-              value={findQuery}
-              onChange={(event) => {
-                setFindQuery(event.target.value)
-                setFindIndex(0)
-              }}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return
-                if (event.key === "Escape") {
-                  event.preventDefault()
-                  setFindOpen(false)
-                  setFindQuery("")
-                  viewportRef.current?.focus()
-                  return
-                }
-                if (event.key === "Enter") {
-                  event.preventDefault()
-                  jumpToFindMatch(findIndex + (event.shiftKey ? -1 : 1))
-                }
-              }}
-              aria-label="Find in conversation"
-              placeholder="Find in conversation"
-              className="h-11 min-w-0 flex-1 border-0 bg-transparent text-base shadow-none md:text-sm"
-            />
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {findQuery.trim()
-                ? `${findMatches.length ? findIndex + 1 : 0}/${findMatches.length}`
-                : ""}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              className="size-11 shrink-0 p-0"
-              aria-label="Previous match"
-              disabled={findMatches.length === 0}
-              onClick={() => jumpToFindMatch(findIndex - 1)}
+            <MessageScrollerContent className="px-0 py-5 md:px-0">
+              {/* These two rows stay mounted (hidden when idle) so the scroller's
+                  first DOM child is stable when older history is prepended. */}
+              <MessageScrollerItem
+                messageId="loading-history"
+                className={cn(
+                  "[content-visibility:visible]",
+                  !(status === "loading" && rows.length > 0) && "hidden"
+                )}
+              >
+                <p role="status" className="mx-1 flex items-center justify-center gap-2 rounded-lg border border-border bg-card/95 px-3 py-1.5 text-center text-xs text-muted-foreground shadow-sm backdrop-blur">
+                  <Skeleton className="size-3 rounded-full" />
+                  Loading history…
+                </p>
+              </MessageScrollerItem>
+              <MessageScrollerItem
+                messageId="load-older"
+                className={cn(
+                  "[content-visibility:visible] py-2 text-center",
+                  !(olderError || loadingOlder || hasOlder) && "hidden"
+                )}
+              >
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={loadingOlder || !hasOlder}
+                    onClick={loadOlder}
+                    className="min-h-11 px-4"
+                  >
+                    {loadingOlder
+                      ? "Loading older messages…"
+                      : olderError
+                        ? "Retry older messages"
+                        : "Load older messages"}
+                  </Button>
+                  {olderError ? (
+                    <p role="alert" className="mt-1 text-xs text-destructive">
+                      {olderError}
+                    </p>
+                  ) : null}
+              </MessageScrollerItem>
+              {rows.map((row) => (
+                <ToolDetailRowContext.Provider key={row.key} value={row.key}>
+                  <RowView
+                    row={row}
+                    sessionKey={sessionKey}
+                    projectAttachments={row.kind === "message" && projectAttachmentMessages.has(row.message.id)}
+                    streamStatus={streamStatus}
+                    expandedToolGroups={expandedToolGroups}
+                    onToolOpenChange={handleToolOpenChange}
+                    expandedReasoningGroups={expandedReasoningGroups}
+                    onReasoningOpenChange={handleReasoningOpenChange}
+                    onEditFromHere={(message) => void startEditFromHere(message)}
+                  />
+                </ToolDetailRowContext.Provider>
+              ))}
+              {revert ? (
+                <MessageScrollerItem messageId="revert-status" className="[content-visibility:visible]">
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="mx-1 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground"
+                  >
+                    <Marker variant="separator">
+                      <MarkerContent>
+                        {visibleMessages.length === messages.length
+                          ? "Revert staged"
+                          : `${messages.length - visibleMessages.length} message${messages.length - visibleMessages.length === 1 ? "" : "s"} reverted`}
+                      </MarkerContent>
+                    </Marker>
+                    <p>
+                      {revert.files?.length
+                        ? `${revert.files.length} file${revert.files.length === 1 ? "" : "s"} restored by the native revert.`
+                        : "No file changes were recorded for this revert."}
+                    </p>
+                    {revert.files?.length ? (
+                      <ul className="flex flex-col gap-0.5" aria-label="Restored files">
+                        {revert.files.slice(0, 5).map((file) => (
+                          <li key={file.file} dir="ltr" className="truncate font-mono text-[10px]">
+                            {file.file}
+                            {file.additions > 0 || file.deletions > 0
+                              ? ` (+${file.additions}/−${file.deletions})`
+                              : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p>Use /redo to clear the staged revert and restore the messages/files.</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 self-start px-3"
+                        onClick={() => {
+                          scrollerApiRef.current?.scrollToMessage(revert.messageID, { align: "center" })
+                          viewportRef.current
+                            ?.querySelector<HTMLElement>(`[data-message-id="${revert.messageID}"]`)
+                            ?.focus({ preventScroll: true })
+                        }}
+                      >
+                        {toCheckpointView({
+                          id: revert.messageID,
+                          role: visibleMessages.find((message) => message.id === revert.messageID)?.type,
+                        }).label}
+                      </Button>
+                    </div>
+                  </div>
+                </MessageScrollerItem>
+              ) : null}
+              {zenHidesIntermediate ? (
+                <MessageScrollerItem messageId="zen-notice" className="[content-visibility:visible]">
+                  <div
+                    role="status"
+                    className="mx-1 my-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+                  >
+                    <Marker>
+                      <MarkerContent>Zen mode</MarkerContent>
+                    </Marker>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Zen hides intermediate text and tools while the turn runs.</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 px-3 text-xs"
+                        onClick={() => {
+                          setFindOpen(true)
+                          requestAnimationFrame(() => findInputRef.current?.focus())
+                        }}
+                      >
+                        Reveal with Find
+                      </Button>
+                    </div>
+                  </div>
+                </MessageScrollerItem>
+              ) : null}
+              {liveRun ? (
+                <MessageScrollerItem messageId="live-status" className="[content-visibility:visible]">
+                  <div className="flex flex-col gap-2 py-3">
+                    {liveRun.notices.length > 0 && liveRun.status !== "notice" ? (
+                      <div role="status" className="flex flex-col gap-1 px-1 text-xs text-muted-foreground">
+                        {liveRun.notices.map((notice) => (
+                          <p key={notice}>
+                            <bdi>{notice}</bdi>
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+                    <LiveStatus run={liveRun} streamStatus={streamStatus} />
+                  </div>
+                </MessageScrollerItem>
+              ) : null}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton
+            behavior={reducedMotion ? "auto" : "smooth"}
+            className="size-11 rounded-full"
+          />
+          {findOpen ? (
+            <div
+              data-find-bar
+              className="absolute inset-x-2 top-2 z-30 flex items-center gap-1 rounded-lg border border-border bg-card/95 p-1 shadow-sm backdrop-blur"
             >
-              <ArrowUpIcon aria-hidden="true" className="size-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="size-11 shrink-0 p-0"
-              aria-label="Next match"
-              disabled={findMatches.length === 0}
-              onClick={() => jumpToFindMatch(findIndex + 1)}
-            >
-              <ArrowDownIcon aria-hidden="true" className="size-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="size-11 shrink-0 p-0"
-              aria-label="Close find"
-              onClick={() => {
-                setFindOpen(false)
-                setFindQuery("")
-                viewportRef.current?.focus()
-              }}
-            >
-              <XIcon aria-hidden="true" className="size-4" />
-            </Button>
-          </div>
-        ) : null}
-        {status === "loading" && rows.length > 0 ? (
-          <div
-            role="status"
-            className="sticky top-0 z-20 mx-1 my-1 rounded-lg border border-border bg-card/95 px-3 py-1.5 text-center text-xs text-muted-foreground shadow-sm backdrop-blur"
-          >
-            Loading history…
-          </div>
-        ) : null}
-        {olderError || loadingOlder || hasOlder ? (
-          <div className="py-2 text-center">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={loadingOlder || !hasOlder}
-              onClick={loadOlder}
-              className="min-h-11 px-4"
-            >
-              {loadingOlder
-                ? "Loading older messages…"
-                : olderError
-                  ? "Retry older messages"
-                  : "Load older messages"}
-            </Button>
-            {olderError ? (
-              <p role="alert" className="mt-1 text-xs text-destructive">
-                {olderError}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        <div
-          ref={contentRef}
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: "relative",
-            width: "100%",
-          }}
-        >
-          {virtualizer.getVirtualItems().map((item) => {
-            const row = rows[item.index]
-            return (
-              <div
-                key={item.key}
-                data-index={item.index}
-                ref={virtualizer.measureElement}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${item.start}px)`,
+              <SearchIcon aria-hidden="true" className="ms-1 size-4 shrink-0 text-muted-foreground" />
+              <Input
+                ref={findInputRef}
+                value={findQuery}
+                onChange={(event) => {
+                  setFindQuery(event.target.value)
+                  setFindIndex(0)
                 }}
-                className={cn("pb-5", item.index === 0 && "pt-5")}
-              >
-                <ToolDetailRowContext.Provider value={row.key}><RowView
-                  row={row}
-                  sessionKey={sessionKey}
-                  projectAttachments={row.kind === "message" && projectAttachmentMessages.has(row.message.id)}
-                  streamStatus={streamStatus}
-                  expandedToolGroups={expandedToolGroups}
-                  onToolOpenChange={handleToolOpenChange}
-                  expandedReasoningGroups={expandedReasoningGroups}
-                  onReasoningOpenChange={handleReasoningOpenChange}
-                  onLiveTextGrow={followIfAtBottom}
-                  onEditFromHere={(message) => void startEditFromHere(message)}
-                /></ToolDetailRowContext.Provider>
-              </div>
-            )
-          })}
-        </div>
-        {revert ? (
-          <div
-            role="status"
-            aria-live="polite"
-            className="mx-1 my-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground"
-          >
-            <p className="font-medium text-foreground">
-              {visibleMessages.length === messages.length
-                ? "Revert staged"
-                : `${messages.length - visibleMessages.length} message${messages.length - visibleMessages.length === 1 ? "" : "s"} reverted`}
-            </p>
-            <p className="mt-1">
-              {revert.files?.length
-                ? `${revert.files.length} file${revert.files.length === 1 ? "" : "s"} restored by the native revert.`
-                : "No file changes were recorded for this revert."}
-            </p>
-            {revert.files?.length ? (
-              <ul className="mt-1 space-y-0.5" aria-label="Restored files">
-                {revert.files.slice(0, 5).map((file) => (
-                  <li key={file.file} dir="ltr" className="truncate font-mono text-[10px]">
-                    {file.file}
-                    {file.additions > 0 || file.deletions > 0
-                      ? ` (+${file.additions}/−${file.deletions})`
-                      : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <p className="mt-1">Use /redo to clear the staged revert and restore the messages/files.</p>
-          </div>
-        ) : null}
-        {zenHidesIntermediate ? (
-          <div
-            role="status"
-            className="mx-1 my-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
-          >
-            <span>Zen hides intermediate text and tools while the turn runs.</span>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 px-3 text-xs"
-              onClick={() => {
-                setFindOpen(true)
-                requestAnimationFrame(() => findInputRef.current?.focus())
-              }}
-            >
-              Reveal with Find
-            </Button>
-          </div>
-        ) : null}
-        {liveRun ? (
-          <div className="py-3">
-            {liveRun.notices.length > 0 && liveRun.status !== "notice" ? (
-              <div
-                role="status"
-                className="space-y-1 px-1 text-xs text-muted-foreground"
-              >
-                {liveRun.notices.map((notice) => (
-                  <p key={notice}>
-                    <bdi>{notice}</bdi>
-                  </p>
-                ))}
-              </div>
-            ) : null}
-            <LiveStatus run={liveRun} streamStatus={streamStatus} />
-          </div>
-        ) : null}
-      </div>
-      <div className="absolute top-2 end-2 z-20">
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger
-            render={
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return
+                  if (event.key === "Escape") {
+                    event.preventDefault()
+                    setFindOpen(false)
+                    setFindQuery("")
+                    viewportRef.current?.focus()
+                    return
+                  }
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    jumpToFindMatch(findIndex + (event.shiftKey ? -1 : 1))
+                  }
+                }}
+                aria-label="Find in conversation"
+                placeholder="Find in conversation"
+                className="h-11 min-w-0 flex-1 border-0 bg-transparent text-base shadow-none md:text-sm"
+              />
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {findQuery.trim()
+                  ? `${findMatches.length ? findIndex + 1 : 0}/${findMatches.length}`
+                  : ""}
+              </span>
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-lg"
-                aria-label={`Tool visibility: ${toolVisibilityLabel(toolMode)}`}
-                className="size-11 rounded-full bg-background/80 text-muted-foreground backdrop-blur"
-              />
-            }
-          >
-            <EyeIcon aria-hidden="true" className="size-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" side="bottom" className="min-w-52">
-            {TOOL_VISIBILITY_MODES.map((mode) => (
-              <DropdownMenuItem
-                key={mode}
-                className="min-h-11"
-                aria-checked={mode === toolMode}
+                className="size-11 shrink-0 p-0"
+                aria-label="Previous match"
+                disabled={findMatches.length === 0}
+                onClick={() => jumpToFindMatch(findIndex - 1)}
+              >
+                <ArrowUpIcon aria-hidden="true" className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="size-11 shrink-0 p-0"
+                aria-label="Next match"
+                disabled={findMatches.length === 0}
+                onClick={() => jumpToFindMatch(findIndex + 1)}
+              >
+                <ArrowDownIcon aria-hidden="true" className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="size-11 shrink-0 p-0"
+                aria-label="Close find"
                 onClick={() => {
-                  const previous = toolMode
-                  if (setToolMode(mode)) {
-                    undo.showUndo(
-                      `Tool visibility: ${toolVisibilityLabel(mode)}`,
-                      () => setToolMode(previous)
-                    )
-                  }
+                  setFindOpen(false)
+                  setFindQuery("")
+                  viewportRef.current?.focus()
                 }}
               >
-                <span className="w-4 text-center" aria-hidden="true">
-                  {mode === toolMode ? "✓" : ""}
-                </span>
-                {toolVisibilityLabel(mode)}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-      {toolModeError ? (
-        <p role="alert" className="absolute top-14 end-2 z-20 max-w-56 rounded-lg bg-background px-2 py-1 text-[10px] text-destructive shadow">
-          {toolModeError}
-        </p>
-      ) : null}
-      {selectionQuote && !citationOpen ? (
-        <Button
-          type="button"
-          variant="secondary"
-          className="absolute bottom-16 start-1/2 z-30 h-11 -translate-x-1/2 gap-1.5 rounded-full px-3 text-xs shadow-lg"
-          onClick={() => {
-            setCitationComment("")
-            setCitationOpen(true)
+                <XIcon aria-hidden="true" className="size-4" />
+              </Button>
+            </div>
+          ) : null}
+        </MessageScroller>
+        <div className="absolute top-2 end-2 z-20">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-lg"
+                  aria-label={`Tool visibility: ${toolVisibilityLabel(toolMode)}`}
+                  className="size-11 rounded-full bg-background/80 text-muted-foreground backdrop-blur"
+                />
+              }
+            >
+              <EyeIcon aria-hidden="true" className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" side="bottom" className="min-w-52">
+              {TOOL_VISIBILITY_MODES.map((mode) => (
+                <DropdownMenuItem
+                  key={mode}
+                  className="min-h-11"
+                  aria-checked={mode === toolMode}
+                  onClick={() => {
+                    const previous = toolMode
+                    if (setToolMode(mode)) {
+                      undo.showUndo(
+                        `Tool visibility: ${toolVisibilityLabel(mode)}`,
+                        () => setToolMode(previous)
+                      )
+                    }
+                  }}
+                >
+                  <span className="w-4 text-center" aria-hidden="true">
+                    {mode === toolMode ? "✓" : ""}
+                  </span>
+                  {toolVisibilityLabel(mode)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {toolModeError ? (
+          <p role="alert" className="absolute top-14 end-2 z-20 max-w-56 rounded-lg bg-background px-2 py-1 text-[10px] text-destructive shadow">
+            {toolModeError}
+          </p>
+        ) : null}
+        {selectionQuote && !citationOpen ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="absolute bottom-16 start-1/2 z-30 h-11 -translate-x-1/2 gap-1.5 rounded-full px-3 text-xs shadow-lg"
+            onClick={() => {
+              setCitationComment("")
+              setCitationOpen(true)
+            }}
+          >
+            <QuoteIcon aria-hidden="true" className="size-4" />
+            Cite selection
+          </Button>
+        ) : null}
+        <Dialog open={citationOpen} onOpenChange={setCitationOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Add citation</DialogTitle>
+              <DialogDescription>
+                The quote is inserted into the composer as attributed plain text.
+              </DialogDescription>
+            </DialogHeader>
+            <blockquote
+              dir="auto"
+              className="max-h-40 overflow-y-auto break-words rounded-lg border-s-2 border-border bg-muted/40 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]"
+            >
+              {selectionQuote}
+            </blockquote>
+            <Textarea
+              value={citationComment}
+              onChange={(event) => setCitationComment(event.target.value)}
+              aria-label="Citation comment"
+              placeholder="Optional comment"
+              rows={2}
+            />
+            <DialogFooter>
+              <Button type="button" variant="outline" className="h-11" onClick={() => setCitationOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" className="h-11" onClick={insertCitation}>
+                Insert citation
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog
+          open={Boolean(editTarget)}
+          onOpenChange={(open) => {
+            if (!open) void cancelEdit()
           }}
         >
-          <QuoteIcon aria-hidden="true" className="size-4" />
-          Cite selection
-        </Button>
-      ) : null}
-      <Dialog open={citationOpen} onOpenChange={setCitationOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add citation</DialogTitle>
-            <DialogDescription>
-              The quote is inserted into the composer as attributed plain text.
-            </DialogDescription>
-          </DialogHeader>
-          <blockquote
-            dir="auto"
-            className="max-h-40 overflow-y-auto break-words rounded-lg border-s-2 border-border bg-muted/40 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]"
-          >
-            {selectionQuote}
-          </blockquote>
-          <Textarea
-            value={citationComment}
-            onChange={(event) => setCitationComment(event.target.value)}
-            aria-label="Citation comment"
-            placeholder="Optional comment"
-            rows={2}
-          />
-          <DialogFooter>
-            <Button type="button" variant="outline" className="h-11" onClick={() => setCitationOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="button" className="h-11" onClick={insertCitation}>
-              Insert citation
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={Boolean(editTarget)}
-        onOpenChange={(open) => {
-          if (!open) void cancelEdit()
-        }}
-      >
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Edit from here</DialogTitle>
-            <DialogDescription>
-              Staged with the native revert boundary. Confirm before anything is
-              kept.
-            </DialogDescription>
-          </DialogHeader>
-          {editTarget ? (
-            <>
-              <p dir="auto" className="max-h-32 overflow-y-auto break-words rounded-lg bg-muted/50 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {editTarget.text}
-              </p>
-              <div className="space-y-1 text-xs text-muted-foreground">
-                {editBusy ? (
-                  <p role="status" className="flex items-center gap-2">
-                    <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
-                    Staging native revert preview…
-                  </p>
-                ) : revert?.messageID === editTarget.id ? (
-                  <p role="status">
-                    Preview: {revert.files?.length ?? 0} file
-                    {(revert.files?.length ?? 0) === 1 ? "" : "s"} affected by the native revert.
-                  </p>
-                ) : (
-                  <p role="status">No file effects were reported for this boundary.</p>
-                )}
-                {revert?.files?.length ? (
-                  <ul aria-label="Revert preview files" className="max-h-24 overflow-y-auto">
-                    {revert.files.slice(0, 8).map((file) => (
-                      <li key={file.file} dir="ltr" className="truncate font-mono text-[10px]">
-                        {file.file} (+{file.additions}/−{file.deletions})
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-              {editError ? <p role="alert" className="text-xs text-destructive">{editError}</p> : null}
-            </>
-          ) : null}
-          <DialogFooter className="flex-col gap-2 sm:flex-row">
-            <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void cancelEdit()}>
-              Cancel
-            </Button>
-            <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void finishEdit(true)}>
-              Keep files, restore prompt
-            </Button>
-            <Button type="button" className="h-11" disabled={editBusy} onClick={() => void finishEdit(false)}>
-              Revert files and restore prompt
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      {showJump ? (
-        <Button
-          type="button"
-          variant="secondary"
-          aria-label="Scroll to latest"
-          onClick={scrollToLatest}
-          className="absolute bottom-4 left-1/2 size-11 -translate-x-1/2 rounded-full border-border bg-background text-foreground motion-reduce:transition-none"
-        >
-          <ArrowDownIcon aria-hidden="true" className="size-5" />
-        </Button>
-      ) : null}
-    </div>
-    </FindMatchContext.Provider>
-    </ToolDiffContext.Provider>
-    </ToolVisibilityContext.Provider>
-    </ToolDetailPinContext.Provider>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit from here</DialogTitle>
+              <DialogDescription>
+                Staged with the native revert boundary. Confirm before anything is
+                kept.
+              </DialogDescription>
+            </DialogHeader>
+            {editTarget ? (
+              <>
+                <p dir="auto" className="max-h-32 overflow-y-auto break-words rounded-lg bg-muted/50 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {editTarget.text}
+                </p>
+                <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  {editBusy ? (
+                    <p role="status" className="flex items-center gap-2">
+                      <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+                      Staging native revert preview…
+                    </p>
+                  ) : revert?.messageID === editTarget.id ? (
+                    <p role="status">
+                      Preview: {revert.files?.length ?? 0} file
+                      {(revert.files?.length ?? 0) === 1 ? "" : "s"} affected by the native revert.
+                    </p>
+                  ) : (
+                    <p role="status">No file effects were reported for this boundary.</p>
+                  )}
+                  {revert?.files?.length ? (
+                    <ul aria-label="Revert preview files" className="max-h-24 overflow-y-auto">
+                      {revert.files.slice(0, 8).map((file) => (
+                        <li key={file.file} dir="ltr" className="truncate font-mono text-[10px]">
+                          {file.file} (+{file.additions}/−{file.deletions})
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+                {editError ? <p role="alert" className="text-xs text-destructive">{editError}</p> : null}
+              </>
+            ) : null}
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void cancelEdit()}>
+                Cancel
+              </Button>
+              <Button type="button" variant="outline" className="h-11" disabled={editBusy} onClick={() => void finishEdit(true)}>
+                Keep files, restore prompt
+              </Button>
+              <Button type="button" className="h-11" disabled={editBusy} onClick={() => void finishEdit(false)}>
+                Revert files and restore prompt
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+      </FindMatchContext.Provider>
+      </ToolDiffContext.Provider>
+      </ToolVisibilityContext.Provider>
+      </ToolDetailPinContext.Provider>
+    </MessageScrollerProvider>
   )
 }

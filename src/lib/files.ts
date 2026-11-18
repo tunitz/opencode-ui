@@ -1,9 +1,6 @@
 import type { FileDiffInfo, ModelInfo } from "@/lib/opencode"
 
 export const MAX_FILE_PREVIEW_BYTES = 256 * 1024
-export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
-export const MAX_TOTAL_ATTACHMENT_BYTES = 16 * 1024 * 1024
-export const MAX_ATTACHMENT_COUNT = 4
 export const MAX_DIFF_PATCH_CHARS = 200_000
 
 export type ProjectEntry = {

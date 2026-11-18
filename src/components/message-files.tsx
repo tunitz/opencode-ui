@@ -6,22 +6,31 @@ import {
   FileTextIcon,
   ImageOffIcon,
 } from "lucide-react"
-import { Card } from "@openuidev/react-ui/Card"
-import { CardHeader } from "@openuidev/react-ui/CardHeader"
-import { Image } from "@openuidev/react-ui/Image"
-import "@openuidev/react-ui/styles/card.css"
-import "@openuidev/react-ui/styles/cardHeader.css"
-import "@openuidev/react-ui/styles/image.css"
 
 import { PdfPreview } from "@/components/pdf-preview"
 import { decodePreviewText } from "@/components/preview-text-data"
+import {
+  Attachment,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+  AttachmentTrigger,
+} from "@/components/ui/attachment"
 import { Button } from "@/components/ui/button"
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "@/components/ui/code-block"
 import {
   Dialog,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { formatFileSize, isSafeImageMime } from "@/lib/files"
 import { cn } from "@/lib/utils"
 
@@ -92,20 +101,27 @@ function TextPreview({ file }: { file: DisplayFile }) {
   }
 
   const language = extension(file)
+  const title = [
+    fileName(file),
+    language,
+    decoded.truncated ? "preview truncated" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+
   return (
-    <div className="min-w-0 space-y-2">
-      <div className="min-w-0 pe-12">
-        <p className="break-all text-xs text-muted-foreground" dir="ltr">
-          {fileName(file)}
-          {language ? ` · ${language}` : ""}
-          {decoded.truncated ? " · preview truncated" : ""}
-        </p>
-      </div>
-      <ScrollArea viewportClassName="max-h-[68svh]" className="rounded-xl border border-border/70 bg-muted/30">
-        <pre className="min-w-full p-3 font-mono text-[12px] leading-5 whitespace-pre" dir="ltr" tabIndex={0}>
-          <code>{decoded.text}</code>
-        </pre>
-      </ScrollArea>
+    <div className="flex min-w-0 flex-col gap-2">
+      <CodeBlock className="max-w-full">
+        <CodeBlockHeader>
+          <CodeBlockTitle title={title} dir="ltr">{title}</CodeBlockTitle>
+          <CodeBlockActions>
+            <CodeBlockCopyButton value={decoded.text} />
+          </CodeBlockActions>
+        </CodeBlockHeader>
+        <CodeBlockContent wrap className="max-h-64" dir="ltr">
+          {decoded.text}
+        </CodeBlockContent>
+      </CodeBlock>
     </div>
   )
 }
@@ -164,51 +180,78 @@ function AttachmentChip({
 }) {
   const [failed, setFailed] = useState(false)
   const kind = previewKind(file)
+  const isImage = kind === "image"
+  // Large data URLs bypass the inline preview cap and fall back to this chip;
+  // keep the name and size visible without ever rendering the oversized URL.
+  const sizeLabel = typeof file.size === "number" ? formatFileSize(file.size) : null
 
   if (kind) {
     return (
-      <button
-        type="button"
-        aria-label={`Preview ${imageLabel(file)}`}
-        aria-haspopup="dialog"
-        onClick={(event) => onPreview(kind, event.currentTarget)}
+      <Attachment
+        state="done"
+        size="sm"
         className={cn(
-          "flex h-11 shrink-0 items-center justify-center gap-1.5 overflow-hidden border border-border/70 bg-muted text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          kind === "image"
-            ? "size-11 rounded-lg"
-            : "max-w-[8.5rem] rounded-lg px-2 text-xs"
+          "min-h-11 cursor-pointer overflow-hidden border border-border/70 bg-muted p-0 text-muted-foreground",
+          isImage ? "size-11 rounded-lg" : "max-w-[8.5rem] rounded-lg"
         )}
       >
-        {kind === "image" ? (
-          failed ? (
-            <ImageOffIcon aria-hidden="true" className="size-4" />
+        <AttachmentMedia
+          variant={isImage ? "image" : "icon"}
+          className={cn(
+            "size-full rounded-none",
+            isImage ? "bg-transparent" : "size-11"
+          )}
+        >
+          {isImage ? (
+            failed ? (
+              <ImageOffIcon aria-hidden="true" className="size-4" />
+            ) : (
+              <img
+                src={file.dataUrl}
+                alt=""
+                loading="lazy"
+                className="size-full object-cover"
+                onError={() => setFailed(true)}
+              />
+            )
           ) : (
-            <img
-              src={file.dataUrl}
-              alt=""
-              loading="lazy"
-              className="size-full object-cover"
-              onError={() => setFailed(true)}
-            />
-          )
-        ) : (
-          <>
             <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
-            <span className="truncate">{fileName(file)}</span>
-          </>
+          )}
+        </AttachmentMedia>
+        {isImage ? null : (
+          <AttachmentContent className="pe-2">
+            <AttachmentTitle className="text-xs">{fileName(file)}</AttachmentTitle>
+            {sizeLabel ? (
+              <AttachmentDescription className="text-[10px]">{sizeLabel}</AttachmentDescription>
+            ) : null}
+          </AttachmentContent>
         )}
-      </button>
+        <AttachmentTrigger
+          aria-label={`Preview ${imageLabel(file)}`}
+          aria-haspopup="dialog"
+          onClick={(event) => onPreview(kind, event.currentTarget)}
+        />
+      </Attachment>
     )
   }
 
   return (
-    <span
-      className="flex h-11 min-w-0 max-w-[8.5rem] shrink-0 items-center gap-1.5 rounded-lg border border-border/70 bg-background/60 px-2 text-xs text-muted-foreground"
+    <Attachment
+      state="done"
+      size="sm"
       aria-label={`${imageLabel(file)}, preview unavailable`}
+      className="flex min-h-11 max-w-[8.5rem] items-center overflow-hidden rounded-lg border border-border/70 bg-background/60 p-0 text-muted-foreground"
     >
-      <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
-      <span className="truncate">{fileName(file)}</span>
-    </span>
+      <AttachmentMedia variant="icon" className="size-11 rounded-none bg-transparent">
+        <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
+      </AttachmentMedia>
+      <AttachmentContent className="pe-2">
+        <AttachmentTitle className="text-xs">{fileName(file)}</AttachmentTitle>
+        {sizeLabel ? (
+          <AttachmentDescription className="text-[10px]">{sizeLabel}</AttachmentDescription>
+        ) : null}
+      </AttachmentContent>
+    </Attachment>
   )
 }
 
@@ -335,38 +378,32 @@ export function MessageFiles({ files }: { files: DisplayFile[] }) {
           ) : previewFile && kind === "text" ? (
             <TextPreview file={previewFile} />
           ) : previewFile && kind === "image" && !previewError ? (
-            <Card
-              variant="sunk"
-              width="full"
-              className="openui-rich-card min-w-0"
-            >
-              <CardHeader
-                icon={<FileTextIcon aria-hidden="true" className="size-4" />}
-                title={
-                  <span className="block min-w-0 truncate" dir="ltr">
-                    {fileName(previewFile)}
-                  </span>
-                }
-                subtitle={[
-                  previewFile.mime,
-                  typeof previewFile.size === "number"
-                    ? formatFileSize(previewFile.size)
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              />
+            <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-border/70 bg-muted/30 p-2">
+              <div className="flex min-w-0 items-center gap-2 pe-10">
+                <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
+                <span className="min-w-0 truncate" dir="ltr">
+                  {fileName(previewFile)}
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {[
+                    previewFile.mime,
+                    typeof previewFile.size === "number"
+                      ? formatFileSize(previewFile.size)
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              </div>
               <div
                 className="mx-auto min-w-0 w-full"
                 style={{ maxWidth: "min(100%, calc(52svh * 16 / 9))" }}
               >
-                <Image
+                <img
                   src={previewFile.dataUrl ?? ""}
                   alt={fileName(previewFile)}
-                  aspectRatio="16:9"
-                  scale="fit"
-                  className="w-full"
-                  styles={{ maxHeight: "52svh" }}
+                  loading="lazy"
+                  className="max-h-[52svh] w-full object-contain"
                   onError={() => setPreviewError(true)}
                 />
               </div>
@@ -400,7 +437,7 @@ export function MessageFiles({ files }: { files: DisplayFile[] }) {
                   </Button>
                 </div>
               ) : null}
-            </Card>
+            </div>
           ) : previewFile && kind === "image" ? (
             <div role="alert" className="flex min-h-44 items-center justify-center gap-2 p-6 text-sm text-destructive">
               <ImageOffIcon aria-hidden="true" className="size-5" />
