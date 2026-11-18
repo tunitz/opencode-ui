@@ -67,6 +67,7 @@ import {
   selectableModels,
   variantsForModel,
 } from "@/lib/session-selection"
+import { useModelFavorites } from "@/lib/model-favorites"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 
@@ -279,6 +280,9 @@ function AgentSettingSelect({
   options,
   disabled,
   busy,
+  ariaLabel,
+  favorites,
+  onToggleFavorite,
   onValueChange,
 }: {
   label: string
@@ -286,6 +290,9 @@ function AgentSettingSelect({
   options: Option[]
   disabled?: boolean
   busy?: boolean
+  ariaLabel?: string
+  favorites?: ReadonlySet<string>
+  onToggleFavorite?: (value: string) => void
   onValueChange: (value: string) => void
 }) {
   return (
@@ -293,11 +300,14 @@ function AgentSettingSelect({
       <FieldLabel>{label}</FieldLabel>
       <PickerSelect
         label={label}
+        ariaLabel={ariaLabel}
         value={value}
         options={options}
         disabled={disabled || busy}
         busy={busy}
         showDetail={label === "Model"}
+        favorites={favorites}
+        onToggleFavorite={onToggleFavorite}
         onValueChange={onValueChange}
         triggerClassName="px-2.5 text-[14px]"
       />
@@ -416,6 +426,7 @@ export function AgentConfigSettings({
     "model" | "agent" | "permissions" | null
   >("model")
   const [expandedRuleKey, setExpandedRuleKey] = useState<string | null>(null)
+  const { favorites, toggle: toggleFavorite } = useModelFavorites()
   const requestRef = useRef(0)
   const catalogRef = useRef<AgentConfigCatalog | null>(null)
   const wasActiveRef = useRef(active)
@@ -908,12 +919,15 @@ export function AgentConfigSettings({
               <FieldGroup>
                 <AgentSettingSelect
                   label="Model"
+                  ariaLabel={`Agent model, ${base}`}
                   value={base}
                   options={modelOptions}
                   disabled={
                     busy || selectedReadonly || nav.modelsStatus !== "ready"
                   }
                   busy={modelBusy}
+                  favorites={favorites}
+                  onToggleFavorite={toggleFavorite}
                   onValueChange={(value) =>
                     setDraft((current) => ({ ...current, model: value }))
                   }

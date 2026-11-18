@@ -72,6 +72,22 @@ export function matchesPickerOption(
   return matchesPickerSearchKey(pickerOptionSearchKey(option), query)
 }
 
+/**
+ * Resets a picker list to its top on open. A virtualized list owns a nested
+ * scroll container, so writing to `ComboboxPrimitive.List` is a no-op there.
+ * Returns whether a scroll container was found.
+ */
+export function resetPickerScroll(
+  isVirtualized: boolean,
+  list: HTMLElement | null,
+  virtualScroller: HTMLElement | null
+): boolean {
+  const target = isVirtualized ? virtualScroller : list
+  if (!target) return false
+  target.scrollTop = 0
+  return true
+}
+
 type PickerOptionRowProps = {
   option: PickerOption
   favorite: boolean
@@ -182,18 +198,20 @@ type Virtualizer = ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>
 function VirtualizedPickerList({
   open,
   virtualizerRef,
+  scrollElementRef,
   favorites,
   showFavorite,
   onToggleFavorite,
 }: {
   open: boolean
   virtualizerRef: React.RefObject<Virtualizer | null>
+  /** Owned by `PickerSelect` so the open-reset can reach the real scroller. */
+  scrollElementRef: React.RefObject<HTMLDivElement | null>
   favorites?: ReadonlySet<string>
   showFavorite: boolean
   onToggleFavorite?: (value: string) => void
 }) {
   const filteredItems = ComboboxPrimitive.useFilteredItems<PickerOption>()
-  const scrollElementRef = useRef<HTMLDivElement | null>(null)
 
   // The official Base UI windowed-list recipe requires TanStack Virtual. Its
   // instance is intentionally recreated on filter/scroll changes; this leaf
@@ -220,7 +238,7 @@ function VirtualizedPickerList({
       scrollElementRef.current = element
       if (element) virtualizer.measure()
     },
-    [virtualizer]
+    [scrollElementRef, virtualizer]
   )
 
   const totalSize = virtualizer.getTotalSize()
@@ -318,7 +336,12 @@ export function PickerSelect({
   const virtualizerRef = useRef<Virtualizer | null>(null)
   const isVirtualized = options.length > VIRTUALIZE_THRESHOLD
   const listRef = useRef<HTMLDivElement | null>(null)
+  const virtualScrollRef = useRef<HTMLDivElement | null>(null)
   const resetPendingRef = useRef(false)
+  // Base UI highlights the selected item on open. In a virtualized list that
+  // highlight would otherwise drive `scrollToIndex` and open mid-list; ignore
+  // it only until the open transition's reset has been applied.
+  const justOpenedRef = useRef(false)
 
   // One lowercase search string per option, rebuilt only when the catalog
   // changes. Query tokenization happens once per deferred keystroke below.
@@ -342,23 +365,29 @@ export function PickerSelect({
   }, [options, searchKeys, deferredQuery])
 
   // One reset per open. Base UI scrolls its initial highlight into view
-  // asynchronously, so the reset happens once in a rAF after the portalled
-  // list has mounted and that scroll has been applied.
-  const resetScroll = useCallback(() => {
-    const list = listRef.current
-    if (list) list.scrollTop = 0
-  }, [])
+  // asynchronously, so the reset happens in a rAF after the portalled list
+  // has mounted, with one deferred pass after its highlight commit.
+  const resetScroll = useCallback(
+    () => resetPickerScroll(isVirtualized, listRef.current, virtualScrollRef.current),
+    [isVirtualized]
+  )
 
   useLayoutEffect(() => {
     if (!open) {
       resetPendingRef.current = false
+      justOpenedRef.current = false
       return
     }
     resetPendingRef.current = true
+    justOpenedRef.current = true
     const frame = requestAnimationFrame(() => {
       if (!resetPendingRef.current) return
-      resetPendingRef.current = false
       resetScroll()
+      queueMicrotask(() => {
+        if (!resetPendingRef.current) return
+        resetScroll()
+        resetPendingRef.current = false
+      })
     })
     return () => cancelAnimationFrame(frame)
   }, [open, resetScroll])
@@ -369,8 +398,17 @@ export function PickerSelect({
   }, [])
 
   const handleOpenChange = useCallback((next: boolean) => {
+    // Set before React renders the popup: Base UI emits the open highlight in
+    // a child layout effect, which can run before this component's own effect.
+    justOpenedRef.current = next
     setOpen(next)
     if (!next) setInputValue("")
+  }, [])
+
+  const handleInputValueChange = useCallback((next: string) => {
+    setInputValue(next)
+    // Once the user types, "none" highlights should scroll again as usual.
+    if (next !== "") justOpenedRef.current = false
   }, [])
 
   const selected = useMemo(
@@ -388,6 +426,7 @@ export function PickerSelect({
       <VirtualizedPickerList
         open={open}
         virtualizerRef={virtualizerRef}
+        scrollElementRef={virtualScrollRef}
         favorites={favorites}
         showFavorite={Boolean(onToggleFavorite)}
         onToggleFavorite={onToggleFavorite}
@@ -413,15 +452,19 @@ export function PickerSelect({
       open={open}
       onOpenChange={handleOpenChange}
       inputValue={inputValue}
-      onInputValueChange={setInputValue}
+      onInputValueChange={handleInputValueChange}
       autoHighlight={false}
       virtualized={isVirtualized}
       onItemHighlighted={(_item, { reason, index }) => {
         const virtualizer = virtualizerRef.current
         if (!virtualizer) return
         const isEnd = index === virtualizer.options.count - 1
+        // `reason: "none"` also fires when the popup opens on the selected
+        // item. Ignore that first jump; keep it for typing/filtering and keep
+        // keyboard edge navigation unchanged.
         const shouldScroll =
-          reason === "none" || (reason === "keyboard" && (index === 0 || isEnd))
+          (reason === "none" && !justOpenedRef.current) ||
+          (reason === "keyboard" && (index === 0 || isEnd))
         if (shouldScroll) {
           queueMicrotask(() => {
             virtualizer.scrollToIndex(index, {
