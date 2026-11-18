@@ -100,6 +100,9 @@ settings. Run `bun run start --help` or `bun bin/opencode-ui.ts --help` for the 
 - `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
 - `OPENCODE_UI_AUTH_STATE`: overrides the password/session state file, which defaults to
   `~/.local/share/opencode-ui/auth/state.json`.
+- `OPENCODE_UI_SESSION_COOKIE`: overrides the session cookie name (default `opencode_ui_session`).
+  Set a distinct name for a second UI instance on the same host, since cookies are scoped to a host
+  and ignore port numbers.
 - `OPENCODE_NOTES_DATA_DIR`: overrides the Notes data directory, which defaults to
   `$XDG_DATA_HOME/opencode-notes/v1` or `~/.local/share/opencode-notes/v1`.
 - `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
@@ -138,9 +141,10 @@ again; it never writes engine configuration files. The engine may need a restart
 appear, and the section reports that state. If you previously installed the notes engine plugin or
 its `~/.config/opencode/plugins/...` symlink, remove it before enabling Notes here.
 
-The MCP server exposes 13 tools (`notes_list`, `notes_get`, `notes_create`, `notes_update`,
+The MCP server exposes 15 tools (`notes_list`, `notes_get`, `notes_create`, `notes_update`,
 `notes_delete`, `notes_search`, `notes_history`, `notes_restore`, `notes_spaces`,
-`notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_read`), three
+`notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_create`,
+`notes_attachment_read`, `notes_attachment_delete`), three
 prompts (`notes:capture`, `notes:daily`, `notes:review`), and note/space resources. The
 [notes package README](plugins/notes/README.md) lists arguments and behavior.
 

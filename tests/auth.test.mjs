@@ -227,4 +227,27 @@ describe("session cookie", () => {
     expect(clearSessionCookie(false)).toBe("opencode_ui_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
     expect(clearSessionCookie(true).endsWith("; Secure")).toBe(true)
   })
+
+  test("a custom cookie name avoids collisions between instances on one host", async () => {
+    const { stateFile } = await workspace()
+    const name = "opencode_ui_session_dev5182"
+    const auth = createAuthService({
+      stateFile,
+      cookieName: name,
+      failureDelayMs: 0,
+    })
+    const token = await auth.setup(password)
+    expect(buildSessionCookie(token, false, name).startsWith(`${name}=`)).toBe(true)
+    expect(clearSessionCookie(false, name).startsWith(`${name}=`)).toBe(true)
+
+    const url = "http://192.168.31.10:5182/api/ui/auth/status"
+    expect(await auth.authenticate(new Request(url, { headers: { cookie: `${name}=${token}` } }))).toBe(true)
+    expect(await auth.authenticate(withCookie(token, url))).toBe(false)
+  })
+
+  test("rejects an invalid custom cookie name", () => {
+    expect(() => createAuthService({ cookieName: "bad; name" })).toThrow(
+      "Invalid session cookie name"
+    )
+  })
 })

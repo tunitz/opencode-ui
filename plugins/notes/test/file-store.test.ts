@@ -120,6 +120,18 @@ describe("FileNotesStore", () => {
     })
   })
 
+  test("does not delete a lock that was replaced by another owner", async () => {
+    const dataDir = await tempDir()
+    const store = new FileNotesStore({ dataDir, now: clock(), createID: ids() })
+    const lockPath = join(dataDir, "notes", "owner-test.json.lock")
+
+    await store.transaction("note:owner-test", async () => {
+      await writeFile(lockPath, "another-owner\n")
+    })
+
+    expect(await readFile(lockPath, "utf8")).toBe("another-owner\n")
+  })
+
   test("ignores corrupt record files while listing valid ones", async () => {
     const dataDir = await tempDir()
     const store = new FileNotesStore({ dataDir, now: clock(), createID: ids() })

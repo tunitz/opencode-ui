@@ -205,7 +205,10 @@ export async function startBunServer(options: BunServerOptions = {}) {
     throw new BunConfigurationError("Invalid OpenCode service registration: expected a JSON object with a nonempty password. See README.md → Prerequisites; select a valid existing registration with --service-file, and never pass credentials on the command line.")
   }
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-  const auth = createAuthService({ required: !isLoopbackHost(hostname) })
+  const auth = createAuthService({
+    required: !isLoopbackHost(hostname),
+    cookieName: process.env.OPENCODE_UI_SESSION_COOKIE,
+  })
   const agents = createAgentConfigService({ opencodeBaseUrl: target, authorization })
   const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })

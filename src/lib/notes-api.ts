@@ -169,19 +169,21 @@ export async function notesRequest<T>(
 }
 
 /**
- * Subscribe to notes change events. EventSource reconnects on its own, so
- * transport failures stay silent: the next note read returns the truth.
+ * Subscribe to notes change events. EventSource reconnects on its own, but a
+ * half-open connection can stay "connected" while delivering nothing. A
+ * watchdog forces a fresh stream and a refetch after a silent stall.
  */
 export function subscribeNotesEvents(
-  onChange: (at: number) => void
+  onChange: (at: number) => void,
+  staleMs = 45_000
 ): () => void {
   if (typeof EventSource === "undefined") return () => undefined
-  let source: EventSource
-  try {
-    source = new EventSource("/api/ui/notes/events")
-  } catch {
-    return () => undefined
-  }
+
+  const STALE_MS = staleMs
+  let source: EventSource | null = null
+  let staleTimer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+
   const handleChange = (event: MessageEvent) => {
     let at = Date.now()
     try {
@@ -191,18 +193,48 @@ export function subscribeNotesEvents(
       // A malformed payload still means "something changed".
     }
     onChange(at)
+    arm()
   }
-  const handleOpen = () => onChange(Date.now())
-  source.addEventListener("changed", handleChange as EventListener)
-  source.addEventListener("open", handleOpen)
-  return () => {
-    source.removeEventListener("changed", handleChange as EventListener)
-    source.removeEventListener("open", handleOpen)
+  const handleOpen = () => {
+    onChange(Date.now())
+    arm()
+  }
+  const closeSource = () => {
+    if (!source) return
     try {
+      source.removeEventListener("changed", handleChange as EventListener)
+      source.removeEventListener("open", handleOpen)
       source.close()
     } catch {
       // Already closed.
     }
+    source = null
+  }
+  function arm() {
+    if (staleTimer) clearTimeout(staleTimer)
+    staleTimer = setTimeout(() => {
+      if (stopped) return
+      closeSource()
+      onChange(Date.now())
+      open()
+    }, STALE_MS)
+  }
+  function open() {
+    try {
+      source = new EventSource("/api/ui/notes/events")
+    } catch {
+      return
+    }
+    source.addEventListener("changed", handleChange as EventListener)
+    source.addEventListener("open", handleOpen)
+    arm()
+  }
+
+  open()
+  return () => {
+    stopped = true
+    if (staleTimer) clearTimeout(staleTimer)
+    closeSource()
   }
 }
 

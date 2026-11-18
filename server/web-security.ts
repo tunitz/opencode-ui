@@ -36,6 +36,7 @@ export function secureWebResponse(request: Request, response: Response): Respons
   if (isProtectedPath(new URL(request.url).pathname)) {
     const isEventStream = headers.get("content-type")?.toLowerCase().includes("text/event-stream")
     headers.set("cache-control", isEventStream ? "no-cache, no-transform" : "no-store")
+    if (isEventStream) headers.set("x-accel-buffering", "no")
     const vary = headers.get("vary")
     if (!vary) headers.set("vary", "Origin")
     else if (!vary.split(",").some((value) => ["origin", "*"].includes(value.trim().toLowerCase()))) {

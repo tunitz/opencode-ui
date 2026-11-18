@@ -3,8 +3,10 @@ import { NOTES_TOOL_SCHEMAS } from "./schemas.js"
 import type { NotesService } from "../service.js"
 import {
   NotesError,
+  type CreateAttachmentInput,
   type CreateNoteInput,
   type CreateSpaceInput,
+  type DeleteAttachmentInput,
   type DeleteNoteInput,
   type DeleteSpaceInput,
   type GetNoteInput,
@@ -292,12 +294,30 @@ export const NOTES_TOOLS: readonly NotesTool[] = [
       context.service.deleteSpace(asInput<DeleteSpaceInput>(input)),
   },
   {
+    name: "notes_attachment_create",
+    title: "Attach file to note",
+    description:
+      "Attach a file or image to a note from base64 bytes. Limits: 4 files per note, 4 MiB per file, 8 MiB total; active HTML/SVG/JavaScript types are rejected. Pass expectedRevision to reject a stale note. Returns attachment metadata and the updated note. Reference the result in the note body with ![name](attachment://id) for images or [name](attachment://id) for files.",
+    inputSchema: NOTES_TOOL_SCHEMAS.createAttachment,
+    run: (context, input) =>
+      context.service.createAttachment(asInput<CreateAttachmentInput>(input)),
+  },
+  {
     name: "notes_attachment_read",
     title: "Read attachment",
     description:
       "Read a note attachment as text. Only text/*, application/json, and application/xml attachments up to 64 KiB are decoded; images, PDFs, and other binary data return metadata only. Bytes are never returned as base64.",
     inputSchema: NOTES_TOOL_SCHEMAS.readAttachment,
     run: readAttachmentAsText,
+  },
+  {
+    name: "notes_attachment_delete",
+    title: "Delete note attachment",
+    description:
+      "Delete one attachment from a note. Pass expectedRevision to reject a stale delete. Also remove any attachment:// reference from the note body when it is no longer wanted.",
+    inputSchema: NOTES_TOOL_SCHEMAS.deleteAttachment,
+    run: (context, input) =>
+      context.service.deleteAttachment(asInput<DeleteAttachmentInput>(input)),
   },
 ]
 

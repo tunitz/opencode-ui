@@ -70,7 +70,9 @@ persisted or logged. Passwords are 8–256 characters. Sessions last 30 days, ar
 pruned on each auth write.
 
 - Cookie: `opencode_ui_session=<token>; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`, with
-  `Secure` only when the request URL is HTTPS.
+  `Secure` only when the request URL is HTTPS. `OPENCODE_UI_SESSION_COOKIE` overrides the cookie
+  name; keep the default unless running another UI instance on the same host, because cookies are
+  host-scoped and ignore port numbers.
 - Gating is active when a password is configured **or** the resolved bind host is not loopback
   (`0.0.0.0` and LAN addresses count as non-loopback). When inactive, requests pass through.
 - When active, every path starting with `/api` requires a valid session cookie, including SSE and

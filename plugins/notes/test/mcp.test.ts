@@ -72,7 +72,7 @@ function resourceText(contents: readonly unknown[]): string {
 }
 
 describe("Notes MCP server", () => {
-  test("lists 13 tools with closed object schemas", async () => {
+  test("lists 15 tools with closed object schemas", async () => {
     const { client, close } = await connect()
     try {
       const result = await client.listTools()
@@ -89,7 +89,9 @@ describe("Notes MCP server", () => {
         "notes_create_space",
         "notes_update_space",
         "notes_delete_space",
+        "notes_attachment_create",
         "notes_attachment_read",
+        "notes_attachment_delete",
       ])
       expect(result.tools.map((tool) => tool.name)).toEqual(NOTES_TOOL_NAMES)
       for (const tool of result.tools) {
@@ -159,6 +161,55 @@ describe("Notes MCP server", () => {
       ) as unknown as { id?: string; title?: string }
       // notes_get returns the note directly, not wrapped.
       expect(got.title).toBe("Deploy checklist")
+    } finally {
+      await close()
+    }
+  })
+
+  test("creates, reads and deletes a note attachment", async () => {
+    const { client, close } = await connect()
+    try {
+      const created = output(
+        await call(client, "notes_create", {
+          title: "With attachment",
+          body: "See ![note](attachment://placeholder)",
+        })
+      ) as unknown as { id: string; revision: number }
+      const attached = output(
+        await call(client, "notes_attachment_create", {
+          noteID: created.id,
+          expectedRevision: created.revision,
+          name: "hello.txt",
+          mime: "text/plain",
+          data: Buffer.from("hello notes").toString("base64"),
+        })
+      ) as unknown as {
+        attachment: { id: string; name: string; size: number }
+        note: { revision: number; attachments: unknown[] }
+      }
+      expect(attached.attachment.name).toBe("hello.txt")
+      expect(attached.attachment.size).toBe(11)
+      expect(attached.note.attachments).toHaveLength(1)
+      expect(attached.note.revision).toBe(created.revision + 1)
+
+      const read = output(
+        await call(client, "notes_attachment_read", {
+          noteID: created.id,
+          attachmentID: attached.attachment.id,
+        })
+      ) as unknown as { readable: boolean; text: string }
+      expect(read.readable).toBe(true)
+      expect(read.text).toBe("hello notes")
+
+      const deleted = output(
+        await call(client, "notes_attachment_delete", {
+          noteID: created.id,
+          attachmentID: attached.attachment.id,
+          expectedRevision: attached.note.revision,
+        })
+      ) as unknown as { note: { attachments: unknown[]; revision: number } }
+      expect(deleted.note.attachments).toHaveLength(0)
+      expect(deleted.note.revision).toBe(attached.note.revision + 1)
     } finally {
       await close()
     }

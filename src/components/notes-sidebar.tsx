@@ -44,6 +44,11 @@ import { useNotesPluginState } from "@/lib/notes-plugin-state"
 import { useOptionalWorkspace } from "@/components/workspace-context"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
+const PINNED_PREVIEW_LIMIT = 5
+// Matches the notes service LIMITS.list maximum, so "Show more" returns every
+// pinned note the service can list in a single page.
+const PINNED_EXPANDED_LIMIT = 1_000
+
 export type NotesContextValue = {
   /** Notes surfaces are allowed: true while the plugin state is unknown. */
   notesEnabled: boolean
@@ -67,6 +72,8 @@ export type NotesContextValue = {
   connected: boolean
   refreshKey: string
   refreshPinned: () => void
+  pinnedExpanded: boolean
+  setPinnedExpanded: (expanded: boolean) => void
 }
 const NotesContext = createContext<NotesContextValue | null>(null)
 
@@ -140,6 +147,7 @@ export function NotesProvider({
     error: boolean
   } | null>(null)
   const [pinnedRequest, setPinnedRequest] = useState(0)
+  const [pinnedExpanded, setPinnedExpanded] = useState(false)
 
   // One adapter per directory. Drafts are kept in a map keyed by adapter, so a
   // cached adapter is what lets drafts survive leaving a project and returning.
@@ -166,7 +174,10 @@ export function NotesProvider({
       const current = ++token
       try {
         const [listResult, spacesResult] = await Promise.allSettled([
-          listNotesScoped(directory, { pinned: true, limit: 5 }),
+          listNotesScoped(directory, {
+            pinned: true,
+            limit: pinnedExpanded ? PINNED_EXPANDED_LIMIT : PINNED_PREVIEW_LIMIT,
+          }),
           listSpacesScoped(directory),
         ])
         if (listResult.status === "rejected") throw listResult.reason
@@ -209,7 +220,7 @@ export function NotesProvider({
       if (timer) clearTimeout(timer)
       stop()
     }
-  }, [directory, pinnedRequest, notesEnabled])
+  }, [directory, pinnedRequest, notesEnabled, pinnedExpanded])
 
   const available = notesEnabled && Boolean(directory)
   const showWorkspace = notesEnabled && (workspace
@@ -293,6 +304,8 @@ export function NotesProvider({
     connected: nav.connection === "connected",
     refreshKey: "",
     refreshPinned,
+    pinnedExpanded,
+    setPinnedExpanded,
   }
   return (
     <NotesContext.Provider value={value}>
@@ -463,12 +476,29 @@ export function NotesSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 ))}
               </ul>
             )}
-            {notes.available && notes.pinnedTotal > notes.pinnedNotes.length && (
-              <p className="px-2.5 py-1 text-xs text-muted-foreground">
-                Showing {notes.pinnedNotes.length} of {notes.pinnedTotal}; open
-                all notes to see the rest.
-              </p>
-            )}
+            {notes.available &&
+            !notes.pinnedLoading &&
+            !notes.pinnedError &&
+            notes.pinnedTotal > PINNED_PREVIEW_LIMIT ? (
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label={
+                  notes.pinnedExpanded
+                    ? "Show less"
+                    : `Show ${notes.pinnedTotal - notes.pinnedNotes.length} more`
+                }
+                aria-expanded={notes.pinnedExpanded}
+                className="h-11 w-full justify-start px-2.5 text-xs text-muted-foreground"
+                onClick={() =>
+                  notes.setPinnedExpanded(!notes.pinnedExpanded)
+                }
+              >
+                {notes.pinnedExpanded
+                  ? "Show less"
+                  : `Show ${notes.pinnedTotal - notes.pinnedNotes.length} more`}
+              </Button>
+            ) : null}
           </AccordionSection>
         </Accordion>
       </div>

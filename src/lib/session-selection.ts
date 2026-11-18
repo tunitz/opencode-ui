@@ -116,6 +116,28 @@ export function defaultNewSessionModel(models: ModelInfo[]): ModelRef | null {
     : null
 }
 
+/**
+ * The model an agent asks for, only when it is genuinely selectable in the
+ * supplied catalog. An unavailable agent model is reported as absent rather
+ * than silently replaced with another (possibly paid) model.
+ */
+export function agentModelDefaults(
+  agent: AgentInfo | null | undefined,
+  models: ModelInfo[]
+): ModelRef | null {
+  if (!agent?.model) return null
+  const info = models.find(
+    (candidate) =>
+      candidate.providerID === agent.model!.providerID &&
+      candidate.id === agent.model!.id
+  )
+  if (!info) return null
+  const variant = agent.model.variant
+  return variant && variantsForModel(info).includes(variant)
+    ? { ...agent.model, variant }
+    : buildModelRef(info)
+}
+
 /** True when a session's model exists in the loaded catalog (honest availability). */
 export function isModelInCatalog(
   model: ModelRef | null | undefined,

@@ -304,7 +304,14 @@ test("a custom path resolves to the nearest known project and gates the session 
       input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
     )
     expect(primaryButton().props.disabled).toBe(false)
-    expect(JSON.stringify(root.toJSON())).toContain("No worktrees for this directory.")
+    // One active project now drives the list, Create/Refresh and session start.
+    const actionButton = (name) =>
+      root.root
+        .findAllByType("button")
+        .find((button) => textOf(button).includes(name))
+    expect(actionButton("Refresh").props.disabled).toBe(false)
+    expect(actionButton("Create worktree").props.disabled).toBe(false)
+    expect(JSON.stringify(root.toJSON())).toContain("No saved worktrees.")
 
     await act(async () => primaryButton().props.onClick())
     await settle(4)

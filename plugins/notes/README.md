@@ -249,7 +249,14 @@ record wins.
 | `notes_create_space` | Create a Global or project space |
 | `notes_update_space` | Rename, re-scope, or pin a space |
 | `notes_delete_space` | Delete an empty space |
+| `notes_attachment_create` | Attach a file/image from base64 bytes (4 files, 4 MiB each, 8 MiB total); rejects active types |
 | `notes_attachment_read` | Read a text attachment (≤64 KiB); binary returns metadata only |
+| `notes_attachment_delete` | Delete one attachment by ID; pass `expectedRevision` to reject stale deletes |
+
+Created attachments are referenced in note bodies as `![name](attachment://id)`
+for images or `[name](attachment://id)` for other files. The agent should pass
+the `expectedRevision` from a recent `notes_get` when attaching or deleting, so
+a concurrent edit is reported instead of overwritten.
 
 `notes_list`, `notes_search`, and `notes_spaces` accept `directory` and default it to
 `process.cwd()`. Inputs are closed JSON Schema objects (`additionalProperties:

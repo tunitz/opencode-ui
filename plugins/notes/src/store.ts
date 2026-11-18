@@ -299,12 +299,15 @@ export class FileNotesStore implements NotesStore {
     operation: () => Promise<T>
   ): Promise<T> {
     await ensureDir(dirname(lockPath))
+    // A unique owner tag prevents a timed-out holder from deleting a newer
+    // holder's lock in its finally block.
+    const owner = `${process.pid}:${globalThis.crypto.randomUUID()}`
     let acquired = false
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
       try {
         const handle = await open(lockPath, "wx", 0o600)
         try {
-          await handle.writeFile(`${process.pid}\n`)
+          await handle.writeFile(`${owner}\n`)
         } finally {
           await handle.close()
         }
@@ -334,7 +337,10 @@ export class FileNotesStore implements NotesStore {
     try {
       return await operation()
     } finally {
-      await unlink(lockPath).catch(() => undefined)
+      const current = await readFile(lockPath, "utf8").catch(() => null)
+      if (current?.trim() === owner) {
+        await unlink(lockPath).catch(() => undefined)
+      }
     }
   }
 

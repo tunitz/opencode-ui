@@ -334,6 +334,20 @@ test("change events are read from the notes SSE endpoint and cleaned up", () => 
   expect(source.listeners.get("changed").size).toBe(0)
 })
 
+test("a silent notes stream is restarted and forces a refetch", async () => {
+  FakeEventSource.instances = []
+  globalThis.EventSource = FakeEventSource
+  const seen = []
+  const stop = subscribeNotesEvents((at) => seen.push(at), 20)
+  const first = FakeEventSource.instances[0]
+  await new Promise((resolve) => setTimeout(resolve, 70))
+  expect(first.closed).toBe(true)
+  expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2)
+  expect(seen.length).toBeGreaterThanOrEqual(1)
+  stop()
+  expect(FakeEventSource.instances.every((instance) => instance.closed)).toBe(true)
+})
+
 test("missing EventSource support stays silent", () => {
   delete globalThis.EventSource
   const stop = subscribeNotesEvents(() => {

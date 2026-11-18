@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { ChevronRightIcon, FolderIcon, FolderOpenIcon, LoaderCircleIcon, PlusIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { PickerSelect } from "@/components/ui/picker-select"
 import {
   Dialog,
   DialogClose,
@@ -13,21 +14,29 @@ import {
 import { resolveNewSessionDefaults } from "@/lib/new-session-defaults"
 import { newSessionProjectError } from "@/lib/new-session-target"
 import { useTargetCatalog } from "@/lib/use-target-catalog"
+import {
+  agentModelDefaults,
+  buildModelRef,
+  modelKey,
+  selectableModels,
+  variantsForModel,
+} from "@/lib/session-selection"
+import type { ModelRef } from "@/lib/opencode"
 import { openCode } from "@/lib/opencode"
 import { childDirectory, directoryEntryName, parentDirectory } from "@/lib/directory-picker"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 const CREATE_REASON_ID = "new-session-create-reason"
+const DEFAULT_VARIANT = "__default__"
 
 type FolderState = "checking" | "available" | "unavailable"
 
 type FolderProbe = { directory: string; available: boolean }
 type DirectoryListing = { directory: string; entries: string[]; error: boolean }
-
-function sourceLabel(source: string): string {
-  if (source === "agent") return "agent config"
-  if (source === "fallback") return "safe fallback"
-  return "default"
+type SessionDraft = {
+  agentID: string | null
+  model: ModelRef | null
+  variant: string | null
 }
 
 export type NewSessionButtonProps = {
@@ -53,23 +62,91 @@ export function NewSessionDialog({
   expectedProjectID,
   onCreated,
 }: NewSessionDialogProps) {
-  const [selectedID, setSelectedID] = useState<string | null>(null)
+  // Key the selection to its directory so changing folders immediately
+  // invalidates the previous project instead of previewing stale defaults.
+  const [selected, setSelected] = useState<{
+    directory: string
+    id: string | null
+  } | null>(null)
   const [probe, setProbe] = useState<FolderProbe | null>(null)
   const [directory, setDirectory] = useState(initialDirectory)
+  const selectedID = selected?.directory === directory ? selected.id : null
   const [listing, setListing] = useState<DirectoryListing | null>(null)
 
   const { createSession } = nav
   const targetCatalog = useTargetCatalog(open ? directory : null)
 
-  const resolution = useMemo(() => {
-    if (!selectedID) return null
-    if (targetCatalog.status !== "ready") return null
-    return resolveNewSessionDefaults({
-      agents: targetCatalog.agents,
-      models: targetCatalog.models,
-      configEntries: nav.configEntries,
-    })
-  }, [selectedID, targetCatalog.agents, targetCatalog.models, targetCatalog.status, nav.configEntries])
+  const [override, setOverride] = useState<{
+    directory: string
+    value: Partial<SessionDraft>
+  } | null>(null)
+
+  const defaults = useMemo(
+    () =>
+      targetCatalog.status === "ready"
+        ? resolveNewSessionDefaults({
+            agents: targetCatalog.agents,
+            models: targetCatalog.models,
+            configEntries: nav.configEntries,
+          })
+        : null,
+    [
+      targetCatalog.status,
+      targetCatalog.agents,
+      targetCatalog.models,
+      nav.configEntries,
+    ]
+  )
+  const draft = useMemo<SessionDraft | null>(() => {
+    if (!selectedID || !defaults) return null
+    const current = override?.directory === directory ? override.value : {}
+    return {
+      agentID: current.agentID ?? defaults.agentID,
+      model: current.model ?? defaults.model,
+      variant:
+        current.variant !== undefined
+          ? current.variant
+          : (defaults.model?.variant ?? null),
+    }
+  }, [selectedID, defaults, override, directory])
+
+  const agentOptions = useMemo(
+    () =>
+      targetCatalog.agents.map((agent) => ({
+        value: agent.id,
+        label: agent.id,
+        detail:
+          agent.name && agent.name !== agent.id ? agent.name : undefined,
+      })),
+    [targetCatalog.agents]
+  )
+  const modelOptions = useMemo(
+    () =>
+      selectableModels(targetCatalog.models).map((model) => ({
+        value: modelKey(model),
+        label: model.id,
+        detail: `${model.providerID}/${model.id}`,
+      })),
+    [targetCatalog.models]
+  )
+  const selectedModel = draft?.model ?? null
+  const selectedModelInfo = selectedModel
+    ? (targetCatalog.models.find(
+        (candidate) =>
+          candidate.providerID === selectedModel.providerID &&
+          candidate.id === selectedModel.id
+      ) ?? null)
+    : null
+  const variantOptions = useMemo(
+    () => [
+      { value: DEFAULT_VARIANT, label: "Default", detail: "No explicit variant" },
+      ...variantsForModel(selectedModelInfo).map((id) => ({
+        value: id,
+        label: id,
+      })),
+    ],
+    [selectedModelInfo]
+  )
 
   useEffect(() => {
     if (!open) {
@@ -80,11 +157,14 @@ export function NewSessionDialog({
 
     void openCode.location.get({ location: { directory } }).then((location) => {
       if (!cancelled) {
-        setSelectedID(location.project.id)
+        setSelected({ directory, id: location.project.id })
         setProbe({ directory, available: true })
       }
     }).catch(() => {
-      if (!cancelled) setProbe({ directory, available: false })
+      if (!cancelled) {
+        setSelected({ directory, id: null })
+        setProbe({ directory, available: false })
+      }
     })
 
     void openCode.file.list({ location: { directory } }).then((result) => {
@@ -111,6 +191,7 @@ export function NewSessionDialog({
       : probe.available ? "available" : "unavailable"
 
   const projectError = newSessionProjectError(selectedID, expectedProjectID)
+  const modelUnavailable = Boolean(draft?.model) && !selectedModelInfo
 
   const reason =
     nav.connection !== "connected"
@@ -125,9 +206,11 @@ export function NewSessionDialog({
               ? "Loading the project’s Agent and Model catalog…"
               : targetCatalog.status === "error"
                 ? "The project catalog could not be loaded."
-                : resolution?.error
-                  ? resolution.error
-                  : null
+                : modelUnavailable
+                  ? "The selected model is unavailable in this project."
+                  : !draft?.model
+                    ? "Choose an available model for the new session."
+                    : null
 
   const canCreate =
     nav.connection === "connected" &&
@@ -135,18 +218,56 @@ export function NewSessionDialog({
     !projectError &&
     folder === "available" &&
     targetCatalog.status === "ready" &&
-    Boolean(resolution?.model) &&
-    !resolution?.error &&
+    Boolean(draft?.model) &&
+    Boolean(selectedModelInfo) &&
     !nav.creating
 
+  async function handleAgentChange(next: string) {
+    const agent =
+      targetCatalog.agents.find((candidate) => candidate.id === next) ?? null
+    const model = agentModelDefaults(agent, targetCatalog.models)
+    setOverride({
+      directory,
+      value: {
+        agentID: next,
+        model: model ?? draft?.model ?? null,
+        variant: model?.variant ?? draft?.variant ?? null,
+      },
+    })
+  }
+
+  async function handleModelChange(next: string) {
+    const info = selectableModels(targetCatalog.models).find(
+      (candidate) => modelKey(candidate) === next
+    )
+    if (!info) return
+    const variant =
+      draft?.variant && variantsForModel(info).includes(draft.variant)
+        ? draft.variant
+        : null
+    setOverride({
+      directory,
+      value: { model: buildModelRef(info, variant), variant },
+    })
+  }
+
+  function handleVariantChange(next: string) {
+    if (!selectedModelInfo) return
+    const variant = next === DEFAULT_VARIANT ? null : next
+    setOverride({
+      directory,
+      value: { model: buildModelRef(selectedModelInfo, variant), variant },
+    })
+  }
+
   async function handleCreate() {
-    if (!canCreate || !selectedID || !resolution?.model) {
+    if (!canCreate || !selectedID || !draft?.model) {
       return
     }
 
     const created = await createSession(
       selectedID,
-      { agentID: resolution.agentID, model: resolution.model },
+      { agentID: draft.agentID, model: draft.model },
       directory
     )
 
@@ -210,22 +331,58 @@ export function NewSessionDialog({
               </button>
             ))}
           </div>
-          {resolution?.model ? (
+          {targetCatalog.status === "ready" && draft ? (
             <div
               role="group"
-              aria-label="New session defaults"
-              className="space-y-0.5 text-[11px] leading-5 break-words text-muted-foreground"
+              aria-label="New session agent and model"
+              className="grid gap-3"
             >
-              <p>
-                Agent: {resolution.agentID ?? "Backend default"}
-              </p>
-              <p dir="ltr">
-                Model: {resolution.model.providerID}/{resolution.model.id}
-                {` · ${sourceLabel(resolution.modelSource)}`}
-              </p>
-              <p>
-                Thinking: {resolution.model.variant ?? "Default"}
-              </p>
+              <div className="grid gap-1.5">
+                <span className="px-1 text-xs font-medium text-muted-foreground">
+                  Agent
+                </span>
+                <PickerSelect
+                  label="Agent"
+                  ariaLabel="New session agent"
+                  value={draft.agentID ?? ""}
+                  options={agentOptions}
+                  placeholder="Backend default"
+                  disabled={nav.creating}
+                  onValueChange={(value) => void handleAgentChange(value)}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <span className="px-1 text-xs font-medium text-muted-foreground">
+                  Model
+                </span>
+                <PickerSelect
+                  label="Model"
+                  ariaLabel="New session model"
+                  showDetail
+                  value={
+                    draft.model
+                      ? `${draft.model.providerID}/${draft.model.id}`
+                      : ""
+                  }
+                  options={modelOptions}
+                  placeholder="No model"
+                  disabled={nav.creating}
+                  onValueChange={(value) => void handleModelChange(value)}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <span className="px-1 text-xs font-medium text-muted-foreground">
+                  Thinking Level
+                </span>
+                <PickerSelect
+                  label="Thinking Level"
+                  ariaLabel="New session thinking level"
+                  value={draft.variant ?? DEFAULT_VARIANT}
+                  options={variantOptions}
+                  disabled={nav.creating || !selectedModelInfo}
+                  onValueChange={handleVariantChange}
+                />
+              </div>
             </div>
           ) : null}
         </div>
@@ -237,7 +394,7 @@ export function NewSessionDialog({
               folder === "unavailable" ||
               Boolean(projectError) ||
               targetCatalog.status === "error" ||
-              Boolean(resolution?.error)
+              modelUnavailable || !draft?.model
                 ? "text-xs break-words text-destructive"
                 : "text-xs break-words text-muted-foreground"
             }

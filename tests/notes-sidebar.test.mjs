@@ -17,6 +17,15 @@ const spaces = [
   { id: "space-global", name: "Ideas", projectDir: null, pinned: true, revision: 1 },
 ]
 const pinnedNote = { id: "pinned-1", title: "Pinned idea", body: "Note body", status: "in-progress", pinned: true, spaceID: "space-1", revision: 1 }
+const extraPinnedNotes = Array.from({ length: 200 }, (_, index) => ({
+  id: `pinned-${index + 2}`,
+  title: `Pinned ${index + 2}`,
+  body: "Note body",
+  status: "todo",
+  pinned: true,
+  spaceID: null,
+  revision: 1,
+}))
 const planNote = { id: "note-plan", title: "Plan", body: "Plan body", status: "todo", pinned: false, spaceID: null, revision: 1 }
 
 const json = (body, status = 200) => Response.json(body, { status })
@@ -25,8 +34,14 @@ const mockFetch = async (request, init) => {
   requested.push(url)
   if (url.endsWith("/api/ui/notes/list")) {
     const input = JSON.parse(String(init?.body ?? "{}"))
-    if (input.pinned === true)
-      return json({ notes: [pinnedNote], total: pinnedTotal })
+    if (input.pinned === true) {
+      const limit = typeof input.limit === "number" ? input.limit : 5
+      const notes = [pinnedNote, ...extraPinnedNotes].slice(
+        0,
+        Math.min(pinnedTotal, limit)
+      )
+      return json({ notes, total: pinnedTotal })
+    }
     return json({ notes: [pinnedNote, planNote], total: 2 })
   }
   if (url.endsWith("/api/ui/notes/spaces")) {
@@ -191,7 +206,8 @@ test("pinned notes show status and space, and open the workspace with the select
     expect(sidebar).toContain("In progress")
     expect(sidebar).toContain("Work")
     expect(sidebar).not.toContain("Ideas")
-    expect(root.root.findAllByType("p").some((item) => item.children.join("").includes("Showing 1 of 7"))).toBe(true)
+    expect(sidebar).toContain("Show 2 more")
+    expect(root.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Show 2 more")).toHaveLength(1)
     expect(current.open).toBe(false)
     const button = root.root.findAll((node) => node.type === "button").find((node) => node.findAllByType("span").some((span) => span.children.includes("Pinned idea")))
     expect(button).toBeDefined()
@@ -205,9 +221,59 @@ test("pinned notes show status and space, and open the workspace with the select
     expect(current.open).toBe(false)
     await act(async () => root.update(React.createElement(NotesProvider, { nav: nav({ connection: "disconnected" }) }, React.createElement(NotesSidebar), React.createElement(Observer))))
     expect(JSON.stringify(root.toJSON())).toContain("Pinned notes")
+    pinnedTotal = 1
     await act(async () => current.refreshPinned())
     await flush()
     expect(current.pinnedNotes).toHaveLength(1)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("pinned notes expand to all and collapse back to five", async () => {
+  const restore = setup()
+  pinnedTotal = 7
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar), React.createElement(Observer))) })
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(5)
+    const toggle = () => root.root.findAll((node) => node.type === "button" && (node.props["aria-label"] === "Show 2 more" || node.props["aria-label"] === "Show less"))[0]
+    expect(toggle().props["aria-expanded"]).toBe(false)
+    await act(async () => toggle().props.onClick())
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(7)
+    expect(toggle().props["aria-expanded"]).toBe(true)
+    await act(async () => toggle().props.onClick())
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(5)
+  } finally {
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
+test("pinned expansion uses the service list limit, not a smaller UI cap", async () => {
+  const restore = setup()
+  pinnedTotal = 150
+  spacesFail = false
+  let root, current
+  try {
+    const { NotesProvider, NotesSidebar, useNotesWorkspace } = await import("../src/components/notes-sidebar")
+    function Observer() { current = useNotesWorkspace(); return null }
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar), React.createElement(Observer))) })
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(5)
+    const toggle = () => root.root.findAll((node) => node.type === "button" && (node.props["aria-label"] === "Show 145 more" || node.props["aria-label"] === "Show less"))[0]
+    await act(async () => toggle().props.onClick())
+    await flush()
+    expect(current.pinnedNotes).toHaveLength(150)
   } finally {
     if (root) await act(async () => root.unmount())
     restore()

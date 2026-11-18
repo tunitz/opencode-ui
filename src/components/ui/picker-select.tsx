@@ -2,7 +2,13 @@
 
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon } from "lucide-react"
-import type { ComponentProps, ReactNode } from "react"
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -82,6 +88,16 @@ export function PickerSelect({
   renderValue?: (selected: PickerOption | null) => ReactNode
   iconClassName?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  // Base UI scrolls the initially highlighted item into view. With a long
+  // catalog the selected value can sit mid-list, so the popup would open
+  // scrolled away from the top. Always present a predictable list start.
+  useEffect(() => {
+    if (open) listRef.current?.scrollTo({ top: 0 })
+  }, [open, options])
+
   const selected = options.find((option) => option.value === value) ?? null
   const selectedLabel = selected
     ? showDetail && selected.detail
@@ -93,6 +109,9 @@ export function PickerSelect({
     <ComboboxPrimitive.Root
       items={options}
       value={selected}
+      open={open}
+      onOpenChange={setOpen}
+      autoHighlight={false}
       onValueChange={(next) => {
         const nextOption = Array.isArray(next) ? next[0] : next
         if (nextOption) onValueChange(nextOption.value)
@@ -169,7 +188,10 @@ export function PickerSelect({
                 {emptyMessage}
               </div>
             </ComboboxPrimitive.Empty>
-            <ComboboxPrimitive.List className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0">
+            <ComboboxPrimitive.List
+              ref={listRef}
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0"
+            >
               {(option: PickerOption) => (
                 <ComboboxPrimitive.Item
                   key={option.value}

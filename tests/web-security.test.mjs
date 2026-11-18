@@ -56,5 +56,6 @@ describe("Web gateway security", () => {
     const request = new Request("https://example.test/api/event", { headers })
     const response = secureWebResponse(request, new Response("", { headers: { "content-type": "text/event-stream" } }))
     expect(response.headers.get("cache-control")).toBe("no-cache, no-transform")
+    expect(response.headers.get("x-accel-buffering")).toBe("no")
   })
 })

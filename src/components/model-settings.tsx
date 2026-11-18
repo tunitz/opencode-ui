@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { ChevronDownIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -51,9 +51,11 @@ function useModelSettingsState(
   onError?: (message: string | null) => void
 ) {
   const [selectorError, setSelectorErrorState] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
   function setSelectorError(message: string | null) {
     setSelectorErrorState(message)
+    setStatusMessage(null)
     onError?.(message)
   }
 
@@ -66,8 +68,14 @@ function useModelSettingsState(
   )
   const agentID = session ? (explicitAgentID ?? defaultAgentID) : null
 
-  const selectableModelList = selectableModels(nav.models)
-  const selectableAgentList = selectableAgents(nav.agents)
+  const selectableModelList = useMemo(
+    () => selectableModels(nav.models),
+    [nav.models]
+  )
+  const selectableAgentList = useMemo(
+    () => selectableAgents(nav.agents),
+    [nav.agents]
+  )
   const selectedModelInfo =
     model !== null
       ? (nav.models.find(
@@ -80,38 +88,62 @@ function useModelSettingsState(
   const explicitVariant = variantValue(model)
   const variantSelectValue = explicitVariant || DEFAULT_VARIANT
 
-  const agentOptions: Option[] = [
-    ...(explicitAgentID &&
-    !selectableAgentList.some((candidate) => candidate.id === explicitAgentID)
-      ? [{ value: explicitAgentID, label: `${explicitAgentID} (unavailable)`, disabled: true }]
-      : []),
-    ...selectableAgentList.map((agent) => ({
-      value: agent.id,
-      label: agent.id,
-      detail: agent.name && agent.name !== agent.id ? agent.name : undefined,
-    })),
-  ]
+  const agentOptions = useMemo<Option[]>(
+    () => [
+      ...selectableAgentList.map((agent) => ({
+        value: agent.id,
+        label: agent.id,
+        detail: agent.name && agent.name !== agent.id ? agent.name : undefined,
+      })),
+      ...(explicitAgentID &&
+      !selectableAgentList.some((candidate) => candidate.id === explicitAgentID)
+        ? [
+            {
+              value: explicitAgentID,
+              label: `${explicitAgentID} (unavailable)`,
+              disabled: true,
+            },
+          ]
+        : []),
+    ],
+    [explicitAgentID, selectableAgentList]
+  )
 
-  const modelOptions: Option[] = [
-    ...(model &&
-    !nav.models.some(
-      (candidate) =>
-        candidate.providerID === model.providerID && candidate.id === model.id
-    )
-      ? [{ value: modelRefKey(model), label: `${model.providerID}/${model.id} (unavailable)`, disabled: true }]
-      : []),
-    ...selectableModelList.map((candidate) => ({
-      value: modelKey(candidate),
-      label: candidate.id,
-      detail: `${candidate.providerID}/${candidate.id}`,
-    })),
-  ]
+  const modelOptions = useMemo<Option[]>(
+    () => [
+      ...selectableModelList.map((candidate) => ({
+        value: modelKey(candidate),
+        label: candidate.id,
+        detail: `${candidate.providerID}/${candidate.id}`,
+      })),
+      ...(model &&
+      !nav.models.some(
+        (candidate) =>
+          candidate.providerID === model.providerID &&
+          candidate.id === model.id
+      )
+        ? [
+            {
+              value: modelRefKey(model),
+              label: `${model.providerID}/${model.id} (unavailable)`,
+              disabled: true,
+            },
+          ]
+        : []),
+    ],
+    [model, nav.models, selectableModelList]
+  )
 
-  const variantIds = variantsForModel(selectedModelInfo)
-  const variantOptions: Option[] = [
-    { value: DEFAULT_VARIANT, label: "Default", detail: "No explicit variant" },
-    ...variantIds.map((id) => ({ value: id, label: id })),
-  ]
+  const variantOptions = useMemo<Option[]>(
+    () => [
+      { value: DEFAULT_VARIANT, label: "Default", detail: "No explicit variant" },
+      ...variantsForModel(selectedModelInfo).map((id) => ({
+        value: id,
+        label: id,
+      })),
+    ],
+    [selectedModelInfo]
+  )
 
   const running = useLiveRunStatus(nav.activeSessionID) === "running"
   const catalogError = nav.agentsStatus === "error" || nav.modelsStatus === "error"
@@ -119,8 +151,9 @@ function useModelSettingsState(
   async function handleAgentChange(next: string) {
     if (next === (agentID ?? "")) return
     setSelectorError(null)
-    const failure = await nav.switchAgent(next)
+    const failure = await nav.switchAgentWithDefaults(next)
     if (failure) setSelectorError(failure)
+    else setStatusMessage(`Agent ${next} selected`)
   }
 
   async function handleModelChange(next: string) {
@@ -133,6 +166,7 @@ function useModelSettingsState(
         : null
     const failure = await nav.switchModel(buildModelRef(info, nextVariant))
     if (failure) setSelectorError(failure)
+    else setStatusMessage(`Model ${info.providerID}/${info.id} selected`)
   }
 
   async function handleVariantChange(next: string) {
@@ -142,6 +176,7 @@ function useModelSettingsState(
       buildModelRef(selectedModelInfo, next === DEFAULT_VARIANT ? null : next)
     )
     if (failure) setSelectorError(failure)
+    else setStatusMessage(`Thinking Level ${next === DEFAULT_VARIANT ? "Default" : next} selected`)
   }
 
   return {
@@ -160,6 +195,7 @@ function useModelSettingsState(
     running,
     catalogError,
     selectorError,
+    statusMessage,
     handleAgentChange,
     handleModelChange,
     handleVariantChange,
@@ -225,9 +261,14 @@ function SettingRow({
   )
 }
 
+function SwitchStatus({ message }: { message: string | null }) {
+  return <p role="status" className="sr-only">{message ?? ""}</p>
+}
+
 function ModelSettingsForm({ state }: { state: ModelSettingsState }) {
   return (
     <div className="grid gap-4">
+      <SwitchStatus message={state.statusMessage} />
       <SettingRow label="Agent">
         <SettingSelect
           name="Agent"
@@ -409,12 +450,14 @@ export function ModelSettingsInline({
   const open = controlledOpen ?? localOpen
   const setOpen = onOpenChange ?? setLocalOpen
   const state = useModelSettingsState(nav, onError)
+  const modelTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const { session, model, agentID } = state
   const thinkingLabel = model ? state.explicitVariant || "Default" : "Default"
 
   return (
     <div className="relative flex min-w-0 items-center gap-0.5">
+      <SwitchStatus message={state.statusMessage} />
       <PickerSelect
         label="Agent"
         ariaLabel={`Agent, ${agentID ?? "None"}`}
@@ -440,7 +483,10 @@ export function ModelSettingsInline({
         side="top"
         align="start"
         placeholder="No model"
-        triggerProps={{ "aria-busy": nav.switchingModel }}
+        triggerProps={{
+          "aria-busy": nav.switchingModel,
+          ref: modelTriggerRef,
+        }}
         renderValue={() =>
           model ? (
             <>
@@ -485,9 +531,10 @@ export function ModelSettingsInline({
         <PopoverTrigger
           nativeButton={false}
           render={
-            <span
-              aria-hidden="true"
-              className="pointer-events-none absolute bottom-0 start-0 h-0 w-0"
+            <button
+              type="button"
+              aria-label="Open model settings"
+              className="sr-only"
             />
           }
         />
@@ -495,6 +542,7 @@ export function ModelSettingsInline({
           side="top"
           align="start"
           sideOffset={8}
+          finalFocus={modelTriggerRef}
           className="w-[min(30rem,calc(100vw-2rem))] gap-0 p-0"
         >
           <PopoverHeader className="px-5 pt-5 pb-3">

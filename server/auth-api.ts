@@ -46,20 +46,26 @@ export function createAuthApiHandler(auth: AuthService) {
         if (request.method !== "POST") return methodNotAllowed()
         const body = await readObject(request)
         const token = await auth.setup(body.password)
-        return json({ ok: true }, 200, { "set-cookie": buildSessionCookie(token, isSecure(request)) })
+        return json({ ok: true }, 200, {
+          "set-cookie": buildSessionCookie(token, isSecure(request), auth.cookieName),
+        })
       }
       if (path === "/api/ui/auth/login") {
         if (request.method !== "POST") return methodNotAllowed()
         const body = await readObject(request)
         const token = await auth.login(body.password, remote)
-        return json({ ok: true }, 200, { "set-cookie": buildSessionCookie(token, isSecure(request)) })
+        return json({ ok: true }, 200, {
+          "set-cookie": buildSessionCookie(token, isSecure(request), auth.cookieName),
+        })
       }
       if (path === "/api/ui/auth/logout") {
         if (request.method !== "POST") return methodNotAllowed()
         await auth.logout(request)
         return new Response(null, {
           status: 204,
-          headers: { "set-cookie": clearSessionCookie(isSecure(request)) },
+          headers: {
+            "set-cookie": clearSessionCookie(isSecure(request), auth.cookieName),
+          },
         })
       }
       if (path === "/api/ui/auth/password") {

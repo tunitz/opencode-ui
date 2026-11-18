@@ -109,8 +109,11 @@ test("the shared new-session dialog accepts a preselected worktree directory", (
   expect(dialog).toContain("initialDirectory?: string")
   expect(dialog).toContain("expectedProjectID?: string")
   expect(dialog).toContain("newSessionProjectError(selectedID, expectedProjectID)")
+  expect(dialog).toContain("selected?.directory === directory ? selected.id : null")
+  expect(dialog).toContain('aria-label="New session agent and model"')
+  expect(dialog).toContain("agentModelDefaults(agent, targetCatalog.models)")
   expect(dialog).toMatch(
-    /const created = await createSession\(\s*selectedID,\s*\{ agentID: resolution\.agentID, model: resolution\.model \},\s*directory\s*\)/
+    /const created = await createSession\(\s*selectedID,\s*\{ agentID: draft\.agentID, model: draft\.model \},\s*directory\s*\)/
   )
 })
 

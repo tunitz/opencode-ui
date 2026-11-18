@@ -349,7 +349,11 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     () => resolveNearestProject(projects, typedDirectory),
     [projects, typedDirectory]
   )
-  const activeSourceProjectID = resolvedProject?.id ?? sourceProjectID
+  // One active project drives the worktree list, Create/Refresh and the
+  // "New session here" target. sourceProjectID is only a fallback while the
+  // input is empty or outside every known project.
+  const activeProject = absolute ? resolvedProject : null
+  const activeSourceProjectID = activeProject?.id ?? sourceProjectID
 
   useEffect(() => {
     if (!activeSourceProjectID) return
@@ -404,25 +408,15 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     return rows
   }, [entries, entriesMatch, sourceProject])
 
-  const inputIsProject =
-    sourceProject !== null && typedDirectory === sourceProject.directory
-  const inputIsWorktree = worktreeRows.some(
-    (row) => canonicalDirectory(row.directory) === typedDirectory
-  )
-  const activeProject =
-    sourceProject && trimmed && (inputIsProject || inputIsWorktree)
-      ? sourceProject
-      : null
-
   // createWorktreeSession resolves a directory to its own project and rejects a
   // mismatch, so a custom path is bound to the nearest known project prefix.
-  const target = useMemo(() => {
-    if (!absolute) return null
-    const nearest = resolveNearestProject(projects, typedDirectory)
-    return nearest
-      ? { projectID: nearest.id, directory: typedDirectory }
-      : null
-  }, [absolute, projects, typedDirectory])
+  const target = useMemo(
+    () =>
+      activeProject
+        ? { projectID: activeProject.id, directory: typedDirectory }
+        : null,
+    [activeProject, typedDirectory]
+  )
 
   const unbrowsedTarget =
     absolute && !target ? "No project matches this path." : null

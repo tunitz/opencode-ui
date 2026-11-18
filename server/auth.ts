@@ -39,6 +39,8 @@ export type AuthServiceOptions = {
   stateFile?: string
   now?: () => number
   failureDelayMs?: number
+  /** Session cookie name; override when two UI instances share a host. */
+  cookieName?: string
 }
 
 export type AuthService = ReturnType<typeof createAuthService>
@@ -90,23 +92,33 @@ export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex")
 }
 
-export function buildSessionCookie(token: string, secure: boolean): string {
-  const base = `${AUTH_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_SESSION_MAX_AGE_SECONDS}`
+export function buildSessionCookie(
+  token: string,
+  secure: boolean,
+  name: string = AUTH_COOKIE_NAME
+): string {
+  const base = `${name}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_SESSION_MAX_AGE_SECONDS}`
   return secure ? `${base}; Secure` : base
 }
 
-export function clearSessionCookie(secure: boolean): string {
-  const base = `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+export function clearSessionCookie(
+  secure: boolean,
+  name: string = AUTH_COOKIE_NAME
+): string {
+  const base = `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
   return secure ? `${base}; Secure` : base
 }
 
-function sessionTokenFrom(request: Request): string | null {
+function sessionTokenFrom(
+  request: Request,
+  name: string = AUTH_COOKIE_NAME
+): string | null {
   const header = request.headers.get("cookie")
   if (!header) return null
   for (const part of header.split(";")) {
     const index = part.indexOf("=")
     if (index === -1) continue
-    if (part.slice(0, index).trim() !== AUTH_COOKIE_NAME) continue
+    if (part.slice(0, index).trim() !== name) continue
     const value = part.slice(index + 1).trim()
     return /^[a-f0-9]{64}$/.test(value) ? value : null
   }
@@ -153,6 +165,10 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     join(homedir(), ".local", "share", "opencode-ui", "auth", "state.json")
   const now = options.now ?? Date.now
   const failureDelayMs = options.failureDelayMs ?? AUTH_FAILURE_DELAY_MS
+  const cookieName = options.cookieName ?? AUTH_COOKIE_NAME
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(cookieName)) {
+    throw new Error("Invalid session cookie name")
+  }
 
   let state: AuthState | null = null
   let loadPromise: Promise<AuthState> | null = null
@@ -277,7 +293,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
 
   async function authenticate(request: Request): Promise<boolean> {
     try {
-      return validSession(await load(), sessionTokenFrom(request))
+      return validSession(await load(), sessionTokenFrom(request, cookieName))
     } catch {
       return false
     }
@@ -289,7 +305,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     return {
       configured: passwordConfigured,
       required,
-      authenticated: validSession(target, sessionTokenFrom(request)) || !(passwordConfigured || required),
+      authenticated: validSession(target, sessionTokenFrom(request, cookieName)) || !(passwordConfigured || required),
     }
   }
 
@@ -350,7 +366,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
   }
 
   async function logout(request: Request): Promise<void> {
-    const token = sessionTokenFrom(request)
+    const token = sessionTokenFrom(request, cookieName)
     if (!token) return
     const tokenHash = hashSessionToken(token)
     await mutate((target) => {
@@ -362,7 +378,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     if (typeof current !== "string" || typeof next !== "string") throw new AuthError(400, "invalid")
     if (next !== "" && !isValidPassword(next)) throw new AuthError(400, "invalid")
     if (next === "" && required) throw new AuthError(409, "password_required")
-    const token = sessionTokenFrom(request)
+    const token = sessionTokenFrom(request, cookieName)
     await mutate(async (target) => {
       if (target.passwordHash === null) {
         if (next === "") return
@@ -384,6 +400,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
   return {
     stateFile,
     required,
+    cookieName,
     configured,
     gatingActive,
     authenticate,

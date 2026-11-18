@@ -48,6 +48,24 @@ const expectedRevision = {
   description:
     "Optimistic concurrency check. Pass the revision you read; a stale value is rejected.",
 } as const
+const attachmentName = {
+  type: "string",
+  minLength: 1,
+  maxLength: LIMITS.attachmentName,
+  description: "Display name of the attached file.",
+} as const
+const attachmentMime = {
+  type: "string",
+  minLength: 1,
+  maxLength: LIMITS.attachmentMime,
+  description: "MIME type of the attached file.",
+} as const
+const attachmentData = {
+  type: "string",
+  minLength: 1,
+  maxLength: 5_600_000,
+  description: "Base64-encoded file bytes. Decoded size is validated by the service.",
+} as const
 const limit = { type: "integer", minimum: 1, maximum: LIMITS.list } as const
 const offset = { type: "integer", minimum: 0 } as const
 
@@ -179,7 +197,15 @@ export const NOTES_TOOL_SCHEMAS = {
     },
     ["spaceID"]
   ),
+  createAttachment: closed(
+    { noteID, name: attachmentName, mime: attachmentMime, data: attachmentData, expectedRevision },
+    ["noteID", "name", "mime", "data"]
+  ),
   readAttachment: closed({ noteID, attachmentID }, [
+    "noteID",
+    "attachmentID",
+  ]),
+  deleteAttachment: closed({ noteID, attachmentID, expectedRevision }, [
     "noteID",
     "attachmentID",
   ]),

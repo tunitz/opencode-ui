@@ -2628,7 +2628,8 @@ if (browser) {
             const box = await command.boundingBox()
             check(
               `${width}x${height} ${theme} tab targets are 44px`,
-              Boolean(box && box.height >= 44),
+              // Sub-pixel layout can report 43.99 for a 44px CSS target.
+              Boolean(box && box.height >= 43.9),
               JSON.stringify(box)
             )
             check(

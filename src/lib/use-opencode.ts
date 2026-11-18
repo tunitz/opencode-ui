@@ -25,6 +25,8 @@ import {
   type SessionStatsInfo,
   type TokenUsageInfo,
 } from "@/lib/opencode"
+import { agentModelDefaults } from "@/lib/session-selection"
+import { createStreamWatchdog } from "@/lib/stream-watchdog"
 import {
   applySessionTitle,
   descendantSessionIDs,
@@ -273,6 +275,8 @@ export type OpenCodeController = OpenCodeState & {
   attachProjectFile: (relativePath: string) => Promise<string | null>
   interruptSession: () => Promise<string | null>
   switchAgent: (agentID: string) => Promise<string | null>
+  /** Switch agent and apply that agent's catalog model/variant when available. */
+  switchAgentWithDefaults: (agentID: string) => Promise<string | null>
   switchModel: (model: ModelRef) => Promise<string | null>
   replyPermission: (
     requestID: string,
@@ -1301,14 +1305,27 @@ export function useOpenCode(): OpenCodeController {
     const controller = new AbortController()
     let cancelled = false
 
+    // The engine stream has no application heartbeat. A half-open connection
+    // can stay "connected" forever without delivering frames, so force a
+    // reconnect and a durable refetch when nothing arrives for a while.
+    const watchdog = createStreamWatchdog(() => {
+      if (cancelled) return
+      setStream("lost", "Event stream stalled.")
+      setWakeKey((current) => current + 1)
+      scheduleReconnect(true)
+      controller.abort()
+    })
+
     void (async () => {
       try {
+        watchdog.arm()
         for await (const event of openCode.event.subscribe({
           signal: controller.signal,
         })) {
           if (cancelled) {
             return
           }
+          watchdog.arm()
 
           if (event.type === "server.connected") {
             notifySessionListChange({ sessionID: null })
@@ -1581,12 +1598,14 @@ export function useOpenCode(): OpenCodeController {
 
     return () => {
       cancelled = true
+      watchdog.dispose()
       controller.abort()
     }
   }, [
     clearReconnectTimer,
     connection,
     markSessionRunning,
+    scheduleReconnect,
     notifySessionListChange,
     refreshActiveSessions,
     setStream,
@@ -2919,6 +2938,18 @@ export function useOpenCode(): OpenCodeController {
     }
   }, [])
 
+  const switchAgentWithDefaults = useCallback(
+    async (agentID: string): Promise<string | null> => {
+      const failure = await switchAgent(agentID)
+      if (failure) return failure
+      const agent = agents.find((candidate) => candidate.id === agentID) ?? null
+      const model = agentModelDefaults(agent, models)
+      if (!model) return null
+      return switchModel(model)
+    },
+    [agents, models, switchAgent, switchModel]
+  )
+
   const replyPermission = useCallback(
     async (requestID: string, decision: PermissionReply) => {
       const sessionID = activeSessionRef.current
@@ -3282,6 +3313,7 @@ export function useOpenCode(): OpenCodeController {
     sendPrompt,
     interruptSession,
     switchAgent,
+    switchAgentWithDefaults,
     switchModel,
     replyPermission,
     replyForm,
