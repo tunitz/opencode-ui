@@ -50,12 +50,13 @@ export function selectableModels(models: ModelInfo[]): ModelInfo[] {
 }
 
 /**
- * Agents a user may genuinely select. Mirrors the backend's `selectable` rule:
- * hidden internal agents and subagents are excluded from primary selection.
+ * Agents offered in the primary agent picker. Only `primary` agents qualify:
+ * `subagent` agents are internal, and `all` agents are not primary selections
+ * even though the backend allows them as an explicit session agent.
  */
 export function selectableAgents(agents: AgentInfo[]): AgentInfo[] {
   return agents
-    .filter((agent) => !agent.hidden && agent.mode !== "subagent")
+    .filter((agent) => !agent.hidden && agent.mode === "primary")
     .toSorted((a, b) => a.id.localeCompare(b.id))
 }
 

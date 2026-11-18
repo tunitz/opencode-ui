@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
-import { agentModelDefaults } from "../src/lib/session-selection"
+import {
+  agentModelDefaults,
+  selectableAgents,
+} from "../src/lib/session-selection"
 import type { AgentInfo, ModelInfo } from "../src/lib/opencode"
 
 const model = (id: string, variants: string[] = []) =>
@@ -43,4 +46,18 @@ test("agent model defaults never substitute an unavailable model", () => {
 test("agent model defaults are absent for an agent without a model", () => {
   expect(agentModelDefaults(null, [model("free")])).toBeNull()
   expect(agentModelDefaults(agent(null), [model("free")])).toBeNull()
+})
+
+test("the agent picker offers only non-hidden primary agents", () => {
+  const catalog = [
+    { id: "build", mode: "primary", hidden: false },
+    { id: "coach", mode: "primary", hidden: false },
+    { id: "draft", mode: "all", hidden: false },
+    { id: "worker", mode: "subagent", hidden: false },
+    { id: "secret", mode: "primary", hidden: true },
+  ] as unknown as AgentInfo[]
+  expect(selectableAgents(catalog).map((entry) => entry.id)).toEqual([
+    "build",
+    "coach",
+  ])
 })
