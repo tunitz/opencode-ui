@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { buildBtwPrompt, canAskBtw } from "@/lib/btw"
+import { copyText } from "@/lib/clipboard"
 import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { errorMessage, openCode } from "@/lib/opencode"
 import { useIsDesktop } from "@/lib/use-is-desktop"
@@ -116,10 +117,7 @@ export function BtwDialog({
   async function copy() {
     if (!answer) return
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard API is unavailable; select the answer text to copy.")
-      }
-      await navigator.clipboard.writeText(answer)
+      await copyText(answer)
       setCopied(true)
       onResult("Copied the side answer.")
     } catch (failure) {

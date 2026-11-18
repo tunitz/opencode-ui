@@ -48,6 +48,7 @@ import {
   type WorktreeDirectory,
 } from "@/lib/opencode"
 import { worktreeCache } from "@/lib/worktree-cache"
+import { copyText } from "@/lib/clipboard"
 import { projectBasename } from "@/lib/notes-types"
 import { isAbsoluteDirectory } from "@/lib/session-commands"
 import {
@@ -1145,8 +1146,7 @@ function DebugDialog({ nav, onClose, onResult }: Props) {
 
   async function copy() {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API is unavailable.")
-      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2))
+      await copyText(JSON.stringify(diagnostics, null, 2))
       setCopied(true)
       onResult("Sanitized client diagnostics copied.")
     } catch (failure) {

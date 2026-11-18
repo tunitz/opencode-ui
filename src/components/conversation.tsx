@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 
 import { prefersReducedMotion } from "@/lib/accessibility"
+import { copyText } from "@/lib/clipboard"
 import { Markdown } from "@/components/markdown"
 import { MessageFiles } from "@/components/message-files"
 import { HealthvaultToolDetails } from "@/components/healthvault-tool-details"
@@ -159,11 +160,13 @@ function RowAction({
   icon,
   onClick,
   disabled,
+  title,
 }: {
   label: string
   icon: ReactNode
   onClick: () => void
   disabled?: boolean
+  title?: string
 }) {
   return (
     <Tooltip>
@@ -174,6 +177,7 @@ function RowAction({
             variant="ghost"
             size="icon-sm"
             aria-label={label}
+            title={title}
             disabled={disabled}
             onClick={onClick}
             className="size-11 shrink-0 p-0"
@@ -187,30 +191,54 @@ function RowAction({
   )
 }
 
-function CopyMessageAction({ value }: { value: string }) {
+export function CopyMessageAction({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState(false)
   useEffect(() => {
-    if (!copied) return
-    const timer = window.setTimeout(() => setCopied(false), 2000)
+    if (!copied && !failed) return
+    const timer = window.setTimeout(() => {
+      setCopied(false)
+      setFailed(false)
+    }, 2000)
     return () => window.clearTimeout(timer)
-  }, [copied])
+  }, [copied, failed])
   return (
-    <RowAction
-      label={copied ? "Copied" : "Copy message"}
-      icon={
-        copied ? (
-          <CheckIcon aria-hidden="true" className="size-4" />
-        ) : (
-          <CopyIcon aria-hidden="true" className="size-4" />
-        )
-      }
-      onClick={() => {
-        void navigator.clipboard
-          .writeText(value)
-          .then(() => setCopied(true))
-          .catch(() => {})
-      }}
-    />
+    <>
+      <RowAction
+        label={copied ? "Copied" : failed ? "Copy failed" : "Copy message"}
+        title={
+          failed
+            ? "Could not copy — select the message and copy manually"
+            : undefined
+        }
+        icon={
+          copied ? (
+            <CheckIcon aria-hidden="true" className="size-4" />
+          ) : (
+            <CopyIcon aria-hidden="true" className="size-4" />
+          )
+        }
+        onClick={() => {
+          void copyText(value).then(
+            () => {
+              setFailed(false)
+              setCopied(true)
+            },
+            () => {
+              setCopied(false)
+              setFailed(true)
+            }
+          )
+        }}
+      />
+      <span aria-live="polite" className="sr-only">
+        {copied
+          ? "Copied"
+          : failed
+            ? "Could not copy. Select the message and copy manually."
+            : ""}
+      </span>
+    </>
   )
 }
 

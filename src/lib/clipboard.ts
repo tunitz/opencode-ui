@@ -26,9 +26,12 @@ export async function copyText(text: string): Promise<void> {
 
   let copied: boolean
   try {
+    // Focus before selecting so the selection is committed (notably on WebKit).
+    textarea.focus()
     textarea.select()
     textarea.setSelectionRange(0, textarea.value.length)
-    copied = document.execCommand("copy")
+    copied =
+      typeof document.execCommand === "function" && document.execCommand("copy")
   } finally {
     textarea.remove()
     active?.focus?.()

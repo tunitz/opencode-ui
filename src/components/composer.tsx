@@ -111,6 +111,7 @@ import {
 import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
+import { copyText } from "@/lib/clipboard"
 import { Markdown } from "@/components/markdown"
 import { NoteReferencePicker } from "@/components/note-reference-picker"
 import { useOptionalNotesWorkspace } from "@/components/notes-sidebar"
@@ -1066,10 +1067,7 @@ export function Composer({
           return { ok: false, message: "No assistant message text to copy." }
         }
         try {
-          if (!navigator.clipboard?.writeText) {
-            throw new Error("Clipboard API is unavailable in this browser context.")
-          }
-          await navigator.clipboard.writeText(text)
+          await copyText(text)
           return { ok: true, message: "Copied the last assistant message." }
         } catch (failure) {
           return {
