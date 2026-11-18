@@ -11,7 +11,7 @@ export async function loadDirectSubagents(sessionID: string, list = openCode.ses
 }
 
 /** Header controls for the current session; discovery is always refreshed on open. */
-export function SubagentNavigation({ nav, title }: { nav: OpenCodeController; title: string }) {
+export function SubagentNavigation({ nav, title, projectLabel = null }: { nav: OpenCodeController; title: string; projectLabel?: string | null }) {
   const session = nav.activeSession!
   const { subscribeSessionListChanges } = nav
   const [open, setOpen] = useState(false)
@@ -113,7 +113,14 @@ export function SubagentNavigation({ nav, title }: { nav: OpenCodeController; ti
     <DropdownMenu open={open} onOpenChange={(next) => { if (next) { setBusy(true); setRetry((value) => value + 1) } setOpen(next) }} modal={false}>
       <h1 className="min-w-0" title={title} aria-label={title}>
         <DropdownMenuTrigger render={<Button type="button" variant="ghost" className="h-11 min-w-11 max-w-full gap-1 px-1 text-[13px] font-medium text-foreground" aria-label="Subagents" />}>
-          <span dir="auto" className="min-w-0 truncate">{title}</span>
+          <span className="flex min-w-0 flex-col items-start gap-0.5">
+            {projectLabel ? (
+              <span dir="ltr" className="max-w-full truncate font-mono text-[10px] text-muted-foreground">
+                {projectLabel}
+              </span>
+            ) : null}
+            <span dir="auto" className="min-w-0 truncate">{title}</span>
+          </span>
           <ChevronDownIcon aria-hidden="true" className={open ? "rotate-180" : undefined} />
         </DropdownMenuTrigger>
       </h1>

@@ -69,6 +69,15 @@ describe("subagent header navigation", () => {
     expect(root).not.toContain('aria-label="Return to parent session"')
   })
 
+  test("shows the project label above the session title", () => {
+    const nav = { activeSession: session("root"), sessions: [], runningSessionIDs: {} } as unknown as OpenCodeController
+    const html = renderToStaticMarkup(createElement(SubagentNavigation, { nav, title: "A task", projectLabel: "opencode-ui" }))
+    expect(html).toContain("opencode-ui")
+    expect(html).toMatch(/opencode-ui[\s\S]*A task/)
+    const without = renderToStaticMarkup(createElement(SubagentNavigation, { nav, title: "A task" }))
+    expect(without).not.toContain("opencode-ui")
+  })
+
   test("refreshes uncached children on events, rejects stale responses and opens by ID", async () => {
     const requests: ReturnType<typeof deferred<Page>>[] = []
     list = () => { const request = deferred<Page>(); requests.push(request); return request.promise }

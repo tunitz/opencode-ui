@@ -184,7 +184,7 @@ function ProjectPanel({
   )
 }
 
-function sessionProjectLabel(session: SessionInfo, projects: Project[]) {
+export function sessionProjectLabel(session: SessionInfo, projects: Project[]) {
   const listed = projects.find((project) => project.id === session.projectID)
 
   if (listed) {
