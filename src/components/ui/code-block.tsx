@@ -5,6 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
+import { copyText } from "@/lib/clipboard"
 import { CheckIcon, CopyIcon } from "lucide-react"
 
 const codeBlockVariants = cva(
@@ -93,31 +94,43 @@ function CodeBlockCopyButton({
   ...props
 }: React.ComponentProps<typeof Button> & { value: string }) {
   const [copied, setCopied] = React.useState(false)
+  const [failed, setFailed] = React.useState(false)
 
   React.useEffect(() => {
-    if (!copied) {
+    if (!copied && !failed) {
       return
     }
 
-    const timeout = setTimeout(() => setCopied(false), 2000)
+    const timeout = setTimeout(() => {
+      setCopied(false)
+      setFailed(false)
+    }, 2000)
     return () => clearTimeout(timeout)
-  }, [copied])
+  }, [copied, failed])
 
   return (
     <>
       <Button
         data-slot="code-block-copy-button"
         data-copied={copied || undefined}
+        data-copy-failed={failed || undefined}
         variant={variant}
         size={size}
-        aria-label={copied ? "Copied" : "Copy"}
+        aria-label={copied ? "Copied" : failed ? "Copy failed" : "Copy"}
+        title={failed ? "Could not copy — select the code and copy manually" : undefined}
         className={cn(className)}
         onClick={(event) => {
           onClick?.(event)
-          navigator.clipboard
-            .writeText(value)
-            .then(() => setCopied(true))
-            .catch(() => {})
+          void copyText(value).then(
+            () => {
+              setFailed(false)
+              setCopied(true)
+            },
+            () => {
+              setCopied(false)
+              setFailed(true)
+            }
+          )
         }}
         {...props}
       >
@@ -130,7 +143,11 @@ function CodeBlockCopyButton({
         )}
       </Button>
       <span aria-live="polite" className="sr-only">
-        {copied ? "Copied" : ""}
+        {copied
+          ? "Copied"
+          : failed
+            ? "Could not copy. Select the code and copy manually."
+            : ""}
       </span>
     </>
   )
