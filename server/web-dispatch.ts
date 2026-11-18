@@ -4,6 +4,10 @@ import {
   NOTES_ROUTE,
 } from "./notes-api.ts"
 import { PLUGINS_BODY_LIMIT, PLUGINS_ROUTE } from "./plugins-api.ts"
+import {
+  SESSION_SHORTCUTS_BODY_LIMIT,
+  SESSION_SHORTCUTS_ROUTE,
+} from "./session-shortcuts.ts"
 import { evaluateWebRequest, secureWebResponse } from "./web-security.ts"
 import type { SecurityOptions } from "./request-security.ts"
 
@@ -13,6 +17,7 @@ type DispatcherOptions = {
   auth?: Handler
   notes?: Handler
   plugins?: Handler
+  sessionShortcuts?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler
@@ -70,6 +75,9 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     } else if (options.plugins && (path === PLUGINS_ROUTE || path.startsWith(`${PLUGINS_ROUTE}/`))) {
       handler = options.plugins
       limit = PLUGINS_BODY_LIMIT
+    } else if (options.sessionShortcuts && path === SESSION_SHORTCUTS_ROUTE) {
+      handler = options.sessionShortcuts
+      limit = SESSION_SHORTCUTS_BODY_LIMIT
     } else if (path === "/api/ui/agents" || path === "/api/ui/agents/default") {
       handler = options.agents
       limit = 64 * 1024

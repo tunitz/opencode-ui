@@ -20,6 +20,7 @@ import {
 } from "playwright-core"
 
 import { buildFixture } from "./build"
+import { parseSessionShortcuts, updateSessionShortcut } from "@/lib/session-shortcuts"
 
 const repoRoot = resolve(import.meta.dir, "../..")
 const outDir = await mkdtemp("/tmp/opencode/ui-browser-fixture-")
@@ -41,6 +42,8 @@ type Result = {
 const requests: ApiRequest[] = []
 const fsListRequests: string[] = []
 const notFound: string[] = []
+let fixtureShortcuts = parseSessionShortcuts(null)
+const shortcutRequests: Array<{ id: string; change: Record<string, unknown> }> = []
 const results: Result[] = []
 
 type FixtureSpace = {
@@ -510,6 +513,26 @@ const server = Bun.serve({
           : {}
       notesRequests.push({ method, input })
       return notesMethodResponse(method, input)
+    }
+    if (pathname === "/api/ui/session-shortcuts") {
+      if (request.method === "GET") return json({ shortcuts: fixtureShortcuts })
+      if (request.method !== "POST") return json({ error: { code: "method_not_allowed" } }, 405)
+      const body = (await request.json().catch(() => ({}))) as {
+        id?: string
+        change?: Record<string, unknown>
+      }
+      if (typeof body.id !== "string" || !body.change) return json({ error: { code: "invalid" } }, 400)
+      shortcutRequests.push({ id: body.id, change: body.change })
+      try {
+        fixtureShortcuts = updateSessionShortcut(
+          fixtureShortcuts,
+          body.id,
+          body.change as { pinned?: boolean; label?: string }
+        )
+      } catch {
+        return json({ error: { code: "invalid" } }, 400)
+      }
+      return json({ shortcuts: fixtureShortcuts })
     }
     if (pathname === "/api/ui/plugins") {
       return json({
@@ -1018,19 +1041,10 @@ if (browser) {
         await page
           .getByRole("menuitem", { name: "Pin session" })
           .waitFor({ state: "detached" })
-        const storage = await page.evaluate(() => {
-          const key = `opencode-ui:session-shortcuts:v1:${encodeURIComponent(
-            window.location.origin
-          )}:${encodeURIComponent("2.1.4")}`
-          return { key, value: window.localStorage.getItem(key) }
-        })
         check(
-          "pinning writes only the browser-local scoped shortcut record",
-          Boolean(
-            storage.value &&
-            JSON.parse(storage.value)["s-alpha"]?.pinned === true
-          ),
-          `${storage.key}=${storage.value}`
+          "pinning sends the change to the shared server record",
+          shortcutRequests.some((entry) => entry.id === "s-alpha" && entry.change.pinned === true),
+          JSON.stringify(shortcutRequests)
         )
 
         await page
@@ -1045,16 +1059,12 @@ if (browser) {
           .getByText("Synthetic label", { exact: true })
           .first()
           .waitFor({ state: "visible" })
-        const labelRecord = await page.evaluate(() => {
-          const key = `opencode-ui:session-shortcuts:v1:${encodeURIComponent(
-            window.location.origin
-          )}:${encodeURIComponent("2.1.4")}`
-          return JSON.parse(window.localStorage.getItem(key) ?? "{}")
-        })
         check(
-          "local label is stored in the scoped browser-local record",
-          labelRecord["s-alpha"]?.label === "Synthetic label",
-          JSON.stringify(labelRecord)
+          "label is stored in the shared server record",
+          shortcutRequests.some(
+            (entry) => entry.id === "s-alpha" && entry.change.label === "Synthetic label"
+          ),
+          JSON.stringify(shortcutRequests)
         )
 
         const pinnedGroup = page.getByRole("button", {

@@ -783,7 +783,7 @@ function SessionList({
     : notes.open
       ? null
       : nav.activeSessionID
-  const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
+  const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts()
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [archivedOpen, setArchivedOpen] = useState(false)

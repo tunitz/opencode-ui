@@ -15,6 +15,8 @@ type GatewayOptions = {
   notes?: Handler
   /** Plugins HTTP API mounted at /api/ui/plugins*. */
   plugins?: Handler
+  /** Shared session pins and labels mounted at /api/ui/session-shortcuts. */
+  sessionShortcuts?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler

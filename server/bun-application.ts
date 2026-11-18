@@ -21,6 +21,8 @@ export function createBunApplication(options: {
   notes?: Service & { dispose?: () => void }
   /** Optional Plugins HTTP API; when absent /api/ui/plugins* keeps its previous routing. */
   plugins?: Service
+  /** Optional shared session pins/labels API. */
+  sessionShortcuts?: Service & { dispose?: () => void }
 }) {
   const bridge = createPtyWebSocketBridge({ upstream: options.target, authorization: options.authorization, security: options.security })
   const fetch = createWebGateway({
@@ -29,6 +31,7 @@ export function createBunApplication(options: {
     auth: options.auth ? createAuthApiHandler(options.auth) : undefined,
     notes: options.notes?.handleRequest,
     plugins: options.plugins?.handleRequest,
+    sessionShortcuts: options.sessionShortcuts?.handleRequest,
     agents: options.agents.handleRequest, artifacts: options.artifacts.handleRequest,
     notifications: options.notifications.handleRequest,
     engine: (request) => proxyEngineRequest(request, { target: options.target, authorization: options.authorization }),
@@ -39,6 +42,7 @@ export function createBunApplication(options: {
     websocket: bridge.websocket,
     dispose: () => {
       options.notes?.dispose?.()
+      options.sessionShortcuts?.dispose?.()
       bridge.dispose()
     },
   }

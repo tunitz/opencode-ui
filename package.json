@@ -51,6 +51,7 @@
     "server/cli-flags.ts",
     "server/notes-api.ts",
     "server/plugins-api.ts",
+    "server/session-shortcuts.ts",
     "src/lib/agent-config-types.ts",
     "plugins/notes/*.ts",
     "plugins/notes/package.json",

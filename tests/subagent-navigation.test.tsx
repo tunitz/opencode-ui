@@ -73,7 +73,7 @@ describe("subagent header navigation", () => {
     const nav = { activeSession: session("root"), sessions: [], runningSessionIDs: {} } as unknown as OpenCodeController
     const html = renderToStaticMarkup(createElement(SubagentNavigation, { nav, title: "A task", projectLabel: "opencode-ui" }))
     expect(html).toContain("opencode-ui")
-    expect(html).toMatch(/opencode-ui[\s\S]*A task/)
+    expect(html).toMatch(/A task[\s\S]*opencode-ui/)
     const without = renderToStaticMarkup(createElement(SubagentNavigation, { nav, title: "A task" }))
     expect(without).not.toContain("opencode-ui")
   })

@@ -35,7 +35,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 export function SessionPanel({ nav }: { nav: OpenCodeController }) {
   const session = nav.activeSession
-  const { shortcuts, update, error: shortcutError } = useSessionShortcuts(nav.serverVersion)
+  const { shortcuts, update, error: shortcutError } = useSessionShortcuts()
   const undo = useUndoToast()
   const [archiving, setArchiving] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)

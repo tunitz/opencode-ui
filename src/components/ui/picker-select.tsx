@@ -3,7 +3,9 @@
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
 import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon, StarIcon } from "lucide-react"
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentProps,
@@ -95,12 +97,35 @@ export function PickerSelect({
   const [open, setOpen] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  // Base UI scrolls the initially highlighted item into view. With a long
-  // catalog the selected value can sit mid-list, so the popup would open
-  // scrolled away from the top. Always present a predictable list start.
+  // The list is portalled and mounts after `open` flips, so reset from several
+  // hooks: when it attaches, after the open layout, and when Base UI sets the
+  // initial highlight. The picker must always open at the very first row.
+  const scrollToTop = useCallback(() => {
+    const list = listRef.current
+    if (!list) return
+    requestAnimationFrame(() => {
+      list.scrollTop = 0
+      list.scrollTo?.({ top: 0 })
+    })
+  }, [])
+  const attachList = useCallback(
+    (node: HTMLDivElement | null) => {
+      listRef.current = node
+      if (node && open) scrollToTop()
+    },
+    [open, scrollToTop]
+  )
+  useLayoutEffect(() => {
+    if (!open) return
+    scrollToTop()
+    const frame = requestAnimationFrame(scrollToTop)
+    return () => cancelAnimationFrame(frame)
+  }, [open, options, scrollToTop])
   useEffect(() => {
-    if (open) listRef.current?.scrollTo({ top: 0 })
-  }, [open, options])
+    if (!open) return
+    const frame = requestAnimationFrame(scrollToTop)
+    return () => cancelAnimationFrame(frame)
+  }, [open, scrollToTop])
 
   const selected = options.find((option) => option.value === value) ?? null
   const selectedLabel = selected
@@ -116,6 +141,9 @@ export function PickerSelect({
       open={open}
       onOpenChange={setOpen}
       autoHighlight={false}
+      onItemHighlighted={(_item, details) => {
+        if (open && details.reason === "none") scrollToTop()
+      }}
       onValueChange={(next) => {
         const nextOption = Array.isArray(next) ? next[0] : next
         if (nextOption) onValueChange(nextOption.value)
@@ -193,7 +221,7 @@ export function PickerSelect({
               </div>
             </ComboboxPrimitive.Empty>
             <ComboboxPrimitive.List
-              ref={listRef}
+              ref={attachList}
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1 scroll-py-1 outline-0"
             >
               {(option: PickerOption) => (

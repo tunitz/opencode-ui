@@ -1,62 +1,54 @@
-import { useMemo, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import {
   parseSessionShortcuts,
-  shortcutStorageKey,
   updateSessionShortcut,
   type SessionShortcut,
+  type SessionShortcuts,
 } from "@/lib/session-shortcuts"
-
-const shortcutsChanged = "opencode-ui:session-shortcuts-changed"
-
-function subscribeShortcuts(callback: () => void) {
-  window.addEventListener("storage", callback)
-  window.addEventListener(shortcutsChanged, callback)
-  return () => {
-    window.removeEventListener("storage", callback)
-    window.removeEventListener(shortcutsChanged, callback)
-  }
-}
+import {
+  readSessionShortcuts,
+  updateSessionShortcutOnServer,
+} from "@/lib/session-shortcuts-api"
 
 /**
- * Browser-local session labels and pins. These never change native session
- * data, so they are explicitly a local view preference.
+ * Session pins and labels are app-server state, so they are shared by every
+ * browser and device signed into this UI. They never change native sessions.
  */
-export function useSessionShortcuts(version: string | null) {
-  const key = version ? shortcutStorageKey(window.location.origin, version) : null
-  const raw = useSyncExternalStore(
-    subscribeShortcuts,
-    () => {
-      try {
-        return key ? localStorage.getItem(key) ?? "" : ""
-      } catch {
-        return ""
-      }
-    },
-    () => ""
+export function useSessionShortcuts() {
+  const [shortcuts, setShortcuts] = useState<SessionShortcuts>(() =>
+    parseSessionShortcuts(null)
   )
-  const shortcuts = useMemo(() => parseSessionShortcuts(raw), [raw])
   const [error, setError] = useState<string | null>(null)
 
-  function update(id: string, change: Partial<SessionShortcut>) {
-    if (!key) {
-      setError("Session labels and pins are unavailable until the server version is known.")
-      return false
-    }
+  const refresh = useCallback(async () => {
     try {
-      const current = parseSessionShortcuts(localStorage.getItem(key))
-      localStorage.setItem(
-        key,
-        JSON.stringify(updateSessionShortcut(current, id, change))
-      )
-      window.dispatchEvent(new Event(shortcutsChanged))
+      setShortcuts(await readSessionShortcuts())
       setError(null)
-      return true
     } catch {
-      setError("Could not save session labels and pins in this browser.")
-      return false
+      setError("Could not load session pins and labels.")
     }
-  }
+  }, [])
 
-  return { shortcuts, update, error }
+  useEffect(() => {
+    void Promise.resolve().then(() => void refresh())
+    window.addEventListener("focus", refresh)
+    return () => window.removeEventListener("focus", refresh)
+  }, [refresh])
+
+  const update = useCallback((id: string, change: Partial<SessionShortcut>) => {
+    setShortcuts((current) => updateSessionShortcut(current, id, change))
+    void updateSessionShortcutOnServer(id, change)
+      .then((next) => {
+        setShortcuts(next)
+        setError(null)
+      })
+      .catch(() => {
+        setError("Could not save session pins and labels.")
+        void refresh()
+      })
+    return true
+  }, [refresh])
+
+  return { shortcuts, update, error, refresh }
 }

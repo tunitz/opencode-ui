@@ -6,6 +6,7 @@ import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-deliv
 import { createAuthService } from "./auth.ts"
 import { createNotesApi } from "./notes-api.ts"
 import { createPluginsApi } from "./plugins-api.ts"
+import { createSessionShortcutsService } from "./session-shortcuts.ts"
 import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
 import { parseCliFlags, type CliFlags } from "./cli-flags.ts"
@@ -211,8 +212,9 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
   const notes = createNotesApi()
   const plugins = createPluginsApi({ engineUrl: target, authorization, repoRoot: resolve(import.meta.dirname, "..") })
+  const sessionShortcuts = createSessionShortcutsService()
   const application = createBunApplication({
-    target, authorization, directory, agents, artifacts, notifications, auth, notes, plugins,
+    target, authorization, directory, agents, artifacts, notifications, auth, notes, plugins, sessionShortcuts,
     security,
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {

@@ -100,6 +100,9 @@ settings. Run `bun run start --help` or `bun bin/opencode-ui.ts --help` for the 
 - `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
 - `OPENCODE_UI_AUTH_STATE`: overrides the password/session state file, which defaults to
   `~/.local/share/opencode-ui/auth/state.json`.
+- `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: overrides the shared session pins/labels file, which
+  defaults to `~/.local/share/opencode-ui/session-shortcuts.json`. Pins and labels are server-wide
+  rather than browser-local.
 - `OPENCODE_UI_SESSION_COOKIE`: overrides the session cookie name (default `opencode_ui_session`).
   Set a distinct name for a second UI instance on the same host, since cookies are scoped to a host
   and ignore port numbers.
