@@ -133,3 +133,35 @@ test("the dialog resets transient state on open instead of remounting", () => {
   expect(dialog).toContain("initialTarget(initialDirectory)")
   expect(dialog).toContain("type TargetState")
 })
+
+test("the agent picker stays available when folder location cannot resolve", () => {
+  // Browsing into a subfolder or up above the project root makes location.get
+  // reject, which nulls selectedID. The picker preview (draft + options) must
+  // come from the directory-scoped catalog alone, never from selectedID,
+  // otherwise the picker silently vanished during folder navigation.
+  const draftBlock = dialog.match(
+    /const draft = useMemo<SessionDraft \| null>\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);?/
+  )?.[0]
+  expect(draftBlock).toBeDefined()
+  expect(draftBlock).not.toContain("selectedID")
+  expect(draftBlock).toContain("defaults")
+  expect(draftBlock).toContain("override?.directory === directory")
+
+  // Neither the render guard nor the reason chain may gate the picker on a
+  // resolved project; the picker is shown from the ready, directory-scoped
+  // catalog and an unavailable folder is surfaced as an honest reason instead.
+  expect(dialog).toContain('targetCatalog.status === "ready" && draft')
+  expect(dialog).not.toMatch(/selectedID\s*&&\s*draft/)
+  expect(dialog).not.toMatch(/draft\s*&&\s*selectedID/)
+  expect(dialog).toContain("folder === \"unavailable\"")
+  expect(dialog).toContain("Selected session folder unavailable.")
+
+  // Safety preserved: creation still requires a resolved project id.
+  const canCreateBlock =
+    dialog.match(
+      /const canCreate =([\s\S]*?)\n\n  async function handleAgentChange/
+    )?.[1] ?? ""
+  expect(canCreateBlock).toContain("Boolean(selectedID)")
+  expect(canCreateBlock).toContain('targetCatalog.status === "ready"')
+  expect(dialog).toMatch(/if \(!canCreate \|\| !selectedID \|\| !draft\?\.model\)/)
+})

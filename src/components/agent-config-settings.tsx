@@ -109,6 +109,34 @@ type Option = {
   disabled?: boolean
 }
 
+export type AgentModelOptionEntry = {
+  key: string
+  option: Option
+}
+
+/**
+ * Orders model options with favorites first, after any fixed control entries
+ * (Inherit / unavailable baseline). Option objects are reused — only their
+ * order changes when a favorite toggles — so picker state survives a toggle.
+ * Mirrors the New session dialog so stars are consistent across pickers.
+ */
+export function orderAgentModelOptions(
+  stableModels: readonly AgentModelOptionEntry[],
+  favorites: ReadonlySet<string>,
+  leadingOptions: readonly Option[] = []
+): Option[] {
+  return [
+    ...leadingOptions,
+    ...stableModels
+      .slice()
+      .sort(
+        (left, right) =>
+          Number(favorites.has(right.key)) - Number(favorites.has(left.key))
+      )
+      .map(({ option }) => option),
+  ]
+}
+
 function draftFromSource(source: AgentConfigSource | null): Draft {
   const values = source?.values ?? {}
   return {
@@ -528,23 +556,47 @@ export function AgentConfigSettings({
   const selectedModelInfo =
     models.find((model) => modelKey(model) === base) ?? null
   const variantIds = variantsForModel(selectedModelInfo)
-  const modelOptions: Option[] = [
-    { value: INHERIT, label: "Inherit / remove model override" },
-    ...(baselineModelKey &&
-    !models.some((model) => modelKey(model) === modelBase(baselineModelKey))
-      ? [
-          {
-            value: modelBase(baselineModelKey),
-            label: `${modelBase(baselineModelKey)} (unavailable)`,
+
+  // Option objects are built once per catalog identity and reused afterwards;
+  // only their *order* changes when a favorite toggles. Favorites stay ranked
+  // first without rebuilding objects or recomputing modelKey on every toggle.
+  const stableModelOptions = useMemo<AgentModelOptionEntry[]>(
+    () =>
+      models.map((model) => {
+        const key = modelKey(model)
+        return {
+          key,
+          option: {
+            value: key,
+            label: model.id,
+            detail: `${model.providerID}/${model.id}`,
           },
-        ]
-      : []),
-    ...models.map((model) => ({
-      value: modelKey(model),
-      label: model.id,
-      detail: `${model.providerID}/${model.id}`,
-    })),
-  ]
+        }
+      }),
+    [models]
+  )
+  const unavailableModelKey =
+    baselineModelKey &&
+    !models.some((model) => modelKey(model) === modelBase(baselineModelKey))
+      ? modelBase(baselineModelKey)
+      : null
+  // Fixed control entries stay at the top (Inherit, then the unavailable
+  // baseline), followed by favorites and the rest of the catalog.
+  const modelOptions: Option[] = useMemo(
+    () =>
+      orderAgentModelOptions(stableModelOptions, favorites, [
+        { value: INHERIT, label: "Inherit / remove model override" },
+        ...(unavailableModelKey
+          ? [
+              {
+                value: unavailableModelKey,
+                label: `${unavailableModelKey} (unavailable)`,
+              },
+            ]
+          : []),
+      ]),
+    [stableModelOptions, favorites, unavailableModelKey]
+  )
   const variantOptions: Option[] = [
     { value: INHERIT, label: "Default variant" },
     ...variantIds.map((id) => ({ value: id, label: id })),

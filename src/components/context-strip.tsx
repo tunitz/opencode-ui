@@ -8,10 +8,10 @@ import {
 
 import { Button } from "@/components/ui/button"
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card"
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Progress } from "@/components/ui/progress"
 import {
   contextLimitForModel,
@@ -139,10 +139,11 @@ function useElapsedSince(startedAt: number | null): number | null {
 }
 
 /**
- * Composer-adjacent usage strip. It is a hover card and only reports native
- * token/timestamp values; any unavailable field is shown as an em dash rather
- * than inferred. Scopes are kept separate: last response, live run, session
- * cumulative totals, and the model context window.
+ * Composer-adjacent usage strip. It is a click/tap-toggle popover (hover cards
+ * cannot be opened by touch) and only reports native token/timestamp values;
+ * any unavailable field is shown as an em dash rather than inferred. Scopes are
+ * kept separate: last response, live run, session cumulative totals, and the
+ * model context window.
  */
 export function ContextStrip({
   sessionID,
@@ -193,8 +194,8 @@ export function ContextStrip({
 
   return (
     <div className="border-t border-border/60 bg-background px-3 md:px-0">
-      <HoverCard>
-        <HoverCardTrigger
+      <Popover>
+        <PopoverTrigger
           render={
             <Button
               type="button"
@@ -238,8 +239,13 @@ export function ContextStrip({
             ) : null}
           </span>
           <span className="sr-only">Show response usage and context details</span>
-        </HoverCardTrigger>
-        <HoverCardContent className="max-h-[70svh] w-[min(92vw,28rem)] overflow-y-auto">
+        </PopoverTrigger>
+        <PopoverContent
+          side="bottom"
+          align="start"
+          aria-label="Context usage details"
+          className="max-h-[70svh] w-[var(--anchor-width,min(92vw,28rem))] max-w-[calc(100vw-1rem)] overflow-y-auto"
+        >
           <div className="flex flex-col gap-3 text-[11px] md:text-[13px]">
             <section className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-1">
@@ -364,8 +370,8 @@ export function ContextStrip({
               </section>
             ) : null}
           </div>
-        </HoverCardContent>
-      </HoverCard>
+        </PopoverContent>
+      </Popover>
     </div>
   )
 }

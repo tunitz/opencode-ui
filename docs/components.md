@@ -8,7 +8,7 @@ rules are in [contract.md](contract.md); command behavior is in [commands.md](co
 ## Component hierarchy
 
 1. **shadcn AI elements / Base UI** — `MessageScroller`, `Message`, `Bubble`, `Attachment`,
-   `Marker`, `Trace`, `CodeBlock`, `Item` (Confirmation), `HoverCard` + `Progress` (Context),
+   `Marker`, `Trace`, `CodeBlock`, `Item` (Confirmation), `Popover` + `Progress` (Context),
    `PromptInput`/`InputGroup`, plus dialogs, sheets, menus, selects, tabs and fields.
 2. **OpenUI** — `Table` primitives and lazy `Charts/BarChart` only. Code blocks now use shadcn
    `CodeBlock`, not the OpenUI one.

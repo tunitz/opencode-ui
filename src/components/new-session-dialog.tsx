@@ -31,7 +31,14 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 const CREATE_REASON_ID = "new-session-create-reason"
 const DEFAULT_VARIANT = "__default__"
 
-type ResolvedLocation = { project: { id: string }; directory?: string | null }
+type ResolvedLocation = {
+  project: {
+    id: string
+    directory?: string | null
+    canonical?: string | null
+  }
+  directory?: string | null
+}
 type FolderEntries = { entries: string[]; error: boolean }
 const locationCache = createAsyncCache<ResolvedLocation>(30_000)
 const folderCache = createAsyncCache<FolderEntries>(30_000)
@@ -75,6 +82,11 @@ type SessionDraft = {
 // results are applied as a single batched update instead of a render cascade.
 type TargetState = {
   directory: string
+  // Sticky project directory for the agent/model catalog. It follows the
+  // canonical directory of the last successfully resolved project, so browsing
+  // a subfolder or above the project root keeps the project's catalog mounted
+  // instead of refetching against a directory that is not a project root.
+  catalogDirectory: string
   selected: { directory: string; id: string | null } | null
   probe: FolderProbe | null
   listing: DirectoryListing | null
@@ -82,7 +94,14 @@ type TargetState = {
 }
 
 function initialTarget(directory: string): TargetState {
-  return { directory, selected: null, probe: null, listing: null, override: null }
+  return {
+    directory,
+    catalogDirectory: directory,
+    selected: null,
+    probe: null,
+    listing: null,
+    override: null,
+  }
 }
 
 export type NewSessionButtonProps = {
@@ -111,13 +130,17 @@ export function NewSessionDialog({
   const [target, setTarget] = useState<TargetState>(() =>
     initialTarget(initialDirectory)
   )
-  const { directory, selected, probe, listing, override } = target
+  const { directory, catalogDirectory, selected, probe, listing, override } = target
   // Key the selection to its directory so changing folders immediately
   // invalidates the previous project instead of previewing stale defaults.
   const selectedID = selected?.directory === directory ? selected.id : null
 
   const { createSession } = nav
-  const targetCatalog = useTargetCatalog(open ? directory : null)
+  // The catalog is bound to the resolved project directory, not to the folder
+  // currently being browsed. `location.get` rejects for subfolders and parents
+  // above the project root, and agent/model.list only returns a catalog for a
+  // project root; querying them with the raw browsed folder emptied the picker.
+  const targetCatalog = useTargetCatalog(open ? catalogDirectory : null)
 
   // Reset transient state on the open transition instead of remounting the
   // whole dialog (which previously forced fresh native catalog calls).
@@ -144,8 +167,13 @@ export function NewSessionDialog({
       nav.configEntries,
     ]
   )
+  // The agent/model/variant preview is tied to the directory-scoped catalog,
+  // not to directory→project resolution. `location.get` rejects for folders
+  // that are not registered projects (subfolders, or parents above the project
+  // root), so gating the picker on `selectedID` made it vanish while browsing.
+  // Creation still requires a resolved project (`selectedID` in `canCreate`).
   const draft = useMemo<SessionDraft | null>(() => {
-    if (!selectedID || !defaults) return null
+    if (!defaults) return null
     const current = override?.directory === directory ? override.value : {}
     return {
       agentID: current.agentID ?? defaults.agentID,
@@ -155,7 +183,7 @@ export function NewSessionDialog({
           ? current.variant
           : (defaults.model?.variant ?? null),
     }
-  }, [selectedID, defaults, override, directory])
+  }, [defaults, override, directory])
 
   const agentOptions = useMemo<PickerOption[]>(
     () =>
@@ -232,10 +260,15 @@ export function NewSessionDialog({
       .get(directory, () => loadLocation(directory))
       .then((location) => {
         if (!cancelled) {
+          // Re-scope the catalog only when resolution yields a project, and use
+          // its canonical directory so nested folders share the same catalog.
+          const catalogDirectory =
+            location.project?.canonical ?? location.project?.directory ?? directory
           setTarget((current) =>
             current.directory === directory
               ? {
                   ...current,
+                  catalogDirectory,
                   selected: { directory, id: location.project.id },
                   probe: { directory, available: true },
                 }
@@ -249,6 +282,9 @@ export function NewSessionDialog({
             current.directory === directory
               ? {
                   ...current,
+                  // Keep the last successful catalog directory. This folder is
+                  // not a registered project, so creation stays gated by the
+                  // null selection, but the project's picker remains usable.
                   selected: { directory, id: null },
                   probe: { directory, available: false },
                 }
