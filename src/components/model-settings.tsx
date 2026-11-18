@@ -34,6 +34,7 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
+import { useModelFavorites } from "@/lib/model-favorites"
 
 const DEFAULT_VARIANT = "__default__"
 
@@ -52,6 +53,7 @@ function useModelSettingsState(
 ) {
   const [selectorError, setSelectorErrorState] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const { favorites, toggle: toggleFavorite } = useModelFavorites()
 
   function setSelectorError(message: string | null) {
     setSelectorErrorState(message)
@@ -111,11 +113,20 @@ function useModelSettingsState(
 
   const modelOptions = useMemo<Option[]>(
     () => [
-      ...selectableModelList.map((candidate) => ({
-        value: modelKey(candidate),
-        label: candidate.id,
-        detail: `${candidate.providerID}/${candidate.id}`,
-      })),
+      ...[...selectableModelList]
+        .sort((left, right) => {
+          const leftFavorite = favorites.has(modelKey(left)) ? 0 : 1
+          const rightFavorite = favorites.has(modelKey(right)) ? 0 : 1
+          return (
+            leftFavorite - rightFavorite ||
+            modelKey(left).localeCompare(modelKey(right))
+          )
+        })
+        .map((candidate) => ({
+          value: modelKey(candidate),
+          label: candidate.id,
+          detail: `${candidate.providerID}/${candidate.id}`,
+        })),
       ...(model &&
       !nav.models.some(
         (candidate) =>
@@ -131,7 +142,7 @@ function useModelSettingsState(
           ]
         : []),
     ],
-    [model, nav.models, selectableModelList]
+    [favorites, model, nav.models, selectableModelList]
   )
 
   const variantOptions = useMemo<Option[]>(
@@ -196,6 +207,8 @@ function useModelSettingsState(
     catalogError,
     selectorError,
     statusMessage,
+    favorites,
+    toggleFavorite,
     handleAgentChange,
     handleModelChange,
     handleVariantChange,
@@ -210,6 +223,8 @@ function SettingSelect({
   busy,
   showDetail,
   onValueChange,
+  favorites,
+  onToggleFavorite,
 }: {
   name: string
   value: string
@@ -218,6 +233,8 @@ function SettingSelect({
   busy?: boolean
   showDetail?: boolean
   onValueChange: (value: string) => void
+  favorites?: ReadonlySet<string>
+  onToggleFavorite?: (value: string) => void
 }) {
   const selected = options.find((option) => option.value === value)
   const fallbackLabel = value || "Default"
@@ -238,6 +255,8 @@ function SettingSelect({
       showDetail={showDetail}
       placeholder={value || "Default"}
       triggerProps={{ "aria-busy": busy }}
+      favorites={favorites}
+      onToggleFavorite={onToggleFavorite}
       onValueChange={onValueChange}
       triggerClassName="h-11! w-full min-w-0 gap-2 overflow-hidden px-3 text-sm"
     />
@@ -287,6 +306,8 @@ function ModelSettingsForm({ state }: { state: ModelSettingsState }) {
           options={state.modelOptions}
           disabled={!state.session || state.nav.switchingModel}
           busy={state.nav.switchingModel}
+          favorites={state.favorites}
+          onToggleFavorite={state.toggleFavorite}
           onValueChange={(value) => void state.handleModelChange(value)}
         />
       </SettingRow>
@@ -480,6 +501,8 @@ export function ModelSettingsInline({
         options={state.modelOptions}
         disabled={!session || nav.switchingModel}
         busy={nav.switchingModel}
+        favorites={state.favorites}
+        onToggleFavorite={state.toggleFavorite}
         side="top"
         align="start"
         placeholder="No model"

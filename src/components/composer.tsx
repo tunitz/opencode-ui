@@ -1881,7 +1881,6 @@ export function Composer({
           }
         />
         <ComposerEditor
-          key={draftKey}
           ref={editorRef}
           sessionKey={draftKey}
           value={draft}

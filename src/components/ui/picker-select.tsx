@@ -1,7 +1,7 @@
 "use client"
 
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
-import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, SearchIcon, StarIcon } from "lucide-react"
 import {
   useEffect,
   useRef,
@@ -66,6 +66,8 @@ export function PickerSelect({
   triggerProps,
   renderValue,
   iconClassName = "size-4",
+  favorites,
+  onToggleFavorite,
 }: {
   value: string | null
   options: readonly PickerOption[]
@@ -87,6 +89,8 @@ export function PickerSelect({
   triggerProps?: TriggerProps
   renderValue?: (selected: PickerOption | null) => ReactNode
   iconClassName?: string
+  favorites?: ReadonlySet<string>
+  onToggleFavorite?: (value: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -197,7 +201,10 @@ export function PickerSelect({
                   key={option.value}
                   value={option}
                   disabled={option.disabled}
-                  className="relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 pe-8 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+                  className={cn(
+                    "relative flex min-h-11 w-full cursor-default items-start gap-2 rounded-md py-2 ps-2 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+                    onToggleFavorite ? "pe-14" : "pe-8"
+                  )}
                 >
                   {option.icon ? (
                     <span className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4">
@@ -217,9 +224,40 @@ export function PickerSelect({
                       </span>
                     ) : null}
                   </span>
+                  {onToggleFavorite ? (
+                    <button
+                      type="button"
+                      aria-label={
+                        favorites?.has(option.value)
+                          ? `Unfavorite ${option.label}`
+                          : `Favorite ${option.label}`
+                      }
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onToggleFavorite(option.value)
+                      }}
+                      className="absolute end-2 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                    >
+                      <StarIcon
+                        aria-hidden="true"
+                        className={cn(
+                          "size-4",
+                          favorites?.has(option.value) &&
+                            "fill-amber-400 text-amber-400"
+                        )}
+                      />
+                    </button>
+                  ) : null}
                   <ComboboxPrimitive.ItemIndicator
                     render={
-                      <span className="pointer-events-none absolute end-2 top-1/2 flex size-4 -translate-y-1/2 items-center justify-center" />
+                      <span
+                        className={cn(
+                          "pointer-events-none absolute top-1/2 flex size-4 -translate-y-1/2 items-center justify-center",
+                          onToggleFavorite ? "end-10" : "end-2"
+                        )}
+                      />
                     }
                   >
                     <CheckIcon className="size-4" />

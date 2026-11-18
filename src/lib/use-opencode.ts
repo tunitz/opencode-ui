@@ -27,6 +27,7 @@ import {
 } from "@/lib/opencode"
 import { agentModelDefaults } from "@/lib/session-selection"
 import { createStreamWatchdog } from "@/lib/stream-watchdog"
+import { useShallowMemo } from "@/lib/use-shallow-memo"
 import {
   applySessionTitle,
   descendantSessionIDs,
@@ -3226,7 +3227,7 @@ export function useOpenCode(): OpenCodeController {
     ? (attachmentsBySession[activeSessionID] ?? [])
     : []
 
-  const state: OpenCodeState = {
+  const state = useShallowMemo<OpenCodeState>({
     connection,
     connectionError,
     scope,
@@ -3293,9 +3294,9 @@ export function useOpenCode(): OpenCodeController {
     inboxBusy,
     composerRestore,
     focusMessageID,
-  }
+  })
 
-  return {
+  const controller = useShallowMemo<OpenCodeController>({
     ...state,
     selectProject,
     selectAllProjects,
@@ -3354,5 +3355,6 @@ export function useOpenCode(): OpenCodeController {
     clearFocusMessage,
     clearSessionView,
     reloadConfiguration,
-  }
+  })
+  return controller
 }

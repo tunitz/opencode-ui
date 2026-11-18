@@ -167,7 +167,7 @@ export function NotesProvider({
   )
 
   useEffect(() => {
-    if (!directory || !notesEnabled) return
+    if (!notesEnabled) return
     let active = true
     let token = 0
     const load = async () => {
@@ -183,7 +183,7 @@ export function NotesProvider({
         if (listResult.status === "rejected") throw listResult.reason
         if (!active || current !== token) return
         setPinnedSnapshot({
-          directory,
+          directory: "all",
           notes: uniqueByID(listResult.value.notes),
           spaces:
             spacesResult.status === "fulfilled"
@@ -196,7 +196,7 @@ export function NotesProvider({
       } catch {
         if (active && current === token)
           setPinnedSnapshot({
-            directory,
+            directory: "all",
             notes: [],
             spaces: [],
             spacesError: true,
@@ -220,7 +220,7 @@ export function NotesProvider({
       if (timer) clearTimeout(timer)
       stop()
     }
-  }, [directory, pinnedRequest, notesEnabled, pinnedExpanded])
+  }, [pinnedRequest, notesEnabled, pinnedExpanded])
 
   const available = notesEnabled && Boolean(directory)
   const showWorkspace = notesEnabled && (workspace
@@ -285,19 +285,12 @@ export function NotesProvider({
     openNotes,
     closeNotes,
     adapter,
-    pinnedNotes:
-      pinnedSnapshot?.directory === directory ? pinnedSnapshot.notes : [],
-    pinnedSpaces:
-      pinnedSnapshot?.directory === directory ? pinnedSnapshot.spaces : [],
-    pinnedSpacesError:
-      pinnedSnapshot?.directory === directory
-        ? pinnedSnapshot.spacesError
-        : false,
-    pinnedTotal:
-      pinnedSnapshot?.directory === directory ? pinnedSnapshot.total : 0,
-    pinnedError:
-      pinnedSnapshot?.directory === directory && pinnedSnapshot.error,
-    pinnedLoading: pinnedSnapshot?.directory !== directory,
+    pinnedNotes: pinnedSnapshot?.notes ?? [],
+    pinnedSpaces: pinnedSnapshot?.spaces ?? [],
+    pinnedSpacesError: pinnedSnapshot?.spacesError ?? false,
+    pinnedTotal: pinnedSnapshot?.total ?? 0,
+    pinnedError: pinnedSnapshot?.error ?? false,
+    pinnedLoading: pinnedSnapshot === null,
     directoryChanged: Boolean(
       editingDirectory && editingDirectory !== directory
     ),

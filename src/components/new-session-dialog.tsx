@@ -23,6 +23,7 @@ import {
 } from "@/lib/session-selection"
 import type { ModelRef } from "@/lib/opencode"
 import { openCode } from "@/lib/opencode"
+import { useModelFavorites } from "@/lib/model-favorites"
 import { childDirectory, directoryEntryName, parentDirectory } from "@/lib/directory-picker"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
@@ -120,14 +121,24 @@ export function NewSessionDialog({
       })),
     [targetCatalog.agents]
   )
+  const { favorites, toggle: toggleFavorite } = useModelFavorites()
   const modelOptions = useMemo(
     () =>
-      selectableModels(targetCatalog.models).map((model) => ({
-        value: modelKey(model),
-        label: model.id,
-        detail: `${model.providerID}/${model.id}`,
-      })),
-    [targetCatalog.models]
+      [...selectableModels(targetCatalog.models)]
+        .sort((left, right) => {
+          const leftFavorite = favorites.has(modelKey(left)) ? 0 : 1
+          const rightFavorite = favorites.has(modelKey(right)) ? 0 : 1
+          return (
+            leftFavorite - rightFavorite ||
+            modelKey(left).localeCompare(modelKey(right))
+          )
+        })
+        .map((model) => ({
+          value: modelKey(model),
+          label: model.id,
+          detail: `${model.providerID}/${model.id}`,
+        })),
+    [favorites, targetCatalog.models]
   )
   const selectedModel = draft?.model ?? null
   const selectedModelInfo = selectedModel
@@ -367,6 +378,8 @@ export function NewSessionDialog({
                   options={modelOptions}
                   placeholder="No model"
                   disabled={nav.creating}
+                  favorites={favorites}
+                  onToggleFavorite={toggleFavorite}
                   onValueChange={(value) => void handleModelChange(value)}
                 />
               </div>

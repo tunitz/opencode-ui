@@ -1968,7 +1968,7 @@ export function Conversation({
     )
   }
 
-  if (status === "loading") {
+  if (status === "loading" && rows.length === 0 && !liveRun) {
     return (
       <ConversationNotice>
         <span role="status">Loading history…</span>
@@ -2085,6 +2085,14 @@ export function Conversation({
             >
               <XIcon aria-hidden="true" className="size-4" />
             </Button>
+          </div>
+        ) : null}
+        {status === "loading" && rows.length > 0 ? (
+          <div
+            role="status"
+            className="sticky top-0 z-20 mx-1 my-1 rounded-lg border border-border bg-card/95 px-3 py-1.5 text-center text-xs text-muted-foreground shadow-sm backdrop-blur"
+          >
+            Loading history…
           </div>
         ) : null}
         {olderError || loadingOlder || hasOlder ? (
