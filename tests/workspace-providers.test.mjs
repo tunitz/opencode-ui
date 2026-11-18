@@ -104,7 +104,6 @@ function Harness() {
         : "none"
     ),
     React.createElement("span", { id: "notes-open" }, notes.open ? "open" : "closed"),
-    React.createElement(MediaButton),
     React.createElement(
       "button",
       { id: "open-settings", type: "button", onClick: () => settings.openSettings() },
@@ -112,6 +111,8 @@ function Harness() {
     ),
     React.createElement(
       "button",
+      { id: "open-workspace", type: "button", onClick: () => workspace.requestWorkspace("notes") },
+      "settings"
     ),
     React.createElement(
       "button",
@@ -153,19 +154,6 @@ async function mount() {
   return root
 }
 
-  const root = await mount()
-  try {
-    expect(state(root, "notes-open")).toBe("closed")
-
-    await click(root, "open-settings")
-    expect(state(root, "active")).toBe("settings")
-
-    expect(state(root, "pending")).toBe("none")
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
 test("reopening an active dirty Settings keeps edits and routes sections through the guard", async () => {
   const root = await mount()
   try {
@@ -184,7 +172,9 @@ test("reopening an active dirty Settings keeps edits and routes sections through
     expect(state(root, "dirty")).toBe("dirty")
 
     // The shared guard still protects leaving Settings afterwards.
+    await click(root, "open-workspace")
     expect(state(root, "active")).toBe("settings")
+    expect(state(root, "pending")).toBe("notes")
     expect(state(root, "dirty")).toBe("dirty")
   } finally {
     await act(async () => root.unmount())
@@ -197,20 +187,6 @@ test("openNotes remains unavailable while the plugin is disabled", async () => {
     await click(root, "open-notes")
     expect(state(root, "active")).toBe("chat")
     expect(state(root, "notes-open")).toBe("closed")
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
-  const root = await mount()
-  const mediaButton = () =>
-    root.root.find(
-    )
-  try {
-    expect(mediaButton().props["aria-current"]).toBeUndefined()
-    expect(mediaButton().props["aria-current"]).toBe("page")
-    await click(root, "open-settings")
-    expect(mediaButton().props["aria-current"]).toBeUndefined()
   } finally {
     await act(async () => root.unmount())
   }

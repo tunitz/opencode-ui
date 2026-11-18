@@ -25,7 +25,7 @@ import { SessionInspector, SessionInspectorPanel } from "@/components/session-in
 import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { WorkspaceProvider, useWorkspace } from "@/components/workspace-context"
+import { WorkspaceProvider } from "@/components/workspace-context"
 import type { FormInfo, SessionInfo, SessionMessageInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
@@ -791,48 +791,6 @@ function SettingsFixture() {
   )
 }
 
-function MediaShell({ nav }: { nav: OpenCodeController }) {
-  const workspace = useWorkspace()
-  useEffect(() => {
-    // Open once for this fixture; the workspace layout is the subject.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  return (
-    <div className="app-height app-viewport bg-background md:flex md:h-svh md:overflow-hidden">
-      <div className="app-height flex min-w-0 flex-1 flex-col md:h-svh">
-        <AppHeader
-          nav={nav}
-          onOpenSettings={() => undefined}
-          onOpenWorktrees={() => undefined}
-        />
-        <main
-          id="chat-main"
-          tabIndex={-1}
-          className="flex min-h-0 w-full min-w-0 flex-1 flex-col focus:outline-none"
-        >
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 md:px-6 lg:px-8">
-              <MediaWorkspace />
-            </div>
-          ) : (
-            <p className="p-4 text-sm text-muted-foreground" data-qa-active>
-              Conversation fixture
-            </p>
-          )}
-        </main>
-      </div>
-    </div>
-  )
-}
-
-function MediaFixture() {
-  const nav = useSyntheticNav()
-  return (
-    <Providers nav={nav}>
-      <MediaShell nav={nav} />
-    </Providers>
-  )
-}
-
 function Fixture() {
   const fixture = new URLSearchParams(window.location.search).get("fixture")
   switch (fixture) {
@@ -858,7 +816,6 @@ function Fixture() {
       return <PendingFixture />
     case "settings":
       return <SettingsFixture />
-      return <MediaFixture />
     case "nav":
     default:
       return <NavFixture />

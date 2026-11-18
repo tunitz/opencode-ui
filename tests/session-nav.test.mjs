@@ -28,11 +28,6 @@ test("creating a worktree session from either surface returns to chat through th
   ).toHaveLength(2)
 })
 
-  expect(navigation).toContain("<MediaButton />")
-  expect(navigation).toContain("<MediaTriggerButton")
-  expect(navigation).toContain('pendingMedia.current = true')
-})
-
 test("the pinned sessions group starts expanded and stays user-collapsible", () => {
   expect(navigation).toContain('<Accordion defaultValue={["pinned"]} className="space-y-2 py-1">')
   // Uncontrolled: no value/onValueChange on the pinned root, so toggling still

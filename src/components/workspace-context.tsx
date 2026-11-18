@@ -25,6 +25,7 @@ import {
  * and component state survive; each workspace owns its own scroll and draft
  * restoration. No other surface can be active at the same time.
  */
+export const WORKSPACE_IDS = ["chat", "notes", "settings"] as const
 
 export type WorkspaceID = (typeof WORKSPACE_IDS)[number]
 
@@ -113,6 +114,7 @@ function focusChat(): void {
 }
 
 /**
+ * Owns the chat/notes/settings discriminator and the one confirmation
  * used by every exit path. Workspaces register a synchronous dirty check; the
  * coordinator keeps transitions pending until the user chooses. It moves focus
  * into the active pane, but never owns chat scroll or virtualized offsets.

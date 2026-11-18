@@ -220,6 +220,7 @@
 /* App viewport on mobile: the visualViewport pixel override synced by
    useAppViewportHeight, with a viewport-unit fallback. Desktop uses
    the Tailwind md:h-svh (see App.tsx) and is deliberately not covered here. */
+@media (max-width: 767px) {
     .app-height {
         height: var(--app-viewport-height, 100vh);
     }
@@ -240,6 +241,7 @@
 /* Horizontal safe-area insets for landscape notches; never below 1rem.
    Mobile only; desktop uses the centered column's own padding. Logical
    padding keeps the notch inset on the inline-start/end edge in RTL. */
+@media (max-width: 767px) {
     .safe-horizontal {
         padding-inline-start: max(1rem, env(safe-area-inset-left));
         padding-inline-end: max(1rem, env(safe-area-inset-right));
@@ -384,6 +386,7 @@ pre {
 
 /* Reduced motion: no decorative animation, transition, or smooth scrolling.
    Status is still conveyed by text/ARIA, never by motion alone. */
+@media (prefers-reduced-motion: reduce) {
     *,
     *::before,
     *::after {
@@ -435,6 +438,7 @@ pre {
    Keep native text controls at 16px on touch devices so focusing an input
    never changes the zoom level. Desktop keeps its denser sizes, and page
    zoom stays available for accessibility (no user-scalable=no). */
+@media (pointer: coarse) {
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
     textarea,
     select {

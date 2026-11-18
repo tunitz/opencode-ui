@@ -339,6 +339,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
    * Re-verify the access password without minting a session.
    *
    * This exists for a step-up check on an already-authenticated request (the
+   * step-up flow): the caller proves possession of the session
    * *and* the password before a sensitive action. It shares login's failed-attempt
    * counter and failure delay, so it is not a cheaper brute-force oracle than
    * login: the same per-remote window and ceiling apply, a failure is counted

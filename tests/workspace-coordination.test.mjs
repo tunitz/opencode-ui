@@ -96,6 +96,7 @@ function Harness({ dirtyRef, log }) {
     null,
     React.createElement("span", { id: "active" }, workspace.active),
     React.createElement("span", { id: "pending" }, workspace.pendingTarget ?? "none"),
+    ["notes", "settings"].map((id) =>
       React.createElement(
         "button",
         { key: id, id, type: "button", onClick: () => transition(id) },
@@ -154,6 +155,8 @@ test("chat is the initial workspace and clean transitions commit immediately", a
     await click(root, "settings")
     expect(state(root, "active")).toBe("settings")
 
+    await click(root, "settings")
+    expect(state(root, "active")).toBe("settings")
 
     await click(root, "back")
     expect(state(root, "active")).toBe("chat")
@@ -196,7 +199,10 @@ test("the guard belongs to the active workspace only", async () => {
   try {
     // Dirty Settings left behind: moving from Notes must not prompt.
     await click(root, "notes")
+    await click(root, "settings")
+    expect(state(root, "active")).toBe("settings")
     expect(state(root, "pending")).toBe("none")
+    expect(log).toContain("settings:commit")
     dirtyRef.current = false
   } finally {
     await act(async () => root.unmount())
@@ -225,9 +231,11 @@ test("focus enters the workspace pane and returns to the originating trigger", a
     removeEventListener() {},
     getElementById: () => null,
     querySelector: (selector) =>
+      selector === '[data-workspace-focus="settings"]' ? pane : null,
   }
   const { root } = await mount()
   try {
+    await click(root, "settings")
     expect(pane.focus).toHaveBeenCalledTimes(1)
     expect(trigger.focus).toHaveBeenCalledTimes(0)
 
@@ -249,6 +257,7 @@ test("a pending confirmation refuses retargeting and same-target work", async ()
     expect(state(root, "pending")).toBe("notes")
 
     // Another destination must not silently replace the queued choice.
+    await click(root, "settings")
     expect(state(root, "active")).toBe("settings")
     expect(state(root, "pending")).toBe("notes")
     expect(log).toEqual([])
@@ -279,9 +288,11 @@ test("returning from a workspace ignores body as the return target", async () =>
     removeEventListener() {},
     getElementById: (id) => (id === "chat-main" ? chatMain : null),
     querySelector: (selector) =>
+      selector === '[data-workspace-focus="settings"]' ? pane : null,
   }
   const { root } = await mount()
   try {
+    await click(root, "settings")
     await click(root, "back")
     expect(chatMain.focus).toHaveBeenCalledTimes(1)
     expect(body.focus).toHaveBeenCalledTimes(0)

@@ -123,6 +123,7 @@ One `NotesService` instance per UI-server process, backed by the shared file sto
 
 Mounted under `/api/ui/plugins`; body limit 8 KiB. The UI server uses the server-held engine Basic
 credential and never exposes it to clients. A trusted descriptor registry covers the built-in
+`notes` plugin. Registration persists in the engine config file's `mcp.servers.<id>`
 (atomic JSONC edit), so it survives engine reloads; hot-connecting the running engine is best-effort
 and an engine restart may be required.
 
@@ -140,11 +141,6 @@ and an engine restart may be required.
 - `POST /api/ui/plugins/<id>/enable` → sets `mcp.servers.<id>` to the descriptor's canonical entry.
   For Notes that is
   `{ "type": "local", "command": ["<bun executable>", "<repoRoot>/plugins/notes/src/mcp/main.ts"], "disabled": false, "codemode": false }`.
-  dependency resolved with `createRequire`, with a `node_modules` fail-closed fallback), plus
-  `"env": { "OPENCODE_MEDIA_DATA_DIR": "<absolute path>" }` only when the trusted launch environment
-  supplies an absolute, control-character-free override; a relative or invalid override fails
-  only its installed entry, because the package declares and bundles its MCP SDK dependency and
-  no longer uses checkout-only runtime files.
   The bun executable is the UI server's own `process.execPath`, so the engine never depends on PATH.
   The plugin's entry file must exist in the installation root, matching what `GET` reports as
   `installed`; otherwise 409
@@ -186,144 +182,12 @@ and an engine restart may be required.
   `disabled: false` means enabled.
 - `codemode: false` is required so each notes tool call renders as a real tool row.
 
-
-never proxied to the engine or the artifact fallback. Every response is a protected `/api` response,
-so the gateway applies `cache-control: no-store` and `Vary: Origin`.
-
-| Method and path | Access | Result |
-|---|---|---|
-
-returns the generic `501 { "error": { "code": "unavailable" } }`. Wrong verbs on a known route are
-405, and unknown subpaths are 404. Errors use `{ error: { code, message?, retryable?, details? } }`
-with sanitized details.
-
-The session-gated routes refuse a deployment that cannot prove a session at all: on a loopback bind
-with no password configured, gating is inactive, so there is no session to verify and the handler
-answers `501 unavailable` ("Configure an access password"). A missing or forged cookie with a
-password configured is `401 auth_required`; a non-loopback bind with no password is `401
-setup_required`. The gateway's own auth gate may answer `401` before the handler runs.
-
-### Verification candidate recording and profile promotion [app layer]
-
-The seven verification endpoints are enabled only when both independent trust
-compositions (recording and promotion) are present. The route first proves a
-password-backed browser session; therefore anonymous requests remain `401` even
-when trust is absent. Authenticated requests to an uncomposed endpoint return
-`501` because it cannot prove a human session. Mutating routes additionally
-require same-origin JSON.
-
-`GET /instances/:id/verification` opens the existing store through the
-read-only application path and returns only the recorded/fresh flags, closed
-staleness reasons and a sanitized candidate projection. It does not mutate the
-database and omits credentials, actor IDs, upstream free-form text and approved
-addresses.
-
-Recording is a three-request workflow: review `{ expectedRevision }`, step-up
-`{ password }`, then apply `{ expectedRevision, reviewID, materialHash,
-reviewToken, stepUpTicket }`. The review authorizes only `record-verification`;
-it cannot also authorize promotion. The apply path consumes the review token and
-step-up ticket, confirms evidence and authorizes the exact plan before opening
-the writable store or probing. It uses the existing guarded `verifyStoredConnection`
-transport with stored credentials and approved addresses, a 15-second probe
-timeout and the per-instance connection-test single-flight guard. The plan is
-spent before the probe. On failure the response includes `recorded: "false"`
-and `approvalSpent`; callers must start a new review after a spent failure.
-
-Promotion is a separate three-request workflow with its own token registry,
-unless the current candidate is fresh and recordable. `connection-approval-material/v2`
-hashes the exact candidate digest, version, canonical profile, `observedAt`,
-credential kind, principal role, identity confidence and warning list. The
-review lifetime is 5 minutes, step-up lifetime 2 minutes, both shorter than the
-30-minute observation freshness window; a promotion review's expiry is clamped
-to candidate freshness. The one-use promotion plan pins the candidate again,
-then the store checks revision, target, candidate and credential state in its
-atomic promotion transaction. Candidate replacement, revision drift, credential
-rotation, target drift, missing/disabled state, malformed or unsupported
-candidates, expiry and clock skew fail closed with `409` (or `503` if state is
-unavailable). Promotion writes only a version/profile mapping; it does not
-validate capabilities and never claims `serverIdentityVerified`.
-
-verification/read/test bodies are parsed or the store is opened. Credential reflection is **mitigated, not
-prevented**: closed DTO projections are combined with a best-effort echo filter for direct and
-commonly encoded forms. Bounded misses include key/value adjacency patterns beyond the inspected
-checks; splits beyond the 16,384 UTF-16-code-unit boundary window or 8 Mi-unit join budget; numeric
-JSON rounding above `2^53`; and unknown encodings, compression, encryption, derived values or
-multi-scalar packing. If the cross-field scan exhausts its budget, the internal inspection result
-reports `joinStatus: "skipped_budget"`: per-field checks still ran, but remaining cross-field
-boundaries were not scanned and a split there may be missed. `complete` means the bounded join pass
-finished, not that all possible encodings were covered.
-
-The primary controls remain the approved-address set, pinned transport, TLS verification, redirect
-refusal and narrow dispatch allowlist. `/read` and connection testing are human-session-only; the
-impact of a filter miss is disclosure to the operator's own authenticated browser, not to a third
-party. This is not an adequate control for any future agent/MCP read surface: such a surface must
-not rely on this guard as sufficient protection.
-
-
-`events` is newest first and each event is projected to `{ id, instanceID, operationID, channel,
-outcome, effects, effectsSanitized, effectsRedacted, sanitizedFields, redactedFields, createdAt }`.
-`targetID`, raw `effects_json`, credentials, addresses, URLs and free-form text are deliberately
-absent; unsafe effect values are dropped or replaced with the redaction marker and named in
-`sanitizedFields`/`redactedFields`. `truncated` is exact: the store query requests `limit + 1` rows,
-and the extra row only signals that older events exist outside the window. The store exposes only
-`listAudit(limit)` (no cursor or offset), so this route is a single bounded window and does not
-emulate pagination.
-
-The store pre-normalizes an audit row before this projection sees it: an unrecognized `channel`
-becomes `sdk`, an unrecognized `outcome` becomes `unknown`, and non-primitive or unparseable `effects`
-become `{}`. Those fields are therefore already within the projection's closed vocabulary, and
-`sanitizedFields` will not name the pre-normalized `channel`, `outcome` or malformed-effects case.
-`instanceID`, `operationID`, `id` and `createdAt` are still withheld or flagged when unusable, and
-effects are re-sanitized here rather than trusted from the row.
-
-
-Production (`server/bun-server.ts`) composes `connectionTrust`, so the trusted
-path is enabled even though the browser UI has no setup controls. The three
-routes require a password-backed browser session and same-origin JSON; when an
-application is constructed without `connectionTrust`, they answer `501` before
-opening the store. The review is DNS-only and returns a one-use token in the
-response body; step-up re-checks the access password and returns a ticket; Save
-requires `{ candidateID, reviewToken, stepUpTicket }`. The legacy test-only
-seam requires only `{ candidateID }` and is not used in production. Neither
-token, ticket nor cookie proves physical human presence. See
-and full order.
-
-
-The three credential routes above are POST-only, use exact one-segment instance paths, and require
-same-origin JSON plus the password-backed browser session. Review accepts only
-`{ expectedRevision, action, field }`; step-up accepts only `{ password }`; apply accepts the exact
-review binding `{ expectedRevision, action, field, reviewID, materialHash, reviewToken,
-stepUpTicket }` and a body-only `value` for stores. A value is never accepted during review and is
-excluded from trust material, hashes, grants, plans, audit effects, responses and errors. Unknown
-keys (including `confirmed`, `force`, `yes`, `apiKey` and the legacy `token` key) are rejected. A
-missing/empty store value and any value on clear are `400`; mismatched, expired, consumed or cross-instance
-review/ticket evidence maps to the same `409 review_token_unavailable`. Review/step-up bodies are
-capped at 8 KiB and apply at 32 KiB by anchored route family.
-
-The store applies one field change in an immediate transaction: blocking-intent and revision checks,
-credential upsert/delete, instance revision and credential-generation bump, sanitized audit row, and
-change-log entry. Audit effects are only `{ field, action, revision }`; audit failure rolls back the
-write. Clearing an already-absent field is a no-op but records the audit without advancing revision
-or generation. A post-commit read-back failure reports `503` with `details.committed: "true"`.
-Disabled instances are refused before review. Production composes a credential-specific trust service,
-review-token/ticket registries and UI confirmation verifier independently from connection setup.
-
-The store's `setCredential` and `applyCredentialChange` methods are privileged local persistence
-APIs, not authorization boundaries: neither carries the route's session/review/step-up evidence, and
-trusted code running as the same UID can call them. `setCredential` retains its weaker legacy
-character policy and is not used by production credential routes.
-
-The review binds the field and resulting credential-presence state, **not the secret bytes**. A
-same-session attacker who can alter the apply request could substitute a different value under the
-same field approval. Step-up establishes password possession, not comprehension; same-origin XSS,
-browser automation, stolen sessions with the password and same-UID processes remain outside this
-boundary. Credential deletion is logical: SQLite WAL/free pages and backups may retain old bytes.
-There is no credential UI, CLI, MCP or model-writable path in this change.
-
 ## Dispatch order [app layer]
 
 The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied
 upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
+Notes API, Plugins API, agents, notifications, artifacts (`/api/ui` fallback), engine
+proxy (`/api*` and `/openapi.json`), then static frontend assets. Notes and Plugins branches
 are skipped when those services are not installed. Notes events and `/api/event` disable the request
 timeout.
 
@@ -601,12 +465,3 @@ Pins are not evidence of integration.
   paths remain limited. `/debug` is client-only.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests
   are not a vendor push receipt.
-  browser session; mutating verification routes also require same-origin JSON, review evidence and
-  password step-up. Verification recording and profile promotion are composed in production, but no
-  Connections UI, CLI or MCP workflow invokes them. Promotion sets a profile/version mapping only;
-  it does not verify capabilities, support or server identity. Connection setup is also composed in
-  production behind its separate same-origin, session, review and step-up flow, though no setup UI is
-  mounted. Credential reflection is mitigated, not
-  prevented, by closed projections and a best-effort echo filter with bounded misses (see above);
-  the guard is not sufficient for any future agent/MCP read surface. `GET /audit` is a single bounded
-  the documented same-UID boundary.

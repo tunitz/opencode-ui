@@ -4,7 +4,9 @@
 
 /** True when the user has requested reduced motion. */
 export function prefersReducedMotion(
+  media: { matches: boolean } | null | undefined
 ): boolean {
+  return Boolean(media?.matches)
 }
 
 /** Scroll behavior for programmatic scrolling: instant under reduced motion. */

@@ -224,6 +224,7 @@ export async function attachmentFromBrowserFile(
   }
 
   const dataUrl = await readAsDataUrl(file)
+  // Keep the data URI's media type in sync with the validated MIME, including
   // when it came from a signature rather than the browser's file metadata.
   const uri = `data:${mime};base64,${dataUrl.slice(dataUrl.indexOf(",") + 1)}`
   return {

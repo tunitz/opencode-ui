@@ -17,12 +17,6 @@ const withUiApis = createWebDispatcher({
   agents: handler("agents"), notifications: handler("notifications"), artifacts: handler("artifacts"),
   engine: handler("engine"), frontend: handler("frontend"),
 })
-const withMedia = createWebDispatcher({
-  security,
-  agents: handler("agents"), notifications: handler("notifications"), artifacts: handler("artifacts"),
-  engine: handler("engine"), frontend: handler("frontend"),
-})
-
 describe("Web gateway dispatch", () => {
   test("dispatches specific UI handlers before artifacts and engine", async () => {
     for (const [path, expected] of [["/api/ui/agents", "agents"], ["/api/ui/notifications/state", "notifications"], ["/api/ui/artifacts/resolve", "artifacts"], ["/api/event", "engine"], ["/", "frontend"]]) {
@@ -40,68 +34,6 @@ describe("Web gateway dispatch", () => {
     // Without the optional handlers the existing artifact routing is preserved.
     expect(await (await dispatch(request("/api/ui/notes/list"))).text()).toBe("artifacts")
     expect(await (await dispatch(request("/api/ui/plugins"))).text()).toBe("artifacts")
-  })
-    for (const path of [
-    ]) {
-    }
-    // Without the optional handler the existing artifact routing is preserved.
-  })
-    const post = (path, body) => withMedia(request(path, {
-      method: "POST", headers: { "content-type": "application/json" }, body,
-    }))
-  })
-    const post = (path, body) => withMedia(request(path, {
-      method: "POST", headers: { "content-type": "application/json" }, body,
-    }))
-    for (const path of [
-    ]) {
-      expect((await post(path, "x".repeat(8 * 1024))).status).toBe(200)
-      const oversized = await post(path, "x".repeat(8 * 1024 + 1))
-      expect(oversized.status).toBe(413)
-      expect(await oversized.json()).toEqual({ error: { code: "payload_too_large" } })
-    }
-    expect((await post(applyPath, "x".repeat(32 * 1024))).status).toBe(200)
-    const oversizedApply = await post(applyPath, "x".repeat(32 * 1024 + 1))
-    expect(oversizedApply.status).toBe(413)
-    expect(await oversizedApply.json()).toEqual({ error: { code: "payload_too_large" } })
-    // The anchored family must not grant the larger cap to an extra path segment.
-    expect((await post(`${applyPath}/extra`, "x".repeat(32 * 1024 + 1))).status).toBe(200)
-    expect((await post(`${applyPath}/extra`, "x".repeat(256 * 1024 + 1))).status).toBe(413)
-  })
-    // Regression: the gateway chose the 1 MiB ceiling whenever *any* path
-    // segment was `import`/`batch`, so the connection-test route for an entity
-    // whose ID happened to be `import` buffered 1 MiB instead of 256 KiB.
-    const post = (path, body) => withMedia(request(path, {
-      method: "POST", headers: { "content-type": "application/json" }, body,
-    }))
-    for (const id of ["import", "imports", "batch"]) {
-      expect((await post(path, "x".repeat(256 * 1024))).status).toBe(200)
-      const oversized = await post(path, "x".repeat(256 * 1024 + 1))
-      expect(oversized.status).toBe(413)
-      expect(await oversized.json()).toEqual({ error: { code: "payload_too_large" } })
-    }
-  })
-      method: "POST", headers: { "content-type": "application/json" }, body: "x".repeat(256 * 1024 + 1),
-    }))
-    expect(oversized.status).toBe(413)
-    expect(await oversized.json()).toEqual({ error: { code: "payload_too_large" } })
-
-      method: "POST", headers: { "content-type": "text/plain" }, body: "x",
-    }))
-    expect(nonJson.status).toBe(415)
-    expect(await nonJson.json()).toEqual({
-      error: { code: "invalid", message: "Mutations must be sent as JSON" },
-    })
-
-    const notesOversized = await withUiApis(request("/api/ui/notes/create", {
-      method: "POST", headers: { "content-type": "application/json" }, body: "x".repeat(1024 * 1024 + 1),
-    }))
-    expect(await notesOversized.text()).toBe("Request too large\n")
-
-    const notesNonJson = await withUiApis(request("/api/ui/notes/create", {
-      method: "POST", headers: { "content-type": "text/plain" }, body: "x",
-    }))
-    expect(await notesNonJson.text()).toBe("Forbidden: browser mutation must be JSON\n")
   })
   test("caps notes mutation bodies at 1 MiB except attachment uploads", async () => {
     const body = "x".repeat(1024 * 1024 + 1)

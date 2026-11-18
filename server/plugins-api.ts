@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { link, lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises"
-import { createRequire } from "node:module"
 import { homedir, hostname } from "node:os"
-import { basename, isAbsolute, join, resolve } from "node:path"
+import { basename, join, resolve } from "node:path"
 import {
   applyEdits,
   modify,
@@ -28,7 +27,6 @@ const MAX_CONFIG_WRITE_ATTEMPTS = 3
 const CONFIG_LOCK_NAME = ".opencode-ui-config.lock"
 const CONFIG_LOCK_TIMEOUT_MS = 3_000
 const CONFIG_LOCK_POLL_MS = 25
-const MEDIA_DATA_DIR_ENV = "OPENCODE_MEDIA_DATA_DIR"
 
 type PluginDescriptor = {
   id: string
@@ -40,7 +38,7 @@ type PluginDescriptor = {
   mcpConfig: (entryPath: string, env: NodeJS.ProcessEnv) => Record<string, unknown>
   /**
    * Extra absolute files the entry needs at runtime, for descriptors whose
-   * and resolves it normally, so it uses only the entry check.
+   * package does not guarantee them.
    */
   requiredRuntimeFiles?: (repoRoot: string) => string[]
   /** Compare the entry's env exactly so a stale data directory is rewritten. */
@@ -61,65 +59,9 @@ const PLUGINS: readonly PluginDescriptor[] = [
     }),
     managesEnv: false,
   },
-  {
-    id: MEDIA_PLUGIN_ID,
-    description: "Sonarr, Radarr, Prowlarr, Seerr and Jellyfin management for agents.",
-    entryPath: mediaEntryPath,
-    mcpConfig: (entryPath, env) => {
-      const dataDir = mediaDataDir(env)
-      return {
-        type: "local",
-        command: [process.execPath, entryPath],
-        disabled: false,
-        codemode: false,
-        ...(dataDir === undefined ? {} : { env: { [MEDIA_DATA_DIR_ENV]: dataDir } }),
-      }
-    },
-    managesEnv: true,
-  },
 ]
 
 const PLUGINS_BY_ID = new Map(PLUGINS.map((plugin) => [plugin.id, plugin]))
-
-/**
- * rooted at the installation, not this module, so a workspace link and a
- * bundled dependency resolve identically. The fallback is still a
- * `node_modules` path, so a missing package fails the `lstat` installation
- * check instead of falling back to a checkout-relative entry.
- */
-function mediaEntryPath(repoRoot: string): string {
-  try {
-    const requireFromRoot = createRequire(join(repoRoot, "package.json"))
-  } catch {
-    return resolve(
-      repoRoot,
-    )
-  }
-}
-
-/**
- * resolved, non-secret path to the MCP child; never an arbitrary request value.
- */
-function mediaDataDir(env: NodeJS.ProcessEnv): string | undefined {
-  const explicit = env[MEDIA_DATA_DIR_ENV]?.trim()
-  if (!explicit) return undefined
-  if (
-    [...explicit].some((char) => {
-      const code = char.codePointAt(0) ?? 0
-      return code < 0x20 || code === 0x7f
-    })
-  ) {
-    throw new ConfigFileError(
-      "config_write_failed",
-    )
-  }
-  if (!isAbsolute(explicit)) {
-    throw new ConfigFileError(
-      "config_write_failed",
-    )
-  }
-  return resolve(explicit)
-}
 
 type EngineServer = { name: string; status: string }
 
@@ -489,6 +431,7 @@ async function writeConfigAtomic(
 /**
  * In-process ordering keyed by config directory. This serializes a whole
  * settle pass (atomic config edit, authoritative re-read, one engine
+ * reconcile) so concurrent Notes requests in one server never interleave.
  * It does not hold the cooperative file lock across engine calls: that lock
  * covers only the config mutation and is released before the reconcile.
  *

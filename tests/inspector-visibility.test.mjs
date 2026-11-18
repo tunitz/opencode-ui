@@ -132,6 +132,7 @@ test("showing the inspector restores its flex root", async () => {
   }
 })
 
+test("the expanded inspector aside is hidden and inert while another workspace is active", async () => {
   const root = await render(true, {
     inspectorOpen: true,
     activeSession: fullSession,
@@ -160,8 +161,4 @@ test("showing the inspector restores its flex root", async () => {
   } finally {
     await act(async () => visible.unmount())
   }
-})
-
-  const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text()
-  expect(app).toContain('<SessionInspectorPanel')
 })

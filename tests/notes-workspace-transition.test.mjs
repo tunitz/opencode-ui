@@ -129,8 +129,11 @@ function Shell() {
     React.createElement(
       "button",
       {
+        id: "open-settings",
         type: "button",
+        onClick: () => workspace.requestWorkspace("settings"),
       },
+      "settings"
     ),
     notes.hasWorkspace
       ? React.createElement(
@@ -164,6 +167,7 @@ async function mount() {
   return root
 }
 
+test("a note draft survives leaving Notes for Settings and returning", async () => {
   const root = await mount()
   try {
     await act(async () => {
@@ -187,8 +191,11 @@ async function mount() {
     })
     expect(requiredInput(root).props.value).toBe("Draft survives")
 
+    // Settings takes the pane, but the Notes workspace stays mounted and hidden.
     await act(async () => {
+      root.root.findByProps({ id: "open-settings" }).props.onClick()
     })
+    expect(text(root.root.findByProps({ id: "active" }))).toBe("settings")
     const pane = root.root.findByProps({ id: "notes-pane" })
     expect(pane.props.className).toBe("hidden")
 

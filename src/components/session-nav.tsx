@@ -58,9 +58,6 @@ import { NewSessionButton } from "@/components/new-session-dialog"
 import { NotesSidebar, useNotesWorkspace } from "@/components/notes-sidebar"
 import { IntegrationCommandDialogs } from "@/components/integration-command-dialogs"
 import {
-  MediaButton,
-  MediaTriggerButton,
-import {
   SettingsButton,
   SettingsTriggerButton,
 } from "@/components/settings-workspace"
@@ -1323,7 +1320,6 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         </>
       )}
       <div className={cn("mt-auto flex shrink-0 items-center border-t border-sidebar-border", collapsed ? "flex-col gap-1 p-2" : "justify-start gap-1 p-3")}>
-        <MediaButton />
         <SettingsButton />
       </div>
     </aside>
@@ -1337,7 +1333,6 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   const workspace = useOptionalWorkspace()
   const [open, setOpen] = useState(false)
   const pendingSettings = useRef(false)
-  const pendingMedia = useRef(false)
   const [worktreeProjectID, setWorktreeProjectID] = useState<string | null>(null)
   const pendingWorktreeProject = useRef<string | null>(null)
   const projectID = worktreeNavigationProject(nav.scope, nav.location?.project.id, nav.activeSession?.projectID)
@@ -1356,17 +1351,13 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
   return (
     <>
     <Sheet open={open} onOpenChange={(next) => {
-      if (next) { pendingWorktreeProject.current = null; pendingSettings.current = false; pendingMedia.current = false }
+      if (next) { pendingWorktreeProject.current = null; pendingSettings.current = false }
       setOpen(next)
     }} onOpenChangeComplete={(next) => {
       if (!next && pendingSettings.current) {
         pendingSettings.current = false
         document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")?.focus()
         settings?.openSettings()
-      }
-      if (!next && pendingMedia.current) {
-        pendingMedia.current = false
-        document.querySelector<HTMLButtonElement>("[data-sessions-sheet-trigger]")?.focus()
       }
       if (!next && pendingWorktreeProject.current) {
         setWorktreeProjectID(pendingWorktreeProject.current)
@@ -1429,12 +1420,6 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
           />
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4">
-          <MediaTriggerButton
-            onClick={() => {
-              pendingMedia.current = true
-              setOpen(false)
-            }}
-          />
           <SettingsTriggerButton
             onClick={() => {
               pendingSettings.current = true

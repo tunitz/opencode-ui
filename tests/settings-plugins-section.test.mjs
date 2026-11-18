@@ -170,6 +170,9 @@ test("an uninstalled plugin that is not configured offers no enable action", asy
       engineAvailable: true,
       plugins: [
         {
+          id: "other",
+          name: "Other",
+          description: "Other",
           configured: false,
           installed: false,
           registered: false,
@@ -186,6 +189,8 @@ test("an uninstalled plugin that is not configured offers no enable action", asy
     await flush()
     const text = JSON.stringify(root.toJSON())
     expect(text).toContain("Not installed in this build.")
+    expect(button(root, "Enable Other")).toBeUndefined()
+    expect(button(root, "Disable Other")).toBeUndefined()
   } finally {
     if (root) await act(async () => root.unmount())
     env.restore()

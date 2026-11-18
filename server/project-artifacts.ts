@@ -60,6 +60,7 @@ export function projectRelativePath(href: string, directory: string): string {
   return path
 }
 
+function media(value: string | null): Pick<ArtifactSummary, "mime" | "kind"> {
   const mime = value?.split(";", 1)[0]?.toLowerCase()
   if (["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"].includes(mime ?? "")) return { mime: mime!, kind: "image" }
   if (mime === "application/pdf") return { mime, kind: "pdf" }
@@ -144,6 +145,7 @@ export function createProjectArtifacts(options: Options) {
       const total = response.headers.get("content-range")?.match(/\/(\d+)$/)?.[1] ?? (response.status === 200 ? response.headers.get("content-length") : null)
       const size = total === null ? NaN : Number(total)
       if (!Number.isSafeInteger(size) || size < 0 || (response.status === 416 && size !== 0)) throw unavailable()
+      return { size, ...media(response.headers.get("content-type")) }
     } finally { controller.abort(); await response.body?.cancel().catch(() => {}) }
   }
   async function handleRequest(request: Request): Promise<Response> {
@@ -173,6 +175,7 @@ export function createProjectArtifacts(options: Options) {
       const verified = await verify(record.sessionID, record.messageID, record.href, request.signal)
       if (verified.directory !== record.directory || verified.path !== record.path) throw unavailable()
       const { response, controller } = await open(record, request, request.method === "GET" ? request.headers.get("range") ?? undefined : undefined)
+      const info = media(response.headers.get("content-type"))
       const headers = new Headers({ ...safeHeaders, "content-type": info.mime, "content-disposition": disposition(posix.basename(record.path), info.kind === "image" && url.searchParams.get("download") !== "1") })
       for (const name of ["content-length", "content-range", "accept-ranges"]) {
         const value = response.headers.get(name)

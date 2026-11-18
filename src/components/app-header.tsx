@@ -28,7 +28,7 @@ export function AppHeader({
       ? "Notes"
       : workspace.active === "settings"
         ? "Settings"
-          : null
+        : null
   const title =
     workspaceTitle ??
     (nav.activeSession

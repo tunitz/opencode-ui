@@ -136,7 +136,7 @@ The package name is `@tunitz/opencode-ui`; the unscoped `opencode-ui` package is
 package-name ownership and credentials privately, and get explicit authorization before publishing.
 Do not publish from a dirty tree or include private files, credentials, or local state. The package
 ships the UI server modules plus the `plugins/notes` sources and declares
-the plugin; its MCP entry is resolved from `node_modules`, not the checkout.
+`@tunitz/opencode-notes` as a workspace dependency.
 
 ## Code and UX conventions
 

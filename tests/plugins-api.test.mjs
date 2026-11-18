@@ -113,18 +113,6 @@ function notesConfig(repoRoot = BASE_REPO) {
   }
 }
 
-function mediaConfig(repoRoot = BASE_REPO, env) {
-  return {
-    type: "local",
-    command: [
-      process.execPath,
-    ],
-    disabled: false,
-    codemode: false,
-    ...(env === undefined ? {} : { env }),
-  }
-}
-
 const NOTES_PLUGIN = {
   id: "notes",
   name: "Notes",
@@ -137,15 +125,6 @@ const NOTES_PLUGIN = {
   engineSynced: true,
 }
 
-const MEDIA_PLUGIN = {
-  description: "Sonarr, Radarr, Prowlarr, Seerr and Jellyfin management for agents.",
-  configured: false,
-  installed: false,
-  registered: false,
-  connected: false,
-  restartRequired: false,
-  engineSynced: true,
-}
 
 function pluginStatus(plugin, overrides = {}) {
   return { ...plugin, ...overrides }
@@ -185,22 +164,12 @@ async function repoRootWith(pluginIds) {
       await writeFile(join(entry, "main.ts"), "// synthetic test entry\n")
       continue
     }
-      const entry = join(packageRoot, "src", "mcp")
-      await mkdir(entry, { recursive: true })
-      await writeFile(
-        join(packageRoot, "package.json"),
-        `${JSON.stringify({
-          version: "0.1.0",
-          exports: { "./mcp/main": "./src/mcp/main.ts" },
-        }, null, 2)}\n`
-      )
-      await writeFile(join(entry, "main.ts"), "// synthetic test entry\n")
-    }
   }
   return dir
 }
 
-// Deterministic installation root independent of this checkout: Notes is
+// Deterministic installation root independent of this checkout. It outlives
+// the per-test temp directories.
 const BASE_REPO = await mkdtemp(join(tmpdir(), "opencode-ui-plugins-base-"))
 await mkdir(join(BASE_REPO, "plugins", "notes", "src", "mcp"), { recursive: true })
 await writeFile(
@@ -269,7 +238,6 @@ describe("Plugins HTTP API", () => {
       engineAvailable: true,
       plugins: [
         pluginStatus(NOTES_PLUGIN, { configured: true, registered: true, connected: true }),
-        pluginStatus(MEDIA_PLUGIN),
       ],
     })
     expect(engine.state.calls[0]).toEqual({ method: "GET", path: "/api/mcp", auth: authorization })
@@ -310,7 +278,6 @@ describe("Plugins HTTP API", () => {
           restartRequired: true,
           engineSynced: null,
         }),
-        pluginStatus(MEDIA_PLUGIN, { engineSynced: null }),
       ],
     })
   })
@@ -583,110 +550,6 @@ describe("Plugins HTTP API", () => {
   })
 })
 
-    const dir = await configDir()
-    const payload = await (await get(apiFor(engine.url, dir))).json()
-    expect(payload.plugins[1]).toEqual(pluginStatus(MEDIA_PLUGIN, { configured: true }))
-  })
-
-    const dir = await configDir()
-    const payload = await (await get(apiFor(engine.url, dir, repoRoot))).json()
-    expect(payload.plugins[1]).toEqual(
-      pluginStatus(MEDIA_PLUGIN, {
-        configured: true,
-        installed: true,
-        registered: true,
-        connected: true,
-      })
-    )
-  })
-
-    const dir = await configDir()
-    const engine = fakeEngine({ connectOnAdd: true })
-    expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe("plugin_not_installed")
-    await expect(readFile(join(dir, "opencode.jsonc"), "utf8")).rejects.toThrow()
-    expect(engine.state.calls).toHaveLength(0)
-  })
-
-    const dir = await configDir()
-    const engine = fakeEngine({ connectOnAdd: true })
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ registered: true, connected: true, restartRequired: false, engineSynced: true })
-
-    const path = join(dir, "opencode.jsonc")
-    const parsed = parseJsonc(await readFile(path, "utf8"))
-    expect((await stat(path)).mode & 0o777).toBe(0o600)
-
-    const put = engine.state.calls.find((call) => call.method === "PUT")
-    expect(put.auth).toBe(authorization)
-    expect(put.body).toEqual({ config: mediaConfig(repoRoot) })
-  })
-
-    const dir = await configDir()
-    const engine = fakeEngine({ connectOnAdd: true })
-    const response = await post(
-    )
-    expect(response.status).toBe(200)
-    const parsed = parseJsonc(await readFile(join(dir, "opencode.jsonc"), "utf8"))
-    )
-  })
-
-    const dir = await configDir()
-    const engine = fakeEngine({ connectOnAdd: true })
-    const api = apiFor(engine.url, dir, repoRoot, {
-    })
-    expect(first.status).toBe(200)
-    const path = join(dir, "opencode.jsonc")
-    const afterFirst = await readFile(path, "utf8")
-    expect(second.status).toBe(200)
-    expect(await second.json()).toEqual({ registered: true, connected: true, restartRequired: false, engineSynced: true })
-    expect(await readFile(path, "utf8")).toBe(afterFirst)
-  })
-
-    const dir = await configDir()
-    const repoRoot = await repoRootWith([])
-    const real = join(await repoRootWith([]), "main.ts")
-    await writeFile(real, "// real entry\n")
-    await mkdir(entryDir, { recursive: true })
-    await symlink(real, join(entryDir, "main.ts"))
-
-    const payload = await (await get(apiFor(engine.url, dir, repoRoot))).json()
-    expect(payload.plugins[1]).toEqual(pluginStatus(MEDIA_PLUGIN, { configured: true }))
-
-    expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe("plugin_not_installed")
-  })
-
-    const dir = await configDir()
-    const engine = fakeEngine({ connectOnAdd: true })
-    const response = await post(
-      apiFor(engine.url, dir, repoRoot, { env: { OPENCODE_MEDIA_DATA_DIR: "relative/path" } }),
-    )
-    expect(response.status).toBe(500)
-    expect((await response.json()).error.code).toBe("config_write_failed")
-    await expect(readFile(join(dir, "opencode.jsonc"), "utf8")).rejects.toThrow()
-    expect(engine.state.calls).toHaveLength(0)
-  })
-
-    const dir = await configDir()
-    const path = await writeConfig(dir, {
-      theme: "dark",
-    })
-    const engine = fakeEngine({})
-    const api = apiFor(engine.url, dir)
-    const before = await (await get(api)).json()
-    expect(before.plugins[1]).toEqual(
-      pluginStatus(MEDIA_PLUGIN, { configured: true, engineSynced: false })
-    )
-
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual(settlement())
-    const parsed = parseJsonc(await readFile(path, "utf8"))
-    expect(parsed.theme).toBe("dark")
-    expect(parsed.mcp.servers.hindsight).toEqual(HEALTHVAULT)
-  })
-})
-
 describe("config write coordination", () => {
   test("re-checks the snapshot on the no-op path and retries", async () => {
     const dir = await configDir()
@@ -831,24 +694,6 @@ describe("config write coordination", () => {
     const response = await post(api, "/api/ui/plugins/notes/enable")
     expect(response.status).toBe(200)
     expect(await readFile(lockPath, "utf8")).toBe(replacement)
-  })
-
-    const dir = await configDir()
-    const path = await writeConfig(dir, EXISTING_CONFIG)
-    const engine = fakeEngine({ connectOnAdd: true })
-    const api = apiFor(engine.url, dir, repoRoot)
-
-      post(api, "/api/ui/plugins/notes/enable"),
-    ])
-    expect(notes.status).toBe(200)
-
-    const text = await readFile(path, "utf8")
-    expect(text).toContain("// top-level comment survives")
-    expect(text).toContain("// healthvault must keep working")
-    const parsed = parseJsonc(text)
-    expect(parsed.theme).toBe("dark")
-    expect(parsed.mcp.servers.healthvault).toEqual(HEALTHVAULT)
-    expect(parsed.mcp.servers.notes).toEqual(notesConfig(repoRoot))
   })
 
   test("re-reads a concurrent external config change before committing", async () => {
@@ -1017,6 +862,7 @@ describe("config write coordination", () => {
   test("bounds the in-process queue wait from request start", async () => {
     const dir = await configDir()
     await writeConfig(dir, EXISTING_CONFIG)
+    const repoRoot = await repoRootWith(["notes"])
     const engine = fakeEngine({ connectOnAdd: true })
     let releaseHold
     const hold = new Promise((resolveHold) => {
@@ -1049,6 +895,7 @@ describe("config write coordination", () => {
           if (!holdDone) overtook = true
         },
       }),
+      "/api/ui/plugins/notes/enable"
     )
     await Bun.sleep(120)
     expect(overtook).toBe(false)
