@@ -28,6 +28,8 @@ import {
 import { agentModelDefaults } from "@/lib/session-selection"
 import { createStreamWatchdog } from "@/lib/stream-watchdog"
 import { useShallowMemo } from "@/lib/use-shallow-memo"
+import { recordPerfMark } from "@/lib/perf-probe"
+import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
 import {
   applySessionTitle,
   descendantSessionIDs,
@@ -1981,15 +1983,19 @@ export function useOpenCode(): OpenCodeController {
       setSessionsError(null)
 
       try {
-        const resolved = await openCode.location.get({
+        const resolvedPromise = openCode.location.get({
           location: { directory: project.canonical },
         })
+        prefetchTargetCatalog(project.canonical)
+        const resolved = await resolvedPromise
         commitLocation(resolved)
-        await loadSessions({
-          directory: resolved.directory,
-          projectID: resolved.project.id,
-        })
-        void loadCatalogs(resolved.directory)
+        await Promise.all([
+          loadSessions({
+            directory: resolved.directory,
+            projectID: resolved.project.id,
+          }),
+          loadCatalogs(resolved.directory),
+        ])
         if (serverVersion) {
           rememberLastOpened(
             {
@@ -2629,10 +2635,6 @@ export function useOpenCode(): OpenCodeController {
         return "An admission is already pending for this session."
       }
 
-      if (!streamReadyRef.current) {
-        return "Waiting for the event stream. Prompts are paused."
-      }
-
       const session = sessions.find((candidate) => candidate.id === sessionID)
 
       if (!session) {
@@ -2692,6 +2694,20 @@ export function useOpenCode(): OpenCodeController {
         }
       })
 
+      if (!streamReadyRef.current) {
+        updateLiveRuns((current) => {
+          const run = current[sessionID]
+          if (!run) return current
+          const notice = "Event stream is connecting; the reply appears once connected."
+          if (run.notices.includes(notice)) return current
+          return {
+            ...current,
+            [sessionID]: { ...run, notices: [...run.notices, notice] },
+          }
+        })
+      }
+
+      recordPerfMark("prompt:admission-start", { sessionID })
       try {
         const inbox = await openCode.session.prompt({
           sessionID,
@@ -2706,6 +2722,8 @@ export function useOpenCode(): OpenCodeController {
             : {}),
           ...(requestedDelivery ? { delivery: requestedDelivery } : {}),
         })
+
+        recordPerfMark("prompt:admitted", { sessionID, inboxID: inbox.id })
 
         // Clear only the exact attachment ids admitted here. A newer selection
         // made while this request was in flight is never discarded.

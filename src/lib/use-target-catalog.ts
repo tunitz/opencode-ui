@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 
+import { createAsyncCache } from "@/lib/async-cache"
 import {
   errorMessage,
   openCode,
@@ -24,6 +25,21 @@ const emptyCatalog: CatalogState = {
   models: [],
   status: "idle",
   error: null,
+}
+
+export const agentCatalogCache = createAsyncCache<AgentInfo[]>()
+export const modelCatalogCache = createAsyncCache<ModelInfo[]>()
+
+/** Warm the per-directory catalogs without blocking the caller. */
+export function prefetchTargetCatalog(directory: string | null): void {
+  if (!directory) return
+  const location = { location: { directory } }
+  void agentCatalogCache.get(directory, () =>
+    openCode.agent.list(location).then((response) => response.data)
+  )
+  void modelCatalogCache.get(directory, () =>
+    openCode.model.list(location).then((response) => response.data)
+  )
 }
 
 /**
@@ -57,10 +73,18 @@ export function useTargetCatalog(directory: string | null): TargetCatalog {
         status: "loading",
         error: null,
       })
-      const location = { location: { directory } }
+      prefetchTargetCatalog(directory)
       const [agentResult, modelResult] = await Promise.allSettled([
-        openCode.agent.list(location),
-        openCode.model.list(location),
+        agentCatalogCache.get(directory, () =>
+          openCode
+            .agent.list({ location: { directory } })
+            .then((response) => response.data)
+        ),
+        modelCatalogCache.get(directory, () =>
+          openCode
+            .model.list({ location: { directory } })
+            .then((response) => response.data)
+        ),
       ])
       if (id !== request.current) return
 
@@ -68,12 +92,12 @@ export function useTargetCatalog(directory: string | null): TargetCatalog {
       let models: ModelInfo[] = []
       let error: string | null = null
       if (agentResult.status === "fulfilled") {
-        agents = agentResult.value.data
+        agents = agentResult.value
       } else {
         error = errorMessage(agentResult.reason)
       }
       if (modelResult.status === "fulfilled") {
-        models = modelResult.value.data
+        models = modelResult.value
       } else {
         error = error ?? errorMessage(modelResult.reason)
       }

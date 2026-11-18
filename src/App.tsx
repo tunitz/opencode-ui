@@ -23,6 +23,7 @@ import { WorkspaceProvider, useWorkspace } from "@/components/workspace-context"
 import { useUndoToast, UndoToastProvider } from "@/lib/undo-toast"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
 import { useOpenCode, type OpenCodeController } from "@/lib/use-opencode"
+import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
 import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
 import { recordPerfRender } from "@/lib/perf-probe"
@@ -65,6 +66,14 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
   const chatActive = workspace.active === "chat"
+
+  // Warm the target catalog while the user is still in chat so the New Session
+  // and worktree pickers open without a round-trip stall.
+  useEffect(() => {
+    const directory =
+      nav.activeSession?.location.directory ?? nav.location?.directory
+    if (directory) prefetchTargetCatalog(directory)
+  }, [nav.activeSession?.location.directory, nav.location?.directory])
 
   // Command opens the inspector's Command tab. It is not a modal search dialog,
   // and it respects custom bindings plus IME/composition. Another workspace is

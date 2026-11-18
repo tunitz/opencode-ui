@@ -2294,7 +2294,7 @@ export function Conversation({
           </DialogHeader>
           <blockquote
             dir="auto"
-            className="max-h-40 overflow-y-auto rounded-lg border-s-2 border-border bg-muted/40 px-3 py-2 text-[13px] whitespace-pre-wrap"
+            className="max-h-40 overflow-y-auto break-words rounded-lg border-s-2 border-border bg-muted/40 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]"
           >
             {selectionQuote}
           </blockquote>
@@ -2331,7 +2331,7 @@ export function Conversation({
           </DialogHeader>
           {editTarget ? (
             <>
-              <p dir="auto" className="max-h-32 overflow-y-auto rounded-lg bg-muted/50 px-3 py-2 text-[13px] whitespace-pre-wrap">
+              <p dir="auto" className="max-h-32 overflow-y-auto break-words rounded-lg bg-muted/50 px-3 py-2 text-[13px] whitespace-pre-wrap [overflow-wrap:anywhere]">
                 {editTarget.text}
               </p>
               <div className="space-y-1 text-xs text-muted-foreground">

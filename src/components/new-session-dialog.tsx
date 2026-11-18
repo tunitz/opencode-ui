@@ -24,11 +24,17 @@ import {
 import type { ModelRef } from "@/lib/opencode"
 import { openCode } from "@/lib/opencode"
 import { useModelFavorites } from "@/lib/model-favorites"
+import { createAsyncCache } from "@/lib/async-cache"
 import { childDirectory, directoryEntryName, parentDirectory } from "@/lib/directory-picker"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 const CREATE_REASON_ID = "new-session-create-reason"
 const DEFAULT_VARIANT = "__default__"
+
+type ResolvedLocation = { project: { id: string }; directory?: string | null }
+type FolderEntries = { entries: string[]; error: boolean }
+const locationCache = createAsyncCache<ResolvedLocation>(30_000)
+const folderCache = createAsyncCache<FolderEntries>(30_000)
 
 type FolderState = "checking" | "available" | "unavailable"
 
@@ -166,30 +172,47 @@ export function NewSessionDialog({
 
     let cancelled = false
 
-    void openCode.location.get({ location: { directory } }).then((location) => {
-      if (!cancelled) {
-        setSelected({ directory, id: location.project.id })
-        setProbe({ directory, available: true })
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setSelected({ directory, id: null })
-        setProbe({ directory, available: false })
-      }
-    })
+    void locationCache
+      .get(directory, () =>
+        openCode
+          .location.get({ location: { directory } })
+          .then((location) => location as ResolvedLocation)
+      )
+      .then((location) => {
+        if (!cancelled) {
+          setSelected({ directory, id: location.project.id })
+          setProbe({ directory, available: true })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelected({ directory, id: null })
+          setProbe({ directory, available: false })
+        }
+      })
 
-    void openCode.file.list({ location: { directory } }).then((result) => {
-      if (!cancelled) {
-        const entries = result.data
-          .filter((entry) => entry.type === "directory")
-          .map((entry) => directoryEntryName(entry.path))
-          .filter((path): path is string => path !== null && !path.startsWith("."))
-          .sort((a, b) => a.localeCompare(b))
-        setListing({ directory, entries, error: false })
-      }
-    }).catch(() => {
-      if (!cancelled) setListing({ directory, entries: [], error: true })
-    })
+    void folderCache
+      .get(directory, async () => {
+        try {
+          const result = await openCode.file.list({ location: { directory } })
+          return {
+            entries: result.data
+              .filter((entry) => entry.type === "directory")
+              .map((entry) => directoryEntryName(entry.path))
+              .filter(
+                (path): path is string =>
+                  path !== null && !path.startsWith(".")
+              )
+              .sort((a, b) => a.localeCompare(b)),
+            error: false,
+          }
+        } catch {
+          return { entries: [], error: true }
+        }
+      })
+      .then((value) => {
+        if (!cancelled) setListing({ directory, ...value })
+      })
 
     return () => {
       cancelled = true

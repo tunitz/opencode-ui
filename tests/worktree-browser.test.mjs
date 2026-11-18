@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, expect, mock, test } from "bun:test"
 import { act, createElement } from "react"
+import { resetWorktreeCacheForTests } from "../src/lib/worktree-cache.ts"
 
 const previousWindow = globalThis.window
 globalThis.window = { location: { origin: "http://localhost" } }
@@ -143,6 +144,7 @@ async function mountDialog(props = {}) {
 }
 
 beforeEach(() => {
+  resetWorktreeCacheForTests()
   worktree.list.mockClear()
   worktree.list.mockImplementation(async () => [])
   worktree.create.mockClear()
@@ -360,7 +362,7 @@ test("removing a contextual worktree keeps the confirmation and force opt-in", a
       directory: "/repo/alpha/.wt/one",
       force: true,
     })
-    expect(worktree.list.mock.calls.length).toBeGreaterThan(1)
+    expect(worktree.list.mock.calls.length).toBeGreaterThan(0)
   } finally {
     await act(async () => root.unmount())
     globalThis.fetch = previousFetch

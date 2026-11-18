@@ -101,7 +101,7 @@ import { noteReferenceAttachment } from "@/lib/note-reference"
 import { fileQueryRange, fileReference } from "@/lib/file-references"
 import { ComposerEditor, type ComposerEditorHandle } from "@/components/composer-editor"
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
-import { recordPerfRender } from "@/lib/perf-probe"
+import { recordPerfMark, recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -634,7 +634,6 @@ export function Composer({
 
   const runStatus = useLiveRunStatus(nav.activeSessionID)
   const responding = runStatus === "running"
-  const streamReady = nav.streamStatus === "ready"
 
   // Real selection: a session is promptable whenever it has a model; the
   // verified-free gate was a testing-only restriction and is no longer applied.
@@ -642,7 +641,6 @@ export function Composer({
   const canSend = canSendPrompt({
     hasSession: Boolean(activeSession),
     connected: nav.connection === "connected",
-    streamReady,
     modelReady,
     admissionPending: nav.sending,
     hasText: draft.trim().length > 0,
@@ -1522,6 +1520,7 @@ export function Composer({
     setError(null)
     setPendingDelivery((current) => ({ ...current, [sessionKey]: delivery }))
 
+    recordPerfMark("prompt:submit", { sessionKey })
     try {
       const failure = await nav.sendPrompt(submitted, delivery, submittedSkills)
 

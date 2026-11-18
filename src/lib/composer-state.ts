@@ -1,7 +1,6 @@
 export type ComposerSendGate = {
   hasSession: boolean
   connected: boolean
-  streamReady: boolean
   modelReady: boolean
   admissionPending: boolean
   hasText: boolean
@@ -9,13 +8,13 @@ export type ComposerSendGate = {
 }
 
 /**
- * Send/steer is enabled only for a real session on a connected, ready stream
- * with the allowed model and text or files, and no admission already in flight.
+ * Send/steer is enabled for a real session on a connected engine with the
+ * allowed model and text or files, and no admission already in flight. The
+ * SSE stream does not gate admission: prompts are reconciled on reconnect.
  */
 export function canSendPrompt({
   hasSession,
   connected,
-  streamReady,
   modelReady,
   admissionPending,
   hasText,
@@ -24,7 +23,6 @@ export function canSendPrompt({
   return (
     hasSession &&
     connected &&
-    streamReady &&
     modelReady &&
     !admissionPending &&
     (hasText || hasFiles)

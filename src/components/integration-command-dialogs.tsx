@@ -47,6 +47,7 @@ import {
   type SessionStatsInfo,
   type WorktreeDirectory,
 } from "@/lib/opencode"
+import { worktreeCache } from "@/lib/worktree-cache"
 import { projectBasename } from "@/lib/notes-types"
 import { isAbsoluteDirectory } from "@/lib/session-commands"
 import {
@@ -362,7 +363,9 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
       setStatus("loading")
       setError(null)
       try {
-        const list = await openCode.worktree.list({ projectID: activeSourceProjectID })
+        const list = (await worktreeCache.get(activeSourceProjectID, () =>
+          openCode.worktree.list({ projectID: activeSourceProjectID })
+        )) as Awaited<ReturnType<typeof openCode.worktree.list>>
         if (token !== request.current) return
         setEntries(list)
         setEntriesProjectID(activeSourceProjectID)
@@ -442,6 +445,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
       setBranch("")
       setDirectoryDraft(null)
       setMode("list")
+      worktreeCache.invalidate(activeProject.id)
       setReloadKey((current) => current + 1)
       onResult("Worktree created by the native backend.")
     } catch (failure) {
@@ -457,6 +461,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
     setError(null)
     try {
       await openCode.worktree.refresh({ projectID: activeProject.id })
+      worktreeCache.invalidate(activeProject.id)
       setReloadKey((current) => current + 1)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -477,6 +482,7 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
       })
       setDeleteTarget(null)
       setForce(false)
+      worktreeCache.invalidate(deleteTarget.projectID)
       setReloadKey((current) => current + 1)
       onResult("Worktree removed by the native backend.")
     } catch (failure) {

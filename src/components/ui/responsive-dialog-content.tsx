@@ -26,7 +26,7 @@ export function ResponsiveDialogContent({
       className={cn(
         "p-4",
         className,
-        "w-full max-w-none overflow-y-auto rounded-t-xl sm:max-w-none [&>*]:shrink-0"
+        "w-full max-w-none overflow-y-auto rounded-t-xl sm:max-w-none"
       )}
       style={{ ...style, ...fixedMobileDrawerStyle() }}
       {...props}
