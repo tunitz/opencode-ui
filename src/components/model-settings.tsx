@@ -463,8 +463,9 @@ export function ModelSettingsDrawer({ nav, open: controlledOpen, onOpenChange }:
   )
 }
 
-/** Inline composer pickers keep the New-session combobox look but size to content. */
-const INLINE_PICKER_TRIGGER_CLASS = "w-auto min-w-11"
+/** Inline composer pickers are plain labels: no border, no background. */
+const INLINE_PICKER_TRIGGER_CLASS =
+  "w-auto min-w-11 justify-start gap-1 border-0 bg-transparent py-0 pe-1.5 ps-1.5 text-[14px] leading-6 font-medium text-foreground shadow-none dark:bg-transparent dark:hover:bg-transparent"
 
 export function ModelSettingsInline({
   nav,
