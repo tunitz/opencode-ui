@@ -280,6 +280,33 @@ test("pinned expansion uses the service list limit, not a smaller UI cap", async
   }
 })
 
+test("pinned notes and spaces are listed globally, not by session project", async () => {
+  const restore = setup()
+  pinnedTotal = 1
+  spacesFail = false
+  const previousFetch = globalThis.fetch
+  const bodies = []
+  globalThis.fetch = async (request, init) => {
+    const url = typeof request === "string" ? request : String(request?.url ?? request)
+    if (url.endsWith("/api/ui/notes/list") || url.endsWith("/api/ui/notes/spaces"))
+      bodies.push(JSON.parse(String(init?.body ?? "{}")))
+    return previousFetch(request, init)
+  }
+  let root
+  try {
+    const { NotesProvider, NotesSidebar } = await import("../src/components/notes-sidebar")
+    await act(async () => { root = create(React.createElement(NotesProvider, { nav: nav() }, React.createElement(NotesSidebar))) })
+    await act(async () => findNotesTrigger(root).props.onClick({ nativeEvent: undefined }))
+    await flush()
+    expect(bodies.some((body) => body.pinned === true)).toBe(true)
+    expect(bodies.every((body) => body.directory === undefined)).toBe(true)
+  } finally {
+    globalThis.fetch = previousFetch
+    if (root) await act(async () => root.unmount())
+    restore()
+  }
+})
+
 test("a space lookup failure keeps pinned notes and labels the space unavailable", async () => {
   const restore = setup()
   pinnedTotal = 1

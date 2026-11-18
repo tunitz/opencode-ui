@@ -99,6 +99,41 @@ describe("Notes MCP server", () => {
         expect(tool.inputSchema.additionalProperties).toBe(false)
         expect(typeof tool.description).toBe("string")
       }
+      const update = result.tools.find((tool) => tool.name === "notes_update")
+      const properties = (
+        update?.inputSchema as { properties?: Record<string, unknown> } | undefined
+      )?.properties
+      expect(properties?.pinned).toBeUndefined()
+    } finally {
+      await close()
+    }
+  })
+
+  test("agent updates cannot clear a note's pinned state", async () => {
+    const { client, close } = await connect()
+    try {
+      const created = output(
+        await call(client, "notes_create", { title: "Pinned note", pinned: true })
+      ) as unknown as { id: string; revision: number }
+      const rejected = await call(client, "notes_update", {
+        noteID: created.id,
+        pinned: false,
+        expectedRevision: created.revision,
+      })
+      expect(rejected.isError).toBe(true)
+      expect(outputText(rejected)).toContain("Pinned state is managed in the Notes UI")
+
+      const stillPinned = output(
+        await call(client, "notes_get", { noteID: created.id })
+      ) as unknown as { pinned: boolean }
+      expect(stillPinned.pinned).toBe(true)
+
+      const allowed = await call(client, "notes_update", {
+        noteID: created.id,
+        title: "Renamed by agent",
+      })
+      expect(allowed.isError).toBeUndefined()
+      expect(output(allowed).title).toBe("Renamed by agent")
     } finally {
       await close()
     }

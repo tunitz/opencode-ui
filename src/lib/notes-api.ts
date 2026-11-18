@@ -378,12 +378,13 @@ export async function listSpacesScoped(
 const LIST_PAGE_SIZE = 1_000
 
 /**
- * The workspace adapter for one project directory. Instances are cached by the
- * provider per directory so draft state (keyed by adapter) survives switching
- * projects and coming back.
+ * Workspace adapter cached per project directory so draft state survives
+ * project switches. Note and space listings are global, not project-scoped.
  */
 export function createNotesAdapter(directory: string): NotesAdapter {
-  const target = directory || null
+  // Listing is global: show pinned notes and spaces from every project, not
+  // just the current session directory. Drafts stay keyed by `directory`.
+  const target = null
   async function list(): Promise<NotesSnapshot> {
     const [spaces, first] = await Promise.all([
       listSpacesScoped(target),

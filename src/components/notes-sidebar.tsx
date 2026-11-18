@@ -174,11 +174,11 @@ export function NotesProvider({
       const current = ++token
       try {
         const [listResult, spacesResult] = await Promise.allSettled([
-          listNotesScoped(directory, {
+          listNotesScoped(null, {
             pinned: true,
             limit: pinnedExpanded ? PINNED_EXPANDED_LIMIT : PINNED_PREVIEW_LIMIT,
           }),
-          listSpacesScoped(directory),
+          listSpacesScoped(null),
         ])
         if (listResult.status === "rejected") throw listResult.reason
         if (!active || current !== token) return

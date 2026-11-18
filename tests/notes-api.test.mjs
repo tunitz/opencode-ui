@@ -222,10 +222,10 @@ test("the adapter pages through list results and reports the workspace", async (
   const listCalls = calls.filter((call) => call.url.endsWith("/list"))
   expect(listCalls).toHaveLength(2)
   expect(JSON.parse(listCalls[0].init.body)).toEqual({
-    directory: "/work",
     limit: 1000,
     offset: 0,
   })
+  expect(JSON.parse(calls.find((call) => call.url.endsWith("/spaces")).init.body)).toEqual({})
 })
 
 test("mutations send the service input shape and expectedRevision", async () => {

@@ -121,7 +121,6 @@ export const NOTES_TOOL_SCHEMAS = {
       title: { type: "string", minLength: 1, maxLength: LIMITS.title },
       body: { type: "string", maxLength: LIMITS.body },
       status,
-      pinned,
     },
     ["noteID"]
   ),

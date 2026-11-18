@@ -170,6 +170,25 @@ async function deleteNoteWithConfirmation(
   return context.service.delete(deleteInput)
 }
 
+/**
+ * Pin state is user curation, not an agent-managed field. The SDK does not
+ * validate arguments against `inputSchema`, so reject `pinned` at runtime.
+ * The Notes UI changes pins through the app-layer HTTP API.
+ */
+async function updateNoteWithPinGuard(
+  context: ToolContext,
+  input: Record<string, unknown>
+): Promise<unknown> {
+  if ("pinned" in input) {
+    throw new NotesError(
+      "invalid",
+      "Pinned state is managed in the Notes UI; agent tools cannot change it.",
+      { field: "pinned", message: "pinned_ui_only" }
+    )
+  }
+  return context.service.update(asInput<UpdateNoteInput>(input))
+}
+
 export const NOTES_TOOLS: readonly NotesTool[] = [
   {
     name: "notes_list",
@@ -207,10 +226,9 @@ export const NOTES_TOOLS: readonly NotesTool[] = [
     name: "notes_update",
     title: "Update note",
     description:
-      "Update a note's title, body, status, pinned state, or space. Omitted fields are preserved. Pass expectedRevision to reject a stale write.",
+      "Update a note's title, body, status, or space. Omitted fields are preserved. Pass expectedRevision to reject a stale write. Pinned state is managed in the Notes UI and cannot be changed by agent tools.",
     inputSchema: NOTES_TOOL_SCHEMAS.update,
-    run: (context, input) =>
-      context.service.update(asInput<UpdateNoteInput>(input)),
+    run: updateNoteWithPinGuard,
   },
   {
     name: "notes_delete",

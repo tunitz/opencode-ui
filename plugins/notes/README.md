@@ -240,7 +240,7 @@ record wins.
 | `notes_list` | List/filter notes; `includeBodies: false` for cheap browsing |
 | `notes_get` | Read one note including body and attachment metadata |
 | `notes_create` | Create a note in a space or unassigned |
-| `notes_update` | Patch a note; pass `expectedRevision` to reject stale writes |
+| `notes_update` | Patch title, body, status or space; pass `expectedRevision` to reject stale writes. Pinned state is UI-only |
 | `notes_delete` | Delete; confirmation via elicitation unless `expectedRevision` is given |
 | `notes_search` | Scored search with snippets |
 | `notes_history` | List saved snapshots (metadata only) |
