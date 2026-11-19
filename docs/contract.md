@@ -33,12 +33,8 @@ are intentional; do not weaken them when simplifying UI code.
   server-side), not because CORS is absent. Do not weaken Origin/CSRF checks. Engine-side
   allowlists are not a substitute for the app-layer boundary.
 - `/doc` is an SPA, not the spec. The OpenAPI document has **no `securitySchemes`**; auth
-  is middleware-enforced.
-- `/openapi.json`: 290180 bytes, SHA256
-  `23a25e5604b1274987ab7093be1eea517bd93d588e849ea53ad93a977878db3a`;
-  OpenAPI **3.1.0**, `info.version` **0.0.1** (spec version, not engine version);
-  **124 paths / 149 operations / 293 schemas**. The key-sorted schema equals
-  `https://opencode.ai/v2/openapi.json`.
+  is middleware-enforced. `/openapi.json` serves OpenAPI **3.1.0**; its key-sorted schema matches
+  the official OpenCode v2 spec at `https://opencode.ai/v2/openapi.json`.
 
 ## Access boundary assumptions
 
@@ -58,8 +54,8 @@ are intentional; do not weaken them when simplifying UI code.
 - The gateway is not network isolation. The engine endpoint is separate and must be protected
   independently.
 - `/connect` supports native key/OAuth methods with ephemeral key state, bounded polling, and
-  explicit cancellation. External/command methods remain blocked; no real credential/OAuth/login/
-  pairing code/provider config was exercised.
+  explicit cancellation. External/command methods remain blocked; live credential/OAuth/pairing
+  flows are not verified by the synthetic checks.
 
 ## Browser access gate [app layer]
 
@@ -108,7 +104,8 @@ One `NotesService` instance per UI-server process, backed by the shared file sto
   `{ notes, total }`).
 - Mutations must use a JSON content type; otherwise the response is 415 with code `invalid`.
 - Body limit is 1 MiB, except `POST createAttachment`, which allows 8 MiB. Oversized bodies are
-  rejected with 413 by the dispatcher.
+  rejected with 413 by the dispatcher. Notes attachments have their own store-level limits
+  (4 files, 4 MiB each, 8 MiB total per note), separate from prompt attachments below.
 - Errors: `invalid` → 400, `note_not_found` / `space_not_found` / `snapshot_not_found` /
   `attachment_not_found` → 404, `revision_conflict` / `space_not_empty` → 409, `limit_exceeded` → 413,
   `mime_rejected` → 415, anything else → 500. Body `{ "error": { "code", "message" } }`.
@@ -186,10 +183,10 @@ and an engine restart may be required.
 
 The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied
 upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
-Notes API, Plugins API, agents, notifications, artifacts (`/api/ui` fallback), engine
-proxy (`/api*` and `/openapi.json`), then static frontend assets. Notes and Plugins branches
-are skipped when those services are not installed. Notes events and `/api/event` disable the request
-timeout.
+Notes API, Plugins API, session shortcuts (`/api/ui/session-shortcuts`), agents, notifications,
+artifacts (`/api/ui` fallback), engine proxy (`/api*` and `/openapi.json`), then static frontend
+assets. Notes and Plugins branches are skipped when those services are not installed. Notes events
+and `/api/event` disable the request timeout.
 
 ## API contract [source/spec; runtime exercised only for info, spec, auth, SSE]
 
@@ -224,8 +221,9 @@ timeout.
   be parsed as a tree. Tree discovery is bounded by explicit depth/call/node caps; report
   incomplete/truncated trees rather than claiming an arbitrary full tree.
 - **Filesystem (client read-only):** `GET /api/fs/list?location[directory]=<abs>&path=<relative-or-abs>`
-  returns `FileSystem.Entry[]` (`{path, type: "file"|"directory"}`); returned paths stay relative
-  to the requested location. `GET /api/fs/find?location[directory]=<abs>&query=...&type=file&limit=...`
+  returns `FileListOutput` `{ location, data }`, where `data` is the entry array
+  (`{path, type: "file"|"directory"}`); returned paths stay relative to the requested location.
+  `GET /api/fs/find?location[directory]=<abs>&query=...&type=file&limit=...`
   returns ranked entries. `GET /api/fs/read/<wildcard>?location[directory]=<abs>` streams raw bytes
   with ETag/Last-Modified and single-range support. The client requests a bounded first range and
   never uses `POST /api/experimental/fs/write` or a file editor. The server's location scope is
@@ -240,12 +238,12 @@ timeout.
   either a canonical `data:<mime>;base64,...` URL or a local `file:` URI. The installed 2.1.4
   server materializes it into public `PromptFileAttachment` `{data (base64), mime, source,
   name?, ...}`, accepts at most 20 MiB, normalizes supported images, and rejects unsupported
-  URI schemes. The client uses a stricter 8 MiB per file / 4 files / 16 MiB total bound, rejects
-  SVG, unknown binary, and remote URLs, and never fetches a user-supplied URL. Model acceptance is
-  checked against `ModelInfo.capabilities.input` (`text`, `image`, `pdf`, ...). The UI accepts a
-  file-only prompt when the native prompt schema permits empty text with files; no live
-  attachment/model roundtrip was exercised once in final acceptance on a free model with a
-  synthetic text fixture; no broad model/type claim is made.
+  URI schemes. The client (`src/lib/attachments.ts`) deliberately leaves attachment count and
+  size unbounded and validates MIME support against `ModelInfo.capabilities.input` (`text`,
+  `image`, `pdf`, ...); it rejects SVG, unknown binary, and remote URLs and never fetches a
+  user-supplied URL. The 20 MiB engine cap is distinct from provider/model acceptance, which is
+  checked separately; no broad claim is made about which model/type combinations succeed. The UI
+  accepts a file-only prompt when the native prompt schema permits empty text with files.
 - **Sessions/location:** `GET /api/session?directory=/abs/path&project=id`;
   `POST /api/session` with `{location: {directory}, agent?, model?: {id, providerID,
   variant?}, ...}`. Use query/body location as the primary contract. The undocumented
@@ -404,7 +402,8 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
   and bounded event-dedupe IDs; no transcripts or prompt/tool content. The VAPID private key is
   never sent to the browser, bundled, committed, or logged.
 - `web-push@3.6.7` (MPL-2.0) and `@types/web-push@3.6.4` implement standards VAPID/Web Push. VAPID
-  subject defaults to the canonical HTTPS origin; no invented email identity.
+  subject defaults to `mailto:opencode-ui@localhost` (override `OPENCODE_UI_VAPID_SUBJECT`); it is
+  a local contact identity, not the app's public origin.
 - Subscription endpoints: HTTPS only, no credentials/query secrets, port 443, and host allowlist
   `web.push.apple.com`, `fcm.googleapis.com`, Mozilla push hosts, and official Windows WNS suffix.
   Localhost/private/metadata/arbitrary hosts are rejected before any push request.
@@ -432,8 +431,8 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
 | Package | Pin | Notes |
 |---|---|---|
 | `@opencode/client` | 2.1.4 | MIT; matches target. Browser promise entry exports 8 reachable files with no node builtins. Do **not** import `@opencode/client/service` in the browser (node imports). |
-| `@openuidev/react-ui` | 0.18.1 | MIT. Installed for selective subpaths only: `CodeBlock` (+scoped code CSS), `Card`, `CardHeader`, `Table` primitives, `Image`, and lazy `Charts/BarChart` (+scoped chart CSS). Root `dist/index.mjs` remains ~964 KB raw and imports chat/Lang surfaces; **do not import the root**. Card/Table/Image have no provider/Lang dependency. The stats chart uses a local actual `ThemeProvider` with `cssSelector=".openui-chart-scope"` (scoped vars + portal class, no body/global reset) and actual `BarChart`; chart JS **122.95 kB/41.53 kB gzip** + CSS **39.46/4.68 kB gzip**, lazy only in `/stats`. The CodeBlock subpath imports IconButton, `react-syntax-highlighter` Prism, lucide, and clsx, not AgentInterface/chat/Lang/zustand/d3. `ImageGallery`/`GalleryModal` were inspected but not imported because they require OpenUI ThemeProvider/portal scope and would replace the compact attachment/focus behavior. `FollowUpBlock`/`FollowUpItem` are standalone but their hardcoded “Related Queries” prompt semantics do not fit app-owned stats actions; explicitly deferred by the user and not implemented. |
-| `react-syntax-highlighter` | 16.1.2 | Transitive `react-ui` dependency used by the actual CodeBlock. The full Prism build makes the lazy CodeBlock chunk **776.45 kB / 242.62 kB gzip**; initial wrapper impact remains **+6.18 kB raw/+2.21 kB gzip**. The static Card/Table/Image subpaths add **+13.38 kB raw/+4.32 kB gzip** main JS and **+5.25 kB/+0.92 kB gzip** CSS over the CodeBlock build, with no new dependencies. |
+| `@openuidev/react-ui` | 0.18.1 | MIT. Installed for selective subpaths only: `CodeBlock` (+scoped code CSS), `Card`, `CardHeader`, `Table` primitives, `Image`, and lazy `Charts/BarChart` (+scoped chart CSS). The root entry imports chat/Lang surfaces; **do not import the root**. Card/Table/Image have no provider/Lang dependency. The stats chart uses a local `ThemeProvider` with `cssSelector=".openui-chart-scope"` (scoped vars + portal class, no body/global reset) and actual `BarChart`, lazy only in `/stats`. The CodeBlock subpath imports IconButton, `react-syntax-highlighter` Prism, lucide, and clsx, not AgentInterface/chat/Lang/zustand/d3. |
+| `react-syntax-highlighter` | 16.1.2 | Transitive `react-ui` dependency used by the actual CodeBlock. |
 | `web-push` | 3.6.7 | MPL-2.0. App-layer Web Push/VAPID sender only; used by `server/notifications.ts`, never imported into the browser bundle. Private VAPID key/state lives outside the repository with mode 600. `@types/web-push` 3.6.4 is dev-only. |
 | `@openuidev/react-headless` | 0.18.1 | MIT; installed as declared peer resolution only. Not imported by the CodeBlock path. |
 | `@openuidev/react-lang` | 1.0.1 | Installed as declared peer resolution only. Not imported by the CodeBlock path; no generated Lang UI/model/service or extra LLM is used. |
@@ -442,14 +441,6 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
 | `@openuidev/lang-core` | 1.0.1 | Transitive peer support package. Its postinstall telemetry is **blocked** by Bun (`bun pm untrusted`) and not run; not imported by the CodeBlock path. |
 | `react` / `react-dom` | 19.3.1 | Satisfy OpenUI CodeBlock peers (`^18.3.1 || ^19.0.0`). |
 | Bun | 1.4.4 | Runtime and package manager. Runtime setup must ensure it is on `PATH` or referenced explicitly. |
-
-Registry tarball integrity, exports, and peer graphs were checked; **hash values were not
-retained in this repo**. The published/cached `@openuidev/react-ui@0.18.1`
-manifest, `CodeBlock` subpath types/source, official docs/repo, and actual import/build graph before
-integration. Its `CodeBlockProps` are exactly `language`, `codeString`, and optional `theme`;
-OpenUI's own copy control is not used because it is 32px, hover-only, and lacks a clipboard
-fallback.
-Pins are not evidence of integration.
 
 ## Known limits
 

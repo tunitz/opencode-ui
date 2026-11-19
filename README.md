@@ -22,17 +22,18 @@ Browser  <->  OpenCode UI server  <->  OpenCode V2 engine
 ```
 
 The UI server serves the built frontend, proxies HTTP and event-stream traffic, and injects the
-engine credential server-side. It also serves the Notes API and manages the optional Notes MCP
-server through the engine's HTTP API. The engine is a separate dependency; this project does not
-install, start, or modify it.
+engine credential server-side. It also serves the Notes API and manages registration of the
+optional Notes MCP server in the engine's configuration. The engine is a separate dependency; this
+project does not install, start, or modify it.
 
 ## Prerequisites
 
 - Install and start the **OpenCode V2 engine** separately, compatible with the pinned
   `@opencode/client` **2.1.4**. This project does not install or start the engine.
-- Create the engine **service-registration JSON** at `~/.config/opencode/service.json` (or the
-  path selected with `--service-file`) containing a nonempty string `password`, readable by the
-  account running the UI. The server authenticates with Basic username `opencode`.
+- Have the engine's existing **service-registration JSON** at `~/.config/opencode/service.json`
+  (or the path selected with `--service-file`) containing a nonempty string `password`, readable by
+  the account running the UI. The server authenticates with Basic username `opencode`; the UI only
+  reads this file.
 - [Bun](https://bun.sh/) **1.4.4**. `package.json` declares the exact version; broader
   compatibility is not established.
 
@@ -46,37 +47,44 @@ bun install
 bun run start
 ```
 
-Open <http://127.0.0.1:5174> on the same machine. `bun run start` serves the production build from
-`dist-bun-build/`, creating it with `scripts/build-bun.ts` on first run when it is missing. On a
-loopback bind no sign-in is shown unless a password has already been set; any non-loopback bind
-requires a password and shows the first-run setup screen. Set or change it later in
-Settings → Access.
+Open <http://127.0.0.1:5174> on the same machine. `bun run start` serves the production build,
+creating it on first run when it is missing. On a loopback bind no sign-in is shown unless a
+password has already been set; any non-loopback bind requires a password and shows the first-run
+setup screen. Set or change it later in Settings → Access.
 
-With no overrides, the direct server connects to `http://127.0.0.1:8090` and reads
-`~/.config/opencode/service.json`. To use a different engine or bind address:
+With no overrides, the server connects to `http://127.0.0.1:8090` and reads the engine's existing
+service-registration JSON at `~/.config/opencode/service.json`. The UI only reads this file; it
+never creates it or accepts the credential on the command line.
+
+### Remote access
+
+To expose the UI on another interface, configure the access password first and pass explicit
+allowed host and origin values:
 
 ```sh
-bun run start --host 0.0.0.0 --port 1234 --engine-url http://127.0.0.1:4096
+bun run start --host 0.0.0.0 --allowed-host ui.example.test --allowed-origin https://ui.example.test
 ```
 
-Use `bun run start --help` for the complete flag reference.
+Replace `ui.example.test` with your real reachable hostname and use secure transport (HTTPS behind
+a trusted reverse proxy or tunnel). Set the UI password privately before exposing the service; a
+non-loopback bind requires one. The first visit opens the setup screen when no password is set, or
+the sign-in screen when one is already configured. The setup endpoint works without a session.
+The direct server's built-in allowed origins are fixed to port 5174, so if
+you also change `--port`, you must pass an explicit `--allowed-origin` for the new port. Use
+`bun run start --help` for the complete flag reference.
 
 ## Published package
 
-The scoped package is not currently published. Once `@tunitz/opencode-ui` is available:
-
-```sh
-bunx -p @tunitz/opencode-ui opencode-ui --host 127.0.0.1 --port 5174
-```
-
-Do not install the unscoped `opencode-ui` package; it belongs to an unrelated project.
+`@tunitz/opencode-ui` is not currently published on a package registry, and registry installation
+is unverified. Packaging and registry verification are pending. For now, install and run from a
+checkout as shown above. The unscoped `opencode-ui` package is unrelated; do not install it.
 
 ## Common options
 
-Both `bun run start` (checkout) and the packaged CLI accept these flags. `bun run start:bun` and
-`bun run preview` are aliases of `bun run start`. Flags override environment settings. For example,
-`bun run start --host 0.0.0.0 --port 1234` serves the checkout on another interface; add explicit
-non-loopback `--allowed-host` and `--allowed-origin` values for that address (see Security boundary).
+The start command accepts these flags (`bun run start:bun` and `bun run preview` are aliases).
+Flags override environment settings. For a non-loopback bind, always pass explicit non-loopback
+`--allowed-host` and `--allowed-origin` values — see [Remote access](#remote-access) and the
+security boundary below.
 
 | Option | Default and behavior |
 | --- | --- |
@@ -90,11 +98,11 @@ non-loopback `--allowed-host` and `--allowed-origin` values for that address (se
 | `--help`, `--version` | Show usage or the package version without reading credentials or starting services. |
 
 Long options accept `--name value` or `--name=value`. Flags override applicable environment
-settings. Run `bun run start --help` or `bun bin/opencode-ui.ts --help` for the complete reference.
+settings. Run `bun run start --help` for the complete reference.
 
 ## Configuration
 
-[.env.example](.env.example) lists common environment variables. The main ones are:
+Common environment variables include:
 
 - `OPENCODE_UI_HOST`, `OPENCODE_UI_PORT`: UI listener.
 - `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
@@ -138,18 +146,26 @@ Notes are built in and do not depend on an engine plugin. The
 with a plaintext file store. The UI server imports it in-process for the notes workspace and
 `/api/ui/notes/*`; agents use it through an optional MCP stdio server.
 
-**Enable agent tools** in Settings → Plugins. That registers
-`plugins/notes/src/mcp/main.ts` as a local MCP server through the engine HTTP API and removes it
-again; it never writes engine configuration files. The engine may need a restart before the tools
-appear, and the section reports that state. If you previously installed the notes engine plugin or
-its `~/.config/opencode/plugins/...` symlink, remove it before enabling Notes here.
+The browser Notes workspace and the note reference picker are hidden when the plugin registry
+definitively reports the Notes MCP entry as disabled. A transient or unknown registry state leaves
+them visible rather than hiding them on a failed read.
+
+**Enable agent tools** in Settings → Plugins. Enabling writes an `mcp.servers.notes` entry into the
+engine's global configuration (`opencode.jsonc` or `opencode.json`) through an atomic JSONC edit,
+and disabling removes it; this is not merely an HTTP-only action. The engine must be able to execute
+the registered Bun entry, and it may need a restart before the tools appear; the section reports
+that state. The UI server and the MCP server must resolve the same `OPENCODE_NOTES_DATA_DIR` (or its
+default) to see the same notes. If you previously installed the old notes engine plugin or its
+`~/.config/opencode/plugins/...` symlink, remove it before enabling Notes here.
 
 The MCP server exposes 15 tools (`notes_list`, `notes_get`, `notes_create`, `notes_update`,
 `notes_delete`, `notes_search`, `notes_history`, `notes_restore`, `notes_spaces`,
 `notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_create`,
 `notes_attachment_read`, `notes_attachment_delete`), three
 prompts (`notes:capture`, `notes:daily`, `notes:review`), and note/space resources. The
-[notes package README](plugins/notes/README.md) lists arguments and behavior.
+[notes package README](plugins/notes/README.md) lists arguments and behavior. Browser listings are
+all-project/global; MCP tools are directory-scoped by default (the MCP process's working directory,
+overridable per call with a `directory` argument).
 
 Data lives under `$XDG_DATA_HOME/opencode-notes/v1` (or `~/.local/share/opencode-notes/v1`),
 overridden by `OPENCODE_NOTES_DATA_DIR`. On first use the service imports legacy notes from the
@@ -170,11 +186,10 @@ multi-user isolated. Do not store secrets in notes.
 
 ## Documentation
 
-- [AGENTS.md](AGENTS.md): development setup, repository map, verification, and conventions.
 - [docs/components.md](docs/components.md): component architecture and current surface coverage.
 - [docs/contract.md](docs/contract.md): native OpenCode contract and app-layer security rules.
 - [docs/commands.md](docs/commands.md): slash-command coverage and native command behavior.
-- [tests/browser/README.md](tests/browser/README.md): synthetic browser checks.
+- [plugins/notes/README.md](plugins/notes/README.md): Notes package and MCP tool reference.
 - [CHANGELOG.md](CHANGELOG.md): notable changes.
 
 ## Status and limitations
@@ -183,7 +198,7 @@ multi-user isolated. Do not store secrets in notes.
 - The terminal surface is not shipped. `/terminal` is reported as unsupported rather than faked.
 - Notifications are best-effort and depend on browser and OS push delivery.
 - The UI password is one shared access password; it is not multi-tenant isolation.
-- Package publication and registry installation are not verified.
+- Package publication and registry installation are not verified; packaging checks are pending.
 
 ## License
 

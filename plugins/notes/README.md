@@ -114,6 +114,17 @@ interface Space {
   `includeGlobal !== false`.
 - Notes with `spaceID: null` (unassigned) are always visible.
 - There is no `projectID` or location object anymore.
+- Omitting `directory` matches everything (`matchesDirectory` returns true without a directory).
+
+The two callers apply different defaults on top of these rules:
+
+- The browser adapter (`src/lib/notes-api.ts`, `createNotesAdapter`) passes `target = null` to its
+  list and spaces calls, so it deliberately lists **all** notes and spaces across every project
+  and Global. Drafts stay cached per project directory.
+- MCP tools default to a project scope. `notes_list`, `notes_search`, and `notes_spaces` resolve
+  `directory` with `scopingDirectory(input.directory, context.defaultDirectory)`: an explicit
+  `directory` wins, otherwise the server process's working directory is used. Global records are
+  included unless the caller passes `includeGlobal: false`.
 
 ## Core API
 
@@ -233,7 +244,7 @@ record wins.
 `src/mcp/main.ts` connects over stdio. Tools return JSON text; failures set
 `isError` and prefix the text with the error type.
 
-### Tools (13)
+### Tools (15)
 
 | Tool | Purpose |
 | --- | --- |
@@ -352,17 +363,3 @@ export { createNotesMcpServer, startNotesMcpServer, NOTES_TOOLS, NOTES_PROMPTS, 
 The former `./server`, `./rpc`, and `./tui` exports and the root
 `index.ts`/`server.ts`/`rpc.ts`/`tui.ts` forwarders are removed, along with the
 `@opencode/plugin` dependency and the TUI command surface.
-
-## Testing
-
-```sh
-bun test plugins/notes/test
-bunx tsc --noEmit -p plugins/notes/tsconfig.json
-```
-
-The suite covers parsers and legacy conversion, memory and real-filesystem stores,
-atomic writes and file modes, cross-process lock contention and CAS conflicts,
-stale lock takeover, history capping/pruning, search scoring and snippets, the full
-service surface, and MCP tools/prompts/resources/elicitation through the SDK's
-in-memory transport. Migration tests build synthetic SQLite fixtures under the
-system temp directory; they never open the user's real engine database.

@@ -4,28 +4,18 @@ Current web command coverage is **29 supported / 2 partial / 6 unsupported** of 
 native commands. Unsupported or TUI-only behavior stays visible instead of being faked in the
 browser.
 
-**Target:** OpenCode **2.1.4**. The inventory below is based on the installed native command
-catalog and the archived TUI/source contract, not newer public docs.
-
-## Sources used
-
-- Native slash inventory: TUI source registrations in
-  `packages/tui/src/app.tsx`, `component/prompt/index.tsx`,
-  `component/session-frame.tsx`, `routes/session/index.tsx`,
-  `feature-plugins/prompt/btw.tsx`, `feature-plugins/system/{diff-viewer,plugins,stats}.tsx`.
-- Native server command catalog: `GET /api/command` returns only `{name, description}[]` for
-  the target location. It includes core commands (`init`, `review`), custom config/project
-  commands, and MCP prompt commands; these are merged dynamically and are not hardcoded.
-- Native execution contract: `POST /api/session/{sessionID}/command` with
-  `{name, text, files?, agents?, skills?, delivery?}`. `text` is not shell-evaluated. The web
-  client sends `name`, the exact argument text, validated composer attachments as `files`, and
-  `delivery:"steer"` only when the session is actively running; idle commands omit delivery.
-- CLI docs (`https://opencode.ai/v2/docs/cli/commands`) are separate operational/CLI commands,
-  not TUI slash commands. Native docs may describe a newer version; do not assume latest =
-  2.1.4.
+**Target:** OpenCode **2.1.4**. The inventory below reflects the native command catalog for
+this pinned version; newer public docs may describe a different release.
 
 ## Web adapter rules
 
+- Executing a catalog command sends `POST /api/session/{sessionID}/command` with
+  `{name, text, files?, agents?, skills?, delivery?}`. `text` is raw argument text and is not
+  shell-evaluated; validated composer attachments are sent as `files`. `delivery:"steer"` is
+  sent only while the session is actively running; idle commands omit it.
+- `/settings` opens the Settings workspace, not a dialog. Theme controls (Light/Dark/System,
+  palettes, and accents) live in Settings → Appearance; the sidebar theme trigger and its
+  standalone picker are no longer mounted.
 - `/` in the composer opens a nonmodal anchored Popover + filtered command list. Typing filters;
   ↑/↓ moves; desktop Enter/Tab activates the highlighted item; Escape closes. Touch Enter keeps
   the composer's newline rule; a touch user must activate an item or Send.
@@ -55,9 +45,9 @@ catalog and the archived TUI/source contract, not newer public docs.
 | `/variants`, `/thinking`, `/effort` | Agent | Opens current-session Thinking Level setting | none | supported |
 | `/mcps` | Integration | Native MCP status/resources; read-only | none | supported |
 | `/connect` | Integration | Provider/integration list; native API-key and OAuth connect; external/command methods blocked | none | partial |
-| `/settings` | System | Opens browser Preferences | none | supported |
+| `/settings` | System | Opens the Settings workspace (not a dialog) | none | supported |
 | `/status` | System | Reports real connection/project/session/model state | none | supported |
-| `/themes` | System | Opens Light/Dark/System picker | none | supported |
+| `/themes` | System | Theme controls live in Settings → Appearance (Light/Dark/System, palettes, accents); no standalone picker is mounted | none | supported |
 | `/diff` | Session | Opens the working-tree inspector | none | supported |
 | `/copy` | Session | Copies latest assistant text via browser clipboard when available | none | supported |
 | `/rename` | Session | Opens a prefilled rename dialog with no arguments; arguments use the existing native update | optional title | supported |
@@ -68,7 +58,7 @@ catalog and the archived TUI/source contract, not newer public docs.
 | `/redo` | Session | Clear the staged native revert and restore messages/files | none | supported; destructive |
 | `/export` | Session | Native JSON transfer download (no fake Markdown claim) | none | supported |
 | `/btw` | Session | One-shot side answer from session context; no durable message or main-run steering | optional question | supported; model-triggering |
-| `/cd` | Session | Absolute existing target validation and confirmed native session move | absolute directory | supported |
+| `/cd` | Session | Opens the change-directory dialog (prefilled when an argument is given); an absolute, resolvable directory is required before the native move is confirmed | optional; absolute directory when provided | supported |
 | `/editor` | Prompt | Opens a larger web draft editor, not a local OS editor | none | supported |
 | `/skills` | Prompt | Native directory-scoped skill catalog; selected skills are sent only on explicit Send | none | supported |
 | `/worktrees` | Project | Project-scoped native worktree list/create/refresh/remove | none | supported |
@@ -93,8 +83,7 @@ as a slash command.
 
 ## Verified session/prompt command adapters
 
-Source: installed `@opencode/client` 2.1.4, live OpenAPI/schema, and archived native TUI command
-handlers. These are exact native routes, not browser-local simulations:
+These are exact native routes, not browser-local simulations:
 
 | Native command | Native contract | Web behavior |
 |---|---|---|
@@ -105,11 +94,11 @@ handlers. These are exact native routes, not browser-local simulations:
 | `/compact` | `POST /api/session/{sid}/compact` | Confirms that a compaction request may run a model request; queues one native request only after confirmation. No test/live model call is made. |
 | `/undo` | `POST /api/session/{sid}/revert/stage` `{messageID, files?}` | Previews the latest user boundary and the files recorded by later assistant snapshots, then stages one revert. Busy 409 stays in the dialog. |
 | `/redo` | `DELETE /api/session/{sid}/revert` | Confirms restoring the staged native revert and file effects; no staged revert is a no-op/disabled state. |
-| `/cd` | `GET /api/location?location[directory]=…`, then `POST /api/session/{sid}/move` | Requires an absolute, resolvable directory; Check resolves it first, then a separate confirmation moves the session. Browser defaults and the session draft are preserved; the selected project becomes the target project. |
+| `/cd` | `GET /api/location?location[directory]=…`, then `POST /api/session/{sid}/move` | With no argument it opens an empty change-directory dialog; an argument prefills the path. An absolute, resolvable directory is required; Check resolves it first, then a separate confirmation moves the session. Browser defaults and the session draft are preserved; the selected project becomes the target project. |
 | `/clear` | Native TUI home/workspace transition only | Client view reset: clears selected session/history from view, closes client overlays, but does not DELETE, Stop, or interrupt the underlying session/background work; session drafts remain keyed to the ID. |
 | `/editor` | TUI local external editor integration | Opens a clearly labelled **Web draft editor** dialog with the pre-command draft, multiline editing, explicit Apply to current draft, and Cancel restore. It never launches an OS program or sends a prompt. |
 | `/skills` | `GET /api/skill?location[directory]=…`, then prompt `skills` attachments | Loads the session-directory catalog, lets the user select/remove skills with visible composer chips, and sends `skills: [{id}]` only with an intentional Send. It does not start an agent/model call on selection. |
-| `/btw` | `POST /api/session/{sid}/generate` with `{prompt}` | Opens a mobile Sheet/desktop Dialog; argumentless or with raw question. Explicit Ask only; uses the selected session model/agent/variant and the archived TUI instruction envelope. One-shot `generate` returns text without durable messages, tools, steering, queueing, or main-run interrupt. Answer is safely Markdown-rendered, copy is explicit, and closing pending aborts only the browser request with an unknown-server-completion label. |
+| `/btw` | `POST /api/session/{sid}/generate` with `{prompt}` | Opens a mobile Sheet/desktop Dialog; argumentless or with raw question. Explicit Ask only; uses the selected session model/agent/variant and the TUI instruction envelope. One-shot `generate` returns text without durable messages, tools, steering, queueing, or main-run interrupt. Answer is safely Markdown-rendered, copy is explicit, and closing pending aborts only the browser request with an unknown-server-completion label. |
 | `/mcps` | `GET /api/mcp`, `GET /api/mcp/resource` | Read-only statuses, auth-needed/failed errors with native text hidden, and resources/templates. No add, remove, connect, or disconnect actions. Tools are not enumerated by this 2.1.4 status API; the UI says so. |
 | `/connect` | `GET /api/integration`, `POST /api/integration/{id}/connect/key`, `POST /api/integration/{id}/connect/oauth`, OAuth status/complete/cancel | Native provider/integration selection and method selection on canonical HTTPS. API-key and OAuth flows are wired; status is confirmed by native response/poll, catalogs refresh, current session model is untouched. Keys live only in React state, are sent once, and are never in URLs/storage/logs. External and command methods are explicitly disabled with reasons. Marked **partial**, not universal provider-login coverage. |
 | `/worktrees` | `GET/POST/DELETE /api/worktree`, `POST /api/worktree/refresh` | Project-scoped native inventory/create/refresh/remove. Create/remove are confirmed; remove has an explicit force option. The backend performs git/worktree operations; the browser never runs shell/git. |
@@ -131,7 +120,7 @@ and is not implemented in the web picker; do not claim notes slash commands. Not
 Notes workspace, or by agents through the Notes MCP server.
 
 When the server is registered and connected from Settings → Plugins (an engine restart may be needed
-first), its three prompts appear in the engine catalog and therefore in the generic `/api/command`
+first), its three prompts appear in the engine catalog and therefore in the generic command
 picker like any other MCP prompt command. They render instructions; the agent then calls the notes
 tools.
 
@@ -150,10 +139,11 @@ the PTY bridge. Server-side PTY handling exists in `server/pty-websocket-bridge.
 reachable from the current interface. Do not infer terminal activity from output or claim PTY
 behavior in the web UI.
 
-## Dynamic `/api/command` catalog
+## Dynamic command catalog
 
-Every entry returned for the active session directory is shown and executable generically
-through the native command endpoint. This includes:
+The browser loads the catalog with `openCode.command.list({ location })`; the response is
+`{ location, data }`, where `data` is the command array for that directory. Every entry is shown
+and executable generically through the native command endpoint. This includes:
 
 - core `init` and `review`;
 - project/config custom commands;
@@ -178,7 +168,7 @@ behavior remain unsupported or future scope.
 
 ## Unsupported and partial commands
 
-| Gap | Source evidence | Requirement / severity | Safe web alternative | Current decision |
+| Gap | Evidence | Requirement / severity | Safe web alternative | Current decision |
 |---|---|---|---|---|
 | `/highlights` | 2.1.4 mounts `app.highlights` only in the TUI runtime; no HTTP endpoint. | Release-specific content. **Low**. | Static release notes would need an approved source/version; none is exposed for 2.1.4 HTTP. | Unsupported; no content invented. |
 | `/update` | No installation/update HTTP endpoint in protocol/server; update is installer/CLI operational behavior. | Engine install mutation. **High**. | None in this client. A web client cannot own engine updates without explicit operator approval. | Unsupported. |

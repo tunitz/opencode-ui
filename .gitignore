@@ -52,10 +52,12 @@ dist-ssr
 .prettiercache
 coverage/
 .nyc_output/
+*.tgz
 /public/icons/.tmp-favicon-*.png
 
 # ── Test and QA artifacts ───────────────────────────────────────
-# Wave 0 perf baseline is a committed "before" snapshot; per-run results are not.
+# Perf baselines and per-run results are generated locally.
+/tests/browser/perf-baseline.json
 /tests/browser/perf-results.json
 test-results/
 playwright-report/
@@ -76,6 +78,9 @@ lerna-debug.log*
 *.pid
 *.pid.lock
 *.seed
+*.db
+*.db-wal
+*.db-shm
 *.bak
 *.orig
 *.rej

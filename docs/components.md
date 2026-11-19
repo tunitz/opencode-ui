@@ -10,14 +10,14 @@ rules are in [contract.md](contract.md); command behavior is in [commands.md](co
 1. **shadcn AI elements / Base UI** — `MessageScroller`, `Message`, `Bubble`, `Attachment`,
    `Marker`, `Trace`, `CodeBlock`, `Item` (Confirmation), `Popover` + `Progress` (Context),
    `PromptInput`/`InputGroup`, plus dialogs, sheets, menus, selects, tabs and fields.
-2. **OpenUI** — `Table` primitives and lazy `Charts/BarChart` only. Code blocks now use shadcn
-   `CodeBlock`, not the OpenUI one.
+2. **OpenUI** — selective subpath imports only: `Callout`, `Card`, `CardHeader`, `Image`,
+   `Table`, `Charts/BarChart`, `ThemeProvider`, `MetricIndicator`, and `Tag`. Code blocks are
+   composed from shadcn `CodeBlock` parts in `src/components/openui-code-block.tsx`.
 3. **Custom** — only native-state projection, safety checks and pure adapters in
    `src/lib/shadcn-ai/`, not chat markup or scroll behavior.
 
 Do not import the OpenUI root entry, AgentInterface, chat/Lang runtime, generated cards,
-ImageGallery/GalleryModal, or FollowUpBlock/Item. The installed peer packages are present for
-resolution; they are not a claim that generated-UI features are adopted.
+ImageGallery/GalleryModal, or FollowUpBlock/Item.
 
 ## Current mapping
 
@@ -28,7 +28,7 @@ resolution; they are not a claim that generated-UI features are adopted.
 | Project/session navigation | shadcn/Base UI | `ProjectSelect`, `SessionNav`, `NewSessionDialog`, responsive dialog/sheet, `AlertDialog`, `PickerSelect` | Project or All-projects scope; real native sessions; date-grouped accordion sessions with full-row search that flattens results; explicit create/rename/delete; destructive confirmation; mobile drawer closes only after selection/create. |
 | Composer | shadcn `PromptInput` / `InputGroup` | `Composer`, `InputGroupTextarea`, `Attachment`, `ModelSelector`, `Button`, `ModelSettingsDrawer`, `ModelSettingsInline` | One rounded shadcn prompt surface: textarea + attachment chips + model/effort selectors + Stop only while running and 44px Send. File references are plain `@"path"` tokens inserted at the caret; slash commands, note references, prompt recall, drafts and dictation stay string-based. Touch Enter=newline/Send-only; fine-pointer Enter=send, Shift+Enter=newline; IME guarded. Lexical is no longer used. |
 | Model settings | shadcn/Base UI | inline desktop chips, anchored desktop Popover fallback, mobile Sheet, three searchable `PickerSelect`s | Desktop shows compact borderless Agent/Model/Thinking Level triggers that open upward; the full form is still available through the model chip/popover fallback and `/models`, `/agents`, `/thinking`. Mobile keeps the single model trigger and bottom sheet unchanged. Agent/Model/Thinking Level from the target native catalog; unavailable values stay honest; immediate autosave; no Done; focus returns to the composer trigger. |
-| Conversation | shadcn AI elements | `Conversation`, `MessageScroller`, `Message`, `Bubble`, `Marker`, `Trace`, `CodeBlock`, `Markdown` | `MessageScroller` owns anchoring, streaming follow, prepend preservation and jump-to-latest; every direct content child is a `MessageScrollerItem`, user turns carry `scrollAnchor`. Cursor-paged older history, stable keys, live-to-durable reconciliation and focus pinning stay. Tool activity is `Trace` rows with `TraceLine` status mapped by `src/lib/shadcn-ai/`; headings pass the secret sanitizer. No hand-rolled scroll math remains. |
+| Conversation | shadcn AI elements | `Conversation`, `MessageScroller`, `Message`, `Bubble`, `Marker`, `Trace`, `CodeBlock`, `Markdown` | `MessageScroller` owns anchoring, streaming follow, prepend preservation and jump-to-latest; every direct content child is a `MessageScrollerItem`, user turns carry `scrollAnchor`. Cursor-paged older history, stable keys, live-to-durable reconciliation and focus pinning stay. Tool activity is `Trace` rows with `TraceLine` status mapped by `src/lib/shadcn-ai/`; headings pass the secret sanitizer. |
 | Markdown and code | react-markdown + shadcn `CodeBlock` | `Markdown`, `CodeBlock`, scoped code CSS | Raw HTML skipped; script/data/remote-image URLs blocked; ordinary links stay ordinary. Fenced code and tool output use shadcn `CodeBlock`/`CodeBlockContent` with copy button; live growing code stays full-text plaintext. Copy is exact; LTR in RTL. |
 | Tables and images | actual OpenUI | `Table` primitives, `Card`, `CardHeader`, `Image` | GFM tables only, React nodes passed through, internal horizontal scroll. Images are safe inline data URLs or verified same-origin artifact routes; no arbitrary remote/SVG fetch. |
 | User attachments | shadcn `Attachment` + native prompt files | `MessageFiles`, `Attachment`, `AttachmentGroup`, `PdfPreview`, paste/file picker, Dialog | Compact shadcn attachment row above the user bubble; no file count or size cap; PDF via local PDF.js; text escaped; SVG/HTML/remote hazards rejected; per-session, not draft-persisted. |
@@ -47,8 +47,12 @@ resolution; they are not a claim that generated-UI features are adopted.
 
 ## Native-state modules
 
-Session navigation additionally offers local pins/labels and a full-row session
-search that temporarily flattens the date groups; direct subagent discovery is bounded to the first page. Project worktrees are
+Session navigation additionally offers server-wide pins and labels, stored in
+app-owned state through `/api/ui/session-shortcuts` (`server/session-shortcuts.ts`, default
+`~/.local/share/opencode-ui/session-shortcuts.json`, overridable with
+`OPENCODE_UI_SESSION_SHORTCUTS_STATE`) and shared by every browser and device rather than kept
+in the browser; a full-row session search temporarily flattens the date groups;
+direct subagent discovery is bounded to the first page. Project worktrees are
 available from desktop and mobile navigation, using the selected project in
 project scope or the active session's project in All projects scope. Existing worktrees offer
 session creation in their directory with the normal catalog and project checks. The command center
@@ -72,9 +76,7 @@ server-held Basic credential. The browser never receives it.
 ## Deliberately omitted / deferred
 
 - OpenUI AgentInterface, chat/Lang runtime, generated cards, and generative-UI registry.
-- ImageGallery/GalleryModal (source-inspected; existing compact attachments/Dialog retained).
-- FollowUpBlock/FollowUpItem (source-inspected; “Related Queries” semantics do not fit app-owned
-  actions).
-- Activity pending-queue/subagent-tree inspector and reading mode.
+- ImageGallery/GalleryModal (compact attachments/Dialog retained).
+- FollowUpBlock/FollowUpItem (app-owned actions instead).
 - Remote Markdown images and arbitrary server-side URL/file access.
 - Browser screenshot tool guarantees; the app displays only structured or verified artifacts.
