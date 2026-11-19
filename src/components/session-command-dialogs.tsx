@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import {
+  CopyIcon,
   DownloadIcon,
   FolderInputIcon,
   GitForkIcon,
@@ -23,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet"
+import { copyText } from "@/lib/clipboard"
 import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { errorMessage, openCode } from "@/lib/opencode"
@@ -36,11 +38,15 @@ import type {
 import {
   findUndoBoundary,
   formatByteSize,
-  isAbsoluteDirectory,
   previewRevert,
+  resolveSessionDirectory,
   sessionExportFilename,
   timelineTime,
 } from "@/lib/session-commands"
+import {
+  formatMarkdownTranscript,
+  nativeJsonTranscript,
+} from "@/lib/session-export"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 export type SessionCommandDialogKind =
@@ -141,14 +147,32 @@ function RenameDialog({ nav, onClose, onResult }: DialogProps) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trimmed = title.trim()
-  const canSave =
-    Boolean(session) &&
-    trimmed.length > 0 &&
-    trimmed !== (session?.title ?? "").trim() &&
-    !pending
+  const unchanged = trimmed === (session?.title ?? "").trim()
+  // Upstream 2.1.4 generates a title by sending an empty title to the native
+  // session update. That endpoint is reachable from the browser, so an empty
+  // confirmation is a real request rather than a disabled no-op.
+  const canGenerate = Boolean(session) && !trimmed && !pending
+  const canSave = Boolean(session) && trimmed.length > 0 && !unchanged && !pending
 
   async function submit() {
-    if (!session || !canSave) return
+    if (!session || pending) return
+    if (!trimmed) {
+      if (!canGenerate) return
+      setPending(true)
+      setError(null)
+      try {
+        await openCode.session.update({ sessionID: session.id, title: "" })
+      } catch (failure) {
+        setPending(false)
+        setError(errorMessage(failure))
+        return
+      }
+      setPending(false)
+      onResult("Requested an engine-generated title; it appears after the engine updates the session.")
+      onClose()
+      return
+    }
+    if (!canSave) return
     setPending(true)
     setError(null)
     const failure = await nav.renameSession(session.id, trimmed)
@@ -164,7 +188,7 @@ function RenameDialog({ nav, onClose, onResult }: DialogProps) {
   return (
     <CommandDialogShell
       title="Rename session"
-      description="The current session title is prefilled. Cancel sends no request."
+      description="The current title is prefilled. Clearing it and confirming asks the engine to generate a title. Cancel sends no request."
       pending={pending}
       onClose={onClose}
       footer={
@@ -181,14 +205,14 @@ function RenameDialog({ nav, onClose, onResult }: DialogProps) {
           <Button
             type="button"
             className="h-11 px-4"
-            disabled={!canSave}
+            disabled={!canSave && !canGenerate}
             aria-busy={pending}
             onClick={() => void submit()}
           >
             {pending ? (
               <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
             ) : null}
-            Save
+            {canGenerate ? "Generate title" : "Save"}
           </Button>
         </>
       }
@@ -209,12 +233,14 @@ function RenameDialog({ nav, onClose, onResult }: DialogProps) {
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           disabled={pending}
-          aria-invalid={trimmed.length === 0}
+          aria-invalid={false}
           className="h-11"
           autoFocus
         />
-        {trimmed.length === 0 ? (
-          <p className="text-xs text-destructive">Session name cannot be empty.</p>
+        {!trimmed ? (
+          <p className="text-[11px] text-muted-foreground">
+            Empty sends the native title-generation request when you confirm. Cancel leaves the title unchanged.
+          </p>
         ) : null}
         <ErrorNotice error={error} />
       </form>
@@ -329,6 +355,7 @@ function MessagePicker({
   mode,
   onClose,
   onResult,
+  onRestoreDraft,
   nav,
 }: DialogProps & {
   title: string
@@ -340,6 +367,7 @@ function MessagePicker({
     useUserMessagePages(session.id)
   const [query, setQuery] = useState("")
   const [selectedID, setSelectedID] = useState<string | null>(null)
+  const [restorePrompt, setRestorePrompt] = useState(false)
   const [pending, setPending] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const filtered = useMemo(() => {
@@ -365,7 +393,14 @@ function MessagePicker({
         setActionError(failure)
         return
       }
-      onResult(`Jumped to message · ${timelineTime(selected.time.created)}`)
+      // Upstream DialogTimeline passes setPrompt into the message action so a
+      // durable user message can be placed back into the composer. Offer the
+      // same behavior here; it only edits the draft and never sends.
+      const restored = restorePrompt && Boolean(onRestoreDraft)
+      if (restored) onRestoreDraft?.(selected.text)
+      onResult(
+        `Jumped to message · ${timelineTime(selected.time.created)}${restored ? " · prompt restored to composer" : ""}`
+      )
       onClose()
       return
     }
@@ -512,15 +547,36 @@ function MessagePicker({
           </Button>
         ) : null}
         {mode === "timeline" && selected ? (
-          <div className="rounded-lg border border-border bg-muted/30 p-2.5">
-            <p className="text-[11px] font-medium text-muted-foreground">Selected message</p>
-            <p className="mt-1 max-h-28 overflow-y-auto text-[12px] whitespace-pre-wrap break-words">
-              {selected.text}
-            </p>
-            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-              {selected.id}
-            </p>
-          </div>
+          <>
+            <div className="rounded-lg border border-border bg-muted/30 p-2.5">
+              <p className="text-[11px] font-medium text-muted-foreground">Selected message</p>
+              <p className="mt-1 max-h-28 overflow-y-auto text-[12px] whitespace-pre-wrap break-words">
+                {selected.text}
+              </p>
+              <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                {selected.id}
+              </p>
+            </div>
+            {onRestoreDraft ? (
+              <div className="flex items-start gap-2 rounded-lg border border-border p-2.5">
+                <Checkbox
+                  id="timeline-restore-prompt"
+                  checked={restorePrompt}
+                  onCheckedChange={(checked) => setRestorePrompt(checked === true)}
+                  disabled={pending}
+                />
+                <Label
+                  htmlFor="timeline-restore-prompt"
+                  className="flex-col items-start gap-0.5 text-[12px] font-normal leading-5"
+                >
+                  <span>Restore message text to composer</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    Places the selected prompt in this session&apos;s draft. Nothing is sent.
+                  </span>
+                </Label>
+              </div>
+            ) : null}
+          </>
         ) : null}
         {mode === "fork" ? (
           <p className="text-[11px] text-muted-foreground">
@@ -566,15 +622,23 @@ function ForkDialog({ nav, onClose, onResult }: DialogProps) {
   )
 }
 
+type ExportFormat = "markdown" | "json"
+
 function ExportDialog({ nav, onClose, onResult }: DialogProps) {
   const session = nav.activeSession
+  // Upstream 2.1.4 defaults to Markdown and offers a JSON format with a
+  // sanitize switch. Native JSON stays byte-for-byte the engine transfer.
+  const [format, setFormat] = useState<ExportFormat>("markdown")
   const [sanitize, setSanitize] = useState(false)
+  const [thinking, setThinking] = useState(false)
+  const [tools, setTools] = useState(true)
   const [data, setData] = useState<SessionTransferData | null>(null)
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const request = useRef(0)
+  const effectiveSanitize = format === "json" && sanitize
 
   useEffect(() => {
     if (!session) return
@@ -585,7 +649,7 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
       try {
         const exported = await openCode.session.export({
           sessionID: session.id,
-          ...(sanitize ? { sanitize: true } : {}),
+          ...(effectiveSanitize ? { sanitize: true } : {}),
         })
         if (token !== request.current) return
         setData(exported)
@@ -599,30 +663,53 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
     return () => {
       request.current += 1
     }
-  }, [reloadKey, sanitize, session])
+  }, [reloadKey, effectiveSanitize, session])
 
   if (!session) return null
   const targetSession = session
-  const json = data ? `${JSON.stringify(data, null, 2)}\n` : ""
-  const size = data ? new Blob([json]).size : 0
+  const content = data
+    ? format === "json"
+      ? nativeJsonTranscript(data)
+      : formatMarkdownTranscript(data, { thinking, tools })
+    : ""
+  const size = data ? new Blob([content]).size : 0
+  const filename = sessionExportFilename(targetSession, format)
+  const mime =
+    format === "json"
+      ? "application/json;charset=utf-8"
+      : "text/markdown;charset=utf-8"
+
+  async function copy() {
+    if (!data || pending) return
+    setPending(true)
+    setError(null)
+    try {
+      await copyText(content)
+      onResult(`Copied ${format} transcript (${formatByteSize(size)}).`)
+      onClose()
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setPending(false)
+    }
+  }
 
   function download() {
     if (!data || pending) return
     setPending(true)
+    setError(null)
     try {
-      const blob = new Blob([json], { type: "application/json;charset=utf-8" })
+      const blob = new Blob([content], { type: mime })
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement("a")
       anchor.href = url
-      anchor.download = sessionExportFilename(targetSession)
+      anchor.download = filename
       anchor.rel = "noopener"
       document.body.append(anchor)
       anchor.click()
       anchor.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      onResult(
-        `Downloaded native JSON transcript (${formatByteSize(size)}).`
-      )
+      onResult(`Downloaded ${format} transcript (${formatByteSize(size)}).`)
       onClose()
     } catch (failure) {
       setError(errorMessage(failure))
@@ -634,7 +721,7 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
   return (
     <CommandDialogShell
       title="Export session"
-      description="Native session transfer JSON. No Markdown format is implied."
+      description="Export the native session transfer as Markdown or exact JSON. Copy or download only on confirmation."
       pending={pending}
       onClose={onClose}
       footer={
@@ -650,6 +737,21 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
           </Button>
           <Button
             type="button"
+            variant="outline"
+            className="h-11 px-4"
+            disabled={!data || status !== "ready" || pending}
+            aria-busy={pending}
+            onClick={() => void copy()}
+          >
+            {pending ? (
+              <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+            ) : (
+              <CopyIcon aria-hidden="true" className="size-4" />
+            )}
+            Copy
+          </Button>
+          <Button
+            type="button"
             className="h-11 px-4"
             disabled={!data || status !== "ready" || pending}
             aria-busy={pending}
@@ -660,7 +762,7 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
             ) : (
               <DownloadIcon aria-hidden="true" className="size-4" />
             )}
-            Download JSON
+            Download
           </Button>
         </>
       }
@@ -686,38 +788,82 @@ function ExportDialog({ nav, onClose, onResult }: DialogProps) {
       ) : null}
       {data ? (
         <div className="space-y-3 text-[12px]">
+          <div className="flex flex-wrap gap-2">
+            {(["markdown", "json"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={format === option}
+                disabled={pending}
+                onClick={() => setFormat(option)}
+                className="min-h-11 rounded-lg border border-border px-3 text-[12px] hover:bg-muted/60 aria-pressed:bg-muted"
+              >
+                {option === "markdown" ? "Markdown" : "JSON"}
+              </button>
+            ))}
+          </div>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <dt className="text-muted-foreground">Format</dt>
-            <dd>Native JSON transcript</dd>
+            <dd>{format === "json" ? "Native JSON transcript" : "Markdown transcript"}</dd>
             <dt className="text-muted-foreground">Filename</dt>
             <dd dir="ltr" className="font-mono text-[11px] break-all">
-              {sessionExportFilename(session)}
+              {filename}
             </dd>
             <dt className="text-muted-foreground">Messages</dt>
             <dd className="tabular-nums">{data.messages.length}</dd>
             <dt className="text-muted-foreground">Size</dt>
             <dd className="tabular-nums">{formatByteSize(size)}</dd>
           </dl>
-          <div className="flex items-start gap-2 rounded-lg border border-border p-2.5">
-            <Checkbox
-              id="export-sanitize"
-              checked={sanitize}
-              onCheckedChange={(checked) => setSanitize(checked === true)}
-              disabled={pending}
-            />
-            <Label
-              htmlFor="export-sanitize"
-              className="flex-col items-start gap-0.5 text-[12px] font-normal leading-5"
-            >
-              <span>Sanitize export</span>
-              <span className="block text-[11px] text-muted-foreground">
-                Redacts transcript text, attachment data, paths, identifiers, and metadata.
-                It is not a guarantee that every sensitive detail is removed.
-              </span>
-            </Label>
-          </div>
+          {format === "markdown" ? (
+            <div className="space-y-2 rounded-lg border border-border p-2.5">
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="export-thinking"
+                  checked={thinking}
+                  onCheckedChange={(checked) => setThinking(checked === true)}
+                  disabled={pending}
+                />
+                <Label htmlFor="export-thinking" className="text-[12px] font-normal leading-5">
+                  Include reasoning
+                </Label>
+              </div>
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="export-tools"
+                  checked={tools}
+                  onCheckedChange={(checked) => setTools(checked === true)}
+                  disabled={pending}
+                />
+                <Label htmlFor="export-tools" className="text-[12px] font-normal leading-5">
+                  Include tool calls
+                </Label>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Markdown is rendered locally from the native transfer; it is not a separate engine format.
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-lg border border-border p-2.5">
+              <Checkbox
+                id="export-sanitize"
+                checked={sanitize}
+                onCheckedChange={(checked) => setSanitize(checked === true)}
+                disabled={pending}
+              />
+              <Label
+                htmlFor="export-sanitize"
+                className="flex-col items-start gap-0.5 text-[12px] font-normal leading-5"
+              >
+                <span>Sanitize export</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Passes {"{sanitize: true}"} to the native export. Redacts text, attachments,
+                  paths, identifiers, and metadata; not a guarantee that every detail is removed.
+                </span>
+              </Label>
+            </div>
+          )}
           <p className="rounded-lg border border-border bg-muted/30 p-2.5 text-[11px] text-muted-foreground">
-            The download happens only when you activate Download JSON. The file contains
+            Nothing leaves the browser until you choose Copy or Download. The result contains
             session content; store and share it deliberately. Browser object URLs are revoked
             after the download starts.
           </p>
@@ -796,26 +942,57 @@ function CompactDialog({ nav, onClose, onResult }: DialogProps) {
   )
 }
 
-function UndoDialog({ nav, onClose, onResult }: DialogProps) {
+function UndoDialog({ nav, onClose, onResult, onRestoreDraft }: DialogProps) {
   const session = nav.activeSession
-  const boundary = session ? findUndoBoundary(nav.messages) : null
+  // Upstream selects the boundary from history before a staged revert.
+  const boundary = session
+    ? findUndoBoundary(nav.messages, session.revert?.messageID)
+    : null
   const preview = boundary ? previewRevert(nav.messages, boundary.id) : null
+  const pendingDelivery = boundary
+    ? nav.inbox.find((item) => item.type === "user" && item.id === boundary.id) ?? null
+    : null
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const staged = Boolean(session?.revert)
 
   async function confirm() {
-    if (!boundary || pending) return
+    if (!boundary || !session || pending) return
     setPending(true)
     setError(null)
-    const failure = await nav.stageRevert(boundary.id)
+    if (pendingDelivery) {
+      // Upstream cancels the pending delivery instead of staging a revert when
+      // the target user message has not been delivered yet.
+      const failure = await nav.cancelInboxItem(pendingDelivery.id)
+      setPending(false)
+      if (failure) {
+        setError(failure)
+        return
+      }
+      onRestoreDraft?.(boundary.text)
+      onResult("Pending message cancelled; its text was restored to the composer.")
+      onClose()
+      return
+    }
+    let failure = await nav.interruptSession()
+    if (!failure) {
+      try {
+        await openCode.session.wait({ sessionID: session.id })
+      } catch (waitFailure) {
+        failure = errorMessage(waitFailure)
+      }
+    }
+    if (!failure) failure = await nav.stageRevert(boundary.id)
     setPending(false)
     if (failure) {
       setError(failure)
       return
     }
+    // Snapshot semantics: the prior user prompt is restored into the draft
+    // text only; attachments are not reconstructed by this browser adapter.
+    onRestoreDraft?.(boundary.text)
     onResult(
-      `Undo staged: ${preview?.messages ?? 0} message(s) and ${preview?.files.length ?? 0} file(s) reverted.`
+      `Undo staged: ${preview?.messages ?? 0} message(s) and ${preview?.files.length ?? 0} file(s) reverted; prompt restored to the composer.`
     )
     onClose()
   }
@@ -823,7 +1000,11 @@ function UndoDialog({ nav, onClose, onResult }: DialogProps) {
   return (
     <CommandDialogShell
       title="Undo previous message"
-      description="Stages the native reversible revert boundary. Cancel sends no request."
+      description={
+        pendingDelivery
+          ? "The target prompt is still pending. Confirming cancels that delivery and restores its text; no revert is staged."
+          : "Interrupts and waits for the session, then stages the native revert. Cancel sends no request."
+      }
       pending={pending}
       onClose={onClose}
       footer={
@@ -848,7 +1029,7 @@ function UndoDialog({ nav, onClose, onResult }: DialogProps) {
             {pending ? (
               <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
             ) : null}
-            Undo last message
+            {pendingDelivery ? "Cancel pending & restore" : "Undo last message"}
           </Button>
         </>
       }
@@ -870,12 +1051,21 @@ function UndoDialog({ nav, onClose, onResult }: DialogProps) {
               {boundary.id}
             </p>
           </div>
-          <p>
-            This will revert the latest user message and {Math.max(0, preview.messages - 1)} later
-            message{preview.messages - 1 === 1 ? "" : "s"}; it restores the files recorded by
-            later assistant turns. It does not delete the session or its draft.
-          </p>
-          {preview.files.length > 0 ? (
+          {pendingDelivery ? (
+            <p className="rounded-lg border border-border bg-muted/30 p-2.5 text-[11px] text-muted-foreground">
+              This prompt has a pending delivery. The native engine cancels it instead of
+              staging a file revert. Its text returns to the composer; attachments are not
+              reconstructed.
+            </p>
+          ) : (
+            <p>
+              This will revert the latest user message and {Math.max(0, preview.messages - 1)} later
+              message{preview.messages - 1 === 1 ? "" : "s"}; it restores the files recorded by
+              later assistant turns. The prompt text returns to the composer. It does not delete
+              the session.
+            </p>
+          )}
+          {!pendingDelivery && preview.files.length > 0 ? (
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
               <p className="font-medium text-foreground">
                 {preview.files.length} file{preview.files.length === 1 ? "" : "s"} will be
@@ -889,11 +1079,12 @@ function UndoDialog({ nav, onClose, onResult }: DialogProps) {
                 ))}
               </ul>
             </div>
-          ) : (
+          ) : null}
+          {!pendingDelivery && preview.files.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">
               No files were recorded for later assistant turns.
             </p>
-          )}
+          ) : null}
           <ErrorNotice error={error} />
         </div>
       )}
@@ -997,18 +1188,24 @@ function CdDialog({ nav, initialText = "", onClose, onResult }: DialogProps) {
   const [checking, setChecking] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const validAbsolute = isAbsoluteDirectory(path)
   const current = session?.location.directory ?? nav.directory
+  // Relative paths resolve against the session directory; `~` and `~/…` are
+  // expanded by the engine when checked. No browser-side role gating: the
+  // native location lookup decides what is reachable.
+  const candidate = resolveSessionDirectory(path, current)
 
   async function check() {
-    if (!validAbsolute || checking || pending) return
+    if (!candidate || checking || pending) return
     setChecking(true)
     setError(null)
     setResolved(null)
     try {
-      const location = await openCode.location.get({
-        location: { directory: path.trim() },
-      })
+      let target = candidate
+      if (path.trim() === "~" || path.trim().startsWith("~/")) {
+        const home = await openCode.location.get({ location: { directory: "~" } })
+        target = resolveSessionDirectory(path, current, home.directory) ?? candidate
+      }
+      const location = await openCode.location.get({ location: { directory: target } })
       setResolved(location.directory)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -1034,7 +1231,7 @@ function CdDialog({ nav, initialText = "", onClose, onResult }: DialogProps) {
   return (
     <CommandDialogShell
       title="Change working directory"
-      description="Move this session to an absolute, existing directory. Cancel sends no request."
+      description="Move this session to an existing directory. Absolute paths, paths relative to the session directory, and ~ are accepted. Cancel sends no request."
       pending={pending}
       onClose={onClose}
       footer={
@@ -1073,26 +1270,26 @@ function CdDialog({ nav, initialText = "", onClose, onResult }: DialogProps) {
           </p>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="command-cd-path">Absolute target directory</Label>
+          <Label htmlFor="command-cd-path">Target directory</Label>
           <Input
             id="command-cd-path"
-            aria-label="Absolute target directory"
+            aria-label="Target directory"
             value={path}
             onChange={(event) => {
               setPath(event.target.value)
               setResolved(null)
               setError(null)
             }}
-            placeholder="/absolute/existing/directory"
+            placeholder="/absolute/path, ./relative, or ~/projects"
             dir="ltr"
             className="h-11 font-mono text-[12px]"
             autoFocus
-            aria-invalid={Boolean(path) && !validAbsolute}
+            aria-invalid={Boolean(path) && !candidate}
             disabled={pending || checking}
           />
-          {path && !validAbsolute ? (
+          {path && !candidate ? (
             <p className="text-xs text-destructive">
-              Enter an absolute directory path starting with a single /.
+              Enter a directory path without line breaks.
             </p>
           ) : null}
         </div>
@@ -1113,7 +1310,7 @@ function CdDialog({ nav, initialText = "", onClose, onResult }: DialogProps) {
             type="button"
             variant="outline"
             className="h-11 w-full text-xs"
-            disabled={!validAbsolute || checking || pending}
+            disabled={!candidate || checking || pending}
             aria-busy={checking}
             onClick={() => void check()}
           >

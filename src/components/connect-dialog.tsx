@@ -7,9 +7,9 @@ import {
   ExternalLinkIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
-  ShieldAlertIcon,
   XIcon,
 } from "lucide-react"
+import type { IntegrationCommandAttempt } from "@opencode/client"
 
 import { FieldRenderer } from "@/components/form-view"
 import { ErrorNotice } from "@/components/session-command-dialogs"
@@ -54,13 +54,9 @@ import {
   type IntegrationInfo,
   type IntegrationMethod,
 } from "@/lib/opencode"
+import { finiteExpiry } from "@/components/system-command-dialogs"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
-
-function canonicalHttpsOrigin() {
-  if (typeof window === "undefined") return ""
-  return `https://${window.location.hostname}/`
-}
 
 type Props = {
   nav: OpenCodeController
@@ -68,7 +64,7 @@ type Props = {
   onResult: (message: string, ok?: boolean) => void
 }
 
-type View = "list" | "detail" | "oauth" | "success"
+type View = "list" | "detail" | "oauth" | "command" | "success"
 
 function methodForm(method: IntegrationMethod | null): FormField[] {
   if (!method) return []
@@ -76,6 +72,19 @@ function methodForm(method: IntegrationMethod | null): FormField[] {
     return (method.form ?? []) as FormField[]
   }
   return []
+}
+
+/** Prevent any submitted form value from being reflected in an upstream error. */
+function redactAnswers(message: string, values: FormAnswer): string {
+  let result = message
+  for (const value of Object.values(values)) {
+    for (const part of Array.isArray(value) ? value : [value]) {
+      if (typeof part === "string" && part.trim().length >= 3) {
+        result = redactSecret(result, part)
+      }
+    }
+  }
+  return result
 }
 
 export function ConnectDialog({ nav, onClose, onResult }: Props) {
@@ -93,6 +102,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   const [keyVisible, setKeyVisible] = useState(false)
   const [oauthCode, setOauthCode] = useState("")
   const [attempt, setAttempt] = useState<IntegrationAttempt | null>(null)
+  const [commandAttempt, setCommandAttempt] = useState<IntegrationCommandAttempt | null>(null)
   const [authStatus, setAuthStatus] = useState<"idle" | "starting" | "waiting" | "success" | "error" | "unknown">("idle")
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -106,11 +116,13 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   const attemptRef = useRef<IntegrationAttempt | null>(null)
   const attemptContextRef = useRef<{ integrationID: string; directory: string } | null>(null)
   const settledRef = useRef(false)
+  const commandPollToken = useRef(0)
+  const commandPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const commandPollAbort = useRef<AbortController | null>(null)
+  const commandAttemptRef = useRef<IntegrationCommandAttempt | null>(null)
+  const commandContextRef = useRef<{ integrationID: string; directory: string } | null>(null)
+  const commandSettledRef = useRef(false)
   const initialDirectory = useRef(directory)
-  const secure =
-    typeof window !== "undefined" &&
-    window.isSecureContext === true &&
-    window.location.protocol === "https:"
 
   async function loadCatalog() {
     if (!directory) {
@@ -153,20 +165,30 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
       pollToken.current += 1
       if (pollTimer.current) clearTimeout(pollTimer.current)
       pollAbort.current?.abort()
+      commandPollToken.current += 1
+      if (commandPollTimer.current) clearTimeout(commandPollTimer.current)
+      commandPollAbort.current?.abort()
     }
   }, [])
 
   async function close() {
     if (closing) return
-    if (busy && !attemptRef.current) return
+    if (busy && !attemptRef.current && !commandAttemptRef.current) return
     setClosing(true)
     pollToken.current += 1
     if (pollTimer.current) clearTimeout(pollTimer.current)
     pollTimer.current = null
     pollAbort.current?.abort()
     pollAbort.current = null
+    commandPollToken.current += 1
+    if (commandPollTimer.current) clearTimeout(commandPollTimer.current)
+    commandPollTimer.current = null
+    commandPollAbort.current?.abort()
+    commandPollAbort.current = null
     const active = attemptRef.current
     const context = attemptContextRef.current
+    const commandActive = commandAttemptRef.current
+    const commandContext = commandContextRef.current
     setApiKey("")
     setOauthCode("")
     if (active && context && !settledRef.current) {
@@ -182,9 +204,25 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
         )
       }
     }
+    if (commandActive && commandContext && !commandSettledRef.current) {
+      try {
+        await openCode.integration.command.cancel({
+          integrationID: commandContext.integrationID,
+          attemptID: commandActive.attemptID,
+          location: { directory: commandContext.directory },
+        })
+      } catch {
+        onResult(
+          "Closed the connection dialog; server-side command cancellation is unknown. No automatic retry was started."
+        )
+      }
+    }
     attemptRef.current = null
     attemptContextRef.current = null
+    commandAttemptRef.current = null
+    commandContextRef.current = null
     setAttempt(null)
+    setCommandAttempt(null)
     onClose()
   }
 
@@ -219,7 +257,16 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
     attemptRef.current = null
     attemptContextRef.current = null
     settledRef.current = false
+    commandPollToken.current += 1
+    if (commandPollTimer.current) clearTimeout(commandPollTimer.current)
+    commandPollTimer.current = null
+    commandPollAbort.current?.abort()
+    commandPollAbort.current = null
+    commandAttemptRef.current = null
+    commandContextRef.current = null
+    commandSettledRef.current = false
     setAttempt(null)
+    setCommandAttempt(null)
     setOauthCode("")
     setAuthStatus("idle")
     setError(null)
@@ -237,7 +284,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   }
 
   function chooseMethod(next: IntegrationMethod) {
-    if (!secure || !isBrowserConnectMethod(next)) return
+    if (!isBrowserConnectMethod(next)) return
     setMethod(next)
     setAnswer(defaultAnswer(methodForm(next)))
     setApiKey("")
@@ -266,7 +313,10 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
     )
     attemptRef.current = null
     attemptContextRef.current = null
+    commandAttemptRef.current = null
+    commandContextRef.current = null
     setAttempt(null)
+    setCommandAttempt(null)
     setView("success")
     await loadCatalog()
     nav.retryCatalogs()
@@ -274,7 +324,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   }
 
   async function connectWithKey(integration: IntegrationInfo, selectedMethod: IntegrationMethod) {
-    if (busy || !secure || selectedMethod.type !== "key") return
+    if (busy || selectedMethod.type !== "key") return
     const key = apiKey
     if (!key.trim()) {
       setError("Enter an API key.")
@@ -299,6 +349,31 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
       await finishSuccess(integration)
     } catch (failure) {
       setError(redactSecret(errorMessage(failure), key))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function connectExternal(integration: IntegrationInfo, selectedMethod: IntegrationMethod) {
+    if (busy || selectedMethod.type !== "external") return
+    const invalid = validateForm(fields, answer)
+    if (invalid) {
+      setError(invalid)
+      return
+    }
+    const reply = fields.length > 0 ? buildReplyAnswer(fields, answer) : undefined
+    setBusy(true)
+    setError(null)
+    try {
+      await openCode.integration.connect.external({
+        integrationID: integration.id,
+        methodID: selectedMethod.id,
+        location: { directory },
+        ...(reply ? { answer: reply } : {}),
+      })
+      await finishSuccess(integration)
+    } catch (failure) {
+      setError(redactAnswers(errorMessage(failure), answer))
     } finally {
       setBusy(false)
     }
@@ -361,8 +436,91 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
     void poll()
   }
 
+  function startCommandPolling(integration: IntegrationInfo, next: IntegrationCommandAttempt) {
+    commandAttemptRef.current = next
+    setCommandAttempt(next)
+    commandSettledRef.current = false
+    setAuthStatus("waiting")
+    const token = ++commandPollToken.current
+    const deadline = pollDeadline(finiteExpiry(next.time.expires))
+
+    const poll = async () => {
+      if (token !== commandPollToken.current || commandSettledRef.current) return
+      const controller = new AbortController()
+      commandPollAbort.current = controller
+      try {
+        const response = await openCode.integration.command.status(
+          {
+            integrationID: integration.id,
+            attemptID: next.attemptID,
+            location: { directory },
+          },
+          { signal: controller.signal }
+        )
+        if (token !== commandPollToken.current || commandSettledRef.current) return
+        const status = response.data
+        if (status.status === "pending") {
+          if (Date.now() >= deadline) {
+            setAuthStatus("unknown")
+            setError(
+              "Command authentication status is unknown after the bounded polling window. The server may still complete the attempt; no automatic retry was started."
+            )
+            return
+          }
+          commandPollTimer.current = setTimeout(poll, 600)
+          return
+        }
+        commandSettledRef.current = true
+        if (status.status === "complete") {
+          await finishSuccess(integration)
+          return
+        }
+        setAuthStatus("error")
+        setError(
+          status.status === "failed"
+            ? status.message
+            : "The command attempt expired. Start sign-in again if needed."
+        )
+      } catch (failure) {
+        if (controller.signal.aborted || token !== commandPollToken.current) return
+        setAuthStatus("unknown")
+        setError(
+          `Command authentication status is unknown: ${errorMessage(failure)}. The server may still complete it; no automatic retry was started.`
+        )
+      }
+    }
+    void poll()
+  }
+
+  async function startCommand(integration: IntegrationInfo, selectedMethod: IntegrationMethod) {
+    if (busy || selectedMethod.type !== "command") return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    resetAttempt()
+    setAuthStatus("starting")
+    try {
+      const response = await openCode.integration.command.connect({
+        integrationID: integration.id,
+        methodID: selectedMethod.id,
+        location: { directory },
+      })
+      const next = response.data
+      commandAttemptRef.current = next
+      commandContextRef.current = { integrationID: integration.id, directory }
+      setCommandAttempt(next)
+      startCommandPolling(integration, next)
+      setView("command")
+    } catch (failure) {
+      setAuthStatus("error")
+      setError(errorMessage(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function startOAuth(integration: IntegrationInfo, selectedMethod: IntegrationMethod) {
-    if (busy || !secure || selectedMethod.type !== "oauth") return
+    if (busy || selectedMethod.type !== "oauth") return
     const invalid = validateForm(fields, answer)
     if (invalid) {
       setError(invalid)
@@ -394,7 +552,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
       setView("oauth")
     } catch (failure) {
       setAuthStatus("error")
-      setError(errorMessage(failure))
+      setError(redactAnswers(errorMessage(failure), answer))
     } finally {
       setBusy(false)
     }
@@ -424,7 +582,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   }
 
   function backToList() {
-    if (busy || attemptRef.current) return
+    if (busy || attemptRef.current || commandAttemptRef.current) return
     setSelectedID(null)
     setMethod(null)
     setAnswer({})
@@ -509,11 +667,6 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
             ) : null}
           </ul>
         ) : null}
-        {!secure ? (
-          <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-muted-foreground">
-            Credential input is available only on the canonical HTTPS origin. <a className="underline" href={canonicalHttpsOrigin()}>Open HTTPS to connect</a>. This legacy HTTP view is read-only.
-          </div>
-        ) : null}
       </div>
     ) : view === "detail" && selected ? (
       <div className="space-y-3">
@@ -530,15 +683,15 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
               candidate.type === "env"
                 ? `Environment variable${candidate.names.length === 1 ? "" : "s"}: ${candidate.names.map((name) => `$${name}`).join(", ")}`
                 : candidate.type === "external"
-                  ? "External credential method is not implemented in the browser-safe flow."
+                  ? "Links a credential provisioned outside this browser."
                   : candidate.type === "command"
-                    ? "Command-based authentication is not implemented in the browser-safe flow."
+                    ? "Completes when the configured server command finishes."
                     : null
             return (
               <button
                 key={`${candidate.type}:${"id" in candidate && candidate.id ? candidate.id : index}`}
                 type="button"
-                disabled={!secure || !active}
+                disabled={!active}
                 onClick={() => chooseMethod(candidate)}
                 className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-start text-[12px] hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
               >
@@ -571,7 +724,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
                     spellCheck={false}
                     autoCapitalize="none"
                     className="h-11 min-w-0 font-mono text-[12px]"
-                    disabled={busy || !secure}
+                    disabled={busy}
                   />
                   <Button
                     type="button"
@@ -589,27 +742,48 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
             <Button
               type="button"
               className="h-11 w-full px-4"
-              disabled={busy || !secure || (method.type === "key" && !apiKey.trim())}
+              disabled={busy || (method.type === "key" && !apiKey.trim())}
               aria-busy={busy}
               onClick={() => {
                 if (method.type === "key") void connectWithKey(selected, method)
+                else if (method.type === "external") void connectExternal(selected, method)
+                else if (method.type === "command") void startCommand(selected, method)
                 else void startOAuth(selected, method)
               }}
             >
               {busy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
-              {method.type === "key" ? "Connect" : "Start sign-in"}
+              {method.type === "key" || method.type === "external" ? "Connect" : "Start sign-in"}
             </Button>
             <p className="text-[10px] text-muted-foreground">
-              The API key is kept only in this open form; it is sent once to the native backend and is never put in URLs, browser storage, or logs.
+              Credentials are kept only in this open form and are sent once to the native backend; they are never put in URLs, browser storage, or logs.
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Credentials traverse this HTTP origin. Only connect on a network you trust.
             </p>
           </div>
         ) : null}
-        {!secure ? (
-          <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-muted-foreground">
-            <ShieldAlertIcon aria-hidden="true" className="me-1 inline size-3.5" />
-            Open the canonical HTTPS origin to connect: <a className="underline" href={canonicalHttpsOrigin()}>Open HTTPS to connect</a>. This HTTP view only lists metadata.
-          </div>
-        ) : null}
+        <ErrorNotice error={error} />
+      </div>
+    ) : view === "command" && selected && commandAttempt ? (
+      <div className="space-y-3">
+        <div className="rounded-lg border border-border p-2.5 text-[12px]">
+          <p className="font-medium">{method?.type === "command" ? method.label : "Command sign-in"}</p>
+          {method?.type === "command" && method.command.length > 0 ? (
+            <div>
+              <p className="mt-1 text-[11px] text-muted-foreground">Run this command on the server to finish sign-in:</p>
+              <p dir="ltr" className="mt-1 break-all rounded-md bg-muted/40 p-2 font-mono text-[11px]">{method.command.join(" ")}</p>
+            </div>
+          ) : null}
+          {authStatus === "waiting" ? (
+            <p role="status" className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+              Waiting for the command to complete…
+            </p>
+          ) : null}
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Status is checked with the native endpoint until the bounded polling window ends; no automatic retry is started.
+          </p>
+        </div>
         <ErrorNotice error={error} />
       </div>
     ) : view === "oauth" && selected && attempt ? (
@@ -743,7 +917,7 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {view !== "list" ? (
-          <Button type="button" variant="ghost" size="sm" className="mb-2 h-11 px-2 text-xs" onClick={backToList} disabled={busy || Boolean(attempt)}>
+          <Button type="button" variant="ghost" size="sm" className="mb-2 h-11 px-2 text-xs" onClick={backToList} disabled={busy || Boolean(attempt) || Boolean(commandAttempt)}>
             <ArrowLeftIcon aria-hidden="true" className="size-4" />
             Providers
           </Button>

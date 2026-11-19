@@ -39,6 +39,7 @@ export const DEFAULT_API_PREFIXES = [
   "/api/mcp",
   "/api/worktree",
   "/api/credential",
+  "/api/pair",
   "/api/ui",
 ] as const
 
@@ -174,6 +175,12 @@ export function evaluateRequest(
   const allowedApiPrefixes = options.allowedApiPrefixes ?? DEFAULT_API_PREFIXES
 
   if (!isProtectedPath(pathname)) return { allowed: true }
+  // Heap dumps can contain credentials and private transcript data. They are
+  // never exposed through the browser gateway, even if a future prefix change
+  // were to allowlist /api/debug. Keep this explicit deny as defense in depth.
+  if (method === "POST" && pathname.startsWith("/api/debug/heap-dump")) {
+    return { allowed: false, status: 403, reason: "heap dumps are not available through the browser" }
+  }
   if (!ALLOWED_METHODS.has(method)) {
     return { allowed: false, status: 405, reason: "method not allowed" }
   }

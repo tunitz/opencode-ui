@@ -48,14 +48,30 @@ are intentional; do not weaken them when simplifying UI code.
 - **Browser access gate:** a shared UI password gates `/api/*` (HTTP and WebSocket upgrades)
   whenever a password is configured or the bind host is non-loopback. Loopback with no password
   stays pass-through. It is one shared credential, not multi-tenant isolation.
+- **Commands work on plain HTTP, including non-loopback origins.** All built-in and server slash
+  commands are available to every authenticated user with no extra per-command roles and no secure-
+  context requirement; `window.isSecureContext === false` is a supported state. The app password
+  gate and Host/Origin checks are unchanged. Plain HTTP means provider keys, pairing codes, and
+  terminal traffic traverse an unencrypted origin: use secure transport behind the UI for real
+  credential protection. Allowlists are not encryption.
+- `/connect` uses the native key, OAuth, external, and command methods on the current origin. Keys
+  live only in React state, are sent once, and never enter URLs, storage, or logs; OAuth
+  authorization URLs must still be absolute HTTPS. Live credential/OAuth/pairing flows are not
+  verified by the synthetic checks.
+- `/api/pair` is allowlisted behind the same Host/Origin/JSON guards for native pairing codes.
+  `/api/debug` is not exposed through the browser; `POST /api/debug/heap-dump` remains explicitly
+  denied (403) as defense in depth because heap dumps can contain credentials and transcript data.
+  `/debug` uses `GET /api/info` plus sanitized client data instead.
+- `/terminal` bridges a same-origin WebSocket at `/api/pty/{id}/connect` — `ws://` on HTTP pages and
+  `wss://` on HTTPS pages, with no HTTPS gate. The bridge owns the engine credential, rechecks
+  Host/Origin on upgrade, forwards only the short-lived connect-ticket query, drops browser
+  credentials and subprotocols, and enforces payload/backpressure caps. The browser never sees the
+  engine credential.
 - **Notes are an app-layer API, not a general browser proxy:** `POST /api/ui/notes/<method>` exposes
   only the fixed method list below. `/api/rpc/opencode-notes/*` and `NOTES_RPC_PATHS` were removed;
   no plugin RPC route remains.
 - The gateway is not network isolation. The engine endpoint is separate and must be protected
   independently.
-- `/connect` supports native key/OAuth methods with ephemeral key state, bounded polling, and
-  explicit cancellation. External/command methods remain blocked; live credential/OAuth/pairing
-  flows are not verified by the synthetic checks.
 
 ## Browser access gate [app layer]
 
@@ -66,9 +82,10 @@ persisted or logged. Passwords are 8–256 characters. Sessions last 30 days, ar
 pruned on each auth write.
 
 - Cookie: `opencode_ui_session=<token>; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`, with
-  `Secure` only when the request URL is HTTPS. `OPENCODE_UI_SESSION_COOKIE` overrides the cookie
-  name; keep the default unless running another UI instance on the same host, because cookies are
-  host-scoped and ignore port numbers.
+  `Secure` only when the request URL is HTTPS. Plain HTTP is supported and simply omits `Secure`;
+  protect that origin with transport/network controls. `OPENCODE_UI_SESSION_COOKIE` overrides the
+  cookie name; keep the default unless running another UI instance on the same host, because cookies
+  are host-scoped and ignore port numbers.
 - Gating is active when a password is configured **or** the resolved bind host is not loopback
   (`0.0.0.0` and LAN addresses count as non-loopback). When inactive, requests pass through.
 - When active, every path starting with `/api` requires a valid session cookie, including SSE and
@@ -185,8 +202,10 @@ The gateway applies the auth gate to HTTP requests and WebSocket upgrades before
 upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
 Notes API, Plugins API, session shortcuts (`/api/ui/session-shortcuts`), agents, notifications,
 artifacts (`/api/ui` fallback), engine proxy (`/api*` and `/openapi.json`), then static frontend
-assets. Notes and Plugins branches are skipped when those services are not installed. Notes events
-and `/api/event` disable the request timeout.
+assets. `/api/pair` is an allowlisted native prefix that flows through the same engine proxy and
+guards; `/api/debug` is rejected by request security, including the heap-dump endpoint. Notes and
+Plugins branches are skipped when those services are not installed. Notes events and
+`/api/event` disable the request timeout.
 
 ## API contract [source/spec; runtime exercised only for info, spec, auth, SSE]
 
@@ -452,7 +471,8 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
 - Notes use per-record advisory locks plus `expectedRevision` compare-and-set, not multi-record
   transactions. Cross-process races are bounded by lockfiles (50 ms retry × 40, stale takeover after
   5 s); a crash can leave an orphaned attachment, and space deletion is not atomic with note creation.
-- `/connect` key/OAuth support is implemented; external/command methods and some provider loopback
-  paths remain limited. `/debug` is client-only.
+- `/connect` exposes all native methods on plain HTTP; OAuth authorization URLs stay HTTPS, and
+  credentials on an unencrypted origin are the operator's responsibility. `/debug` reports sanitized
+  client and native server data; heap dumps are denied.
 - Physical iPhone/desktop closed-app notification delivery is manual pending; mock/browser tests
   are not a vendor push receipt.

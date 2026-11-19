@@ -42,7 +42,9 @@ export function connectMethodLabel(method: IntegrationMethod): string {
 }
 
 export function isBrowserConnectMethod(method: IntegrationMethod): boolean {
-  return method.type === "key" || method.type === "oauth"
+  // `env` reads a process variable and has no browser-native API; every other
+  // method has a typed native client call that works over plain HTTP.
+  return method.type === "key" || method.type === "oauth" || method.type === "external" || method.type === "command"
 }
 
 export function pollDeadline(expires: number, now = Date.now(), maxMs = 5 * 60 * 1000): number {

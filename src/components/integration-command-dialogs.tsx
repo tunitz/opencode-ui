@@ -16,6 +16,13 @@ import {
 
 import { ConnectDialog } from "@/components/connect-dialog"
 import {
+  HighlightsDialog,
+  PairDialog,
+  safeServerUrl,
+  StatusDialog,
+  UsageDialog,
+} from "@/components/system-command-dialogs"
+import {
   canonicalDirectory,
   DirectoryBrowser,
 } from "@/components/directory-browser"
@@ -70,6 +77,10 @@ export type IntegrationCommandDialogKind =
   | "stats"
   | "reload"
   | "debug"
+  | "status"
+  | "pair"
+  | "highlights"
+  | "usage"
 
 type Props = {
   nav: OpenCodeController
@@ -95,7 +106,29 @@ function statusLabel(status: McpServer["status"]) {
   }
 }
 
-function McpsDialog({ nav, onClose }: Props) {
+function parseAssignments(text: string): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+    const separator = trimmed.indexOf("=")
+    if (separator <= 0) continue
+    result[trimmed.slice(0, separator).trim()] = trimmed.slice(separator + 1).trim()
+  }
+  return result
+}
+
+/** Never echo raw native error/config bodies; redact entered values and bound length. */
+function sanitizedNativeError(failure: unknown, secrets: readonly string[] = []): string {
+  let message = errorMessage(failure)
+  for (const secret of secrets) {
+    if (secret.trim().length >= 3) message = message.split(secret).join("[redacted]")
+  }
+  message = message.replace(/\{[\s\S]{0,4000}?\}/g, "[details hidden]")
+  return message.length > 400 ? `${message.slice(0, 400)}…` : message
+}
+
+function McpsDialog({ nav, onClose, onResult }: Props) {
   const directory = nav.activeSession?.location.directory ?? nav.directory ?? null
   const [servers, setServers] = useState<McpServer[]>([])
   const [resources, setResources] = useState<McpResourceCatalog>({
@@ -106,6 +139,21 @@ function McpsDialog({ nav, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [resourceError, setResourceError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [mode, setMode] = useState<"list" | "add">("list")
+  const [form, setForm] = useState({
+    name: "",
+    type: "local" as "local" | "remote",
+    command: "",
+    cwd: "",
+    environment: "",
+    url: "",
+    headers: "",
+  })
+  const [formError, setFormError] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [actionBusy, setActionBusy] = useState<string | null>(null)
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
   const request = useRef(0)
 
   useEffect(() => {
@@ -150,116 +198,315 @@ function McpsDialog({ nav, onClose }: Props) {
   if (!directory) return null
 
   const resourceCount = resources.resources.length + resources.templates.length
+  const busy = adding || removing || actionBusy !== null
+
+  function resetForm() {
+    setForm({
+      name: "",
+      type: "local",
+      command: "",
+      cwd: "",
+      environment: "",
+      url: "",
+      headers: "",
+    })
+    setFormError(null)
+  }
+
+  async function addServer() {
+    if (adding || !directory) return
+    const name = form.name.trim()
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+      setFormError("Use a server name of letters, digits, dots, dashes, or underscores.")
+      return
+    }
+    const secrets = [form.command, form.cwd, form.environment, form.url, form.headers]
+    let config:
+      | {
+          type: "local"
+          command: string[]
+          cwd?: string
+          environment?: Record<string, string>
+        }
+      | { type: "remote"; url: string; headers?: Record<string, string> }
+    if (form.type === "local") {
+      const command = form.command.trim().split(/\s+/).filter(Boolean)
+      if (command.length === 0) {
+        setFormError("Enter the command (and arguments) to start the local server.")
+        return
+      }
+      const environment = parseAssignments(form.environment)
+      config = {
+        type: "local",
+        command,
+        ...(form.cwd.trim() ? { cwd: form.cwd.trim() } : {}),
+        ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      }
+    } else {
+      const url = safeServerUrl(form.url.trim())
+      if (!url) {
+        setFormError("Enter a credential-free http(s) URL for the remote server.")
+        return
+      }
+      const headers = parseAssignments(form.headers)
+      config = {
+        type: "remote",
+        url,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      }
+    }
+    setAdding(true)
+    setFormError(null)
+    setError(null)
+    try {
+      await openCode.mcp.add({ server: name, location: { directory }, config })
+      resetForm()
+      setMode("list")
+      setReloadKey((current) => current + 1)
+      onResult(`MCP server ${name} added by the native backend.`)
+    } catch (failure) {
+      setFormError(sanitizedNativeError(failure, secrets))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function act(server: string, kind: "connect" | "disconnect") {
+    const key = `${kind}:${server}`
+    if (actionBusy || !directory) return
+    setActionBusy(key)
+    setError(null)
+    try {
+      if (kind === "connect") {
+        await openCode.mcp.connect({ server, location: { directory } })
+      } else {
+        await openCode.mcp.disconnect({ server, location: { directory } })
+      }
+      setReloadKey((current) => current + 1)
+      onResult(`MCP server ${server} ${kind === "connect" ? "connected" : "disconnected"}.`)
+    } catch (failure) {
+      setError(sanitizedNativeError(failure, [server]))
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
+  async function removeServer() {
+    if (!removeTarget || removing || !directory) return
+    const server = removeTarget
+    setRemoving(true)
+    setError(null)
+    try {
+      await openCode.mcp.remove({ server, location: { directory } })
+      setRemoveTarget(null)
+      setReloadKey((current) => current + 1)
+      onResult(`MCP server ${server} removed by the native backend.`)
+    } catch (failure) {
+      setError(sanitizedNativeError(failure, [server]))
+    } finally {
+      setRemoving(false)
+    }
+  }
 
   return (
-    <CommandDialogShell
-      title="MCP servers"
-      description="Read-only native MCP status and resources for this project. This view does not add, remove, connect, or disconnect servers."
-      onClose={onClose}
-      footer={
-        <>
-          <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose}>
-            Close
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11 px-4"
-            onClick={() => setReloadKey((current) => current + 1)}
-            disabled={status === "loading"}
-          >
-            {status === "loading" ? (
-              <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-            ) : (
-              <RefreshCwIcon aria-hidden="true" className="size-4" />
-            )}
-            Refresh
-          </Button>
-        </>
-      }
-    >
-      {status === "loading" ? (
-        <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-          Loading MCP status…
-        </p>
-      ) : null}
-      {status === "error" ? (
-        <div role="alert" className="space-y-2 text-xs text-destructive">
-          <p>{error}</p>
-          <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>
-            Retry
-          </Button>
-        </div>
-      ) : null}
-      {status === "ready" ? (
-        <div className="space-y-4">
-          <ul className="space-y-1.5" aria-label="MCP servers">
-            {servers.map((server) => (
-              <li key={server.name} className="rounded-lg border border-border p-2.5">
-                <div className="flex min-w-0 items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12px] font-medium">{server.name}</p>
-                    <Tag className="app-openui-status" size="sm" variant={server.status.status === "connected" ? "success" : server.status.status === "failed" || server.status.status === "needs_auth" ? "danger" : "neutral"} text={statusLabel(server.status)} />
-                    {server.status.status === "failed" || server.status.status === "needs_auth" ? (
-                      <p className="text-[11px] text-muted-foreground">{mcpVisibleStatusError(server.status.status)}</p>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            ))}
-            {servers.length === 0 ? (
-              <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
-                No MCP servers configured for this project.
-              </li>
+    <>
+      <CommandDialogShell
+        title="MCP servers"
+        description="Native MCP status, resources, and bounded server management for this project."
+        pending={busy}
+        onClose={onClose}
+        footer={
+          <>
+            <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={busy}>
+              Close
+            </Button>
+            <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setReloadKey((current) => current + 1)} disabled={status === "loading" || busy}>
+              {status === "loading" ? (
+                <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+              ) : (
+                <RefreshCwIcon aria-hidden="true" className="size-4" />
+              )}
+              Refresh
+            </Button>
+            {mode === "list" ? (
+              <Button type="button" className="h-11 px-4" onClick={() => { resetForm(); setMode("add") }} disabled={busy}>
+                <PlusIcon aria-hidden="true" className="size-4" />
+                Add server
+              </Button>
             ) : null}
-          </ul>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-[12px] font-medium">Resources</h3>
-              <span className="text-[11px] text-muted-foreground tabular-nums">
-                {resourceCount}
-              </span>
+          </>
+        }
+      >
+        {status === "loading" ? (
+          <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+            Loading MCP status…
+          </p>
+        ) : null}
+        {status === "error" ? (
+          <div role="alert" className="space-y-2 text-xs text-destructive">
+            <p>{error}</p>
+            <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {mode === "add" ? (
+          <div className="space-y-3 text-[12px]">
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-muted-foreground">
+              The server runs with the native backend&apos;s privileges. Values are sent once to the native add API and are not shown again.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="mcp-name">Server name</Label>
+              <Input id="mcp-name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} className="h-11 font-mono text-[12px]" disabled={adding} />
             </div>
-            {resourceError ? (
-              <p role="alert" className="mt-1 text-[11px] text-destructive">
-                {resourceError}
-              </p>
-            ) : null}
-            <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-1">
-              {resources.resources.map((resource) => (
-                <li key={`resource:${resource.server}:${resource.uri}`} className="rounded-md px-2 py-1.5 text-[11px]">
-                  <p className="font-medium">{resource.name}</p>
-                  <p dir="ltr" className="truncate font-mono text-[10px] text-muted-foreground">
-                    {resource.server} · {resource.uri}
-                  </p>
-                  {resource.description ? (
-                    <p className="text-muted-foreground">{resource.description}</p>
-                  ) : null}
+            <div className="flex gap-2">
+              {(["local", "remote"] as const).map((type) => (
+                <Button key={type} type="button" variant={form.type === type ? "secondary" : "outline"} className="h-11 px-4" onClick={() => setForm({ ...form, type })} disabled={adding} aria-pressed={form.type === type}>
+                  {type === "local" ? "Local command" : "Remote URL"}
+                </Button>
+              ))}
+            </div>
+            {form.type === "local" ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mcp-command">Command and arguments</Label>
+                  <Input id="mcp-command" value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder="npx -y some-mcp-server" className="h-11 font-mono text-[12px]" dir="ltr" disabled={adding} />
+                  <p className="text-[10px] text-muted-foreground">Arguments are separated by whitespace.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mcp-cwd">Working directory (optional)</Label>
+                  <Input id="mcp-cwd" value={form.cwd} onChange={(event) => setForm({ ...form, cwd: event.target.value })} className="h-11 font-mono text-[12px]" dir="ltr" disabled={adding} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mcp-environment">Environment (optional)</Label>
+                  <Input id="mcp-environment" value={form.environment} onChange={(event) => setForm({ ...form, environment: event.target.value })} placeholder="KEY=value per line" className="h-11 font-mono text-[12px]" disabled={adding} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mcp-url">Server URL</Label>
+                  <Input id="mcp-url" value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} placeholder="https://mcp.example.test/sse" className="h-11 font-mono text-[12px]" dir="ltr" disabled={adding} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="mcp-headers">Headers (optional)</Label>
+                  <Input id="mcp-headers" value={form.headers} onChange={(event) => setForm({ ...form, headers: event.target.value })} placeholder="Header=value per line" className="h-11 font-mono text-[12px]" disabled={adding} />
+                </div>
+              </>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" className="h-11 px-4" onClick={() => { resetForm(); setMode("list") }} disabled={adding}>Cancel</Button>
+              <Button type="button" className="h-11 px-4" onClick={() => void addServer()} disabled={adding || !form.name.trim()} aria-busy={adding}>
+                {adding ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
+                Add server
+              </Button>
+            </div>
+            <ErrorNotice error={formError} />
+          </div>
+        ) : status === "ready" ? (
+          <div className="space-y-4">
+            <ul className="space-y-1.5" aria-label="MCP servers">
+              {servers.map((server) => (
+                <li key={server.name} className="rounded-lg border border-border p-2.5">
+                  <div className="flex min-w-0 flex-wrap items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-medium">{server.name}</p>
+                      <Tag className="app-openui-status" size="sm" variant={server.status.status === "connected" ? "success" : server.status.status === "failed" || server.status.status === "needs_auth" ? "danger" : "neutral"} text={statusLabel(server.status)} />
+                      {server.status.status === "failed" || server.status.status === "needs_auth" ? (
+                        <p className="text-[11px] text-muted-foreground">{mcpVisibleStatusError(server.status.status)}</p>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-1.5">
+                      <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => void act(server.name, server.status.status === "connected" ? "disconnect" : "connect")} disabled={busy} aria-busy={actionBusy === `connect:${server.name}` || actionBusy === `disconnect:${server.name}`}>
+                        {server.status.status === "connected" ? "Disconnect" : "Connect"}
+                      </Button>
+                      <Button type="button" variant="destructive" className="h-11 px-3 text-xs" onClick={() => setRemoveTarget(server.name)} disabled={busy}>
+                        <Trash2Icon aria-hidden="true" className="size-4" />
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
                 </li>
               ))}
-              {resources.templates.map((template) => (
-                <li key={`template:${template.server}:${template.uriTemplate}`} className="rounded-md px-2 py-1.5 text-[11px]">
-                  <p className="font-medium">{template.name}</p>
-                  <p dir="ltr" className="truncate font-mono text-[10px] text-muted-foreground">
-                    {template.server} · {template.uriTemplate}
-                  </p>
-                </li>
-              ))}
-              {resourceCount === 0 ? (
-                <li className="px-2 py-2 text-[11px] text-muted-foreground">
-                  No resources or templates reported by connected servers.
+              {servers.length === 0 ? (
+                <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
+                  No MCP servers configured for this project.
                 </li>
               ) : null}
             </ul>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              This 2.1.4 status API exposes server status and resources/templates; it does not
-              enumerate MCP tools. Tool availability remains backend/runtime state.
-            </p>
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-[12px] font-medium">Resources</h3>
+                <span className="text-[11px] text-muted-foreground tabular-nums">
+                  {resourceCount}
+                </span>
+              </div>
+              {resourceError ? (
+                <p role="alert" className="mt-1 text-[11px] text-destructive">
+                  {resourceError}
+                </p>
+              ) : null}
+              <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-1">
+                {resources.resources.map((resource) => (
+                  <li key={`resource:${resource.server}:${resource.uri}`} className="rounded-md px-2 py-1.5 text-[11px]">
+                    <p className="font-medium">{resource.name}</p>
+                    <p dir="ltr" className="truncate font-mono text-[10px] text-muted-foreground">
+                      {resource.server} · {resource.uri}
+                    </p>
+                    {resource.description ? (
+                      <p className="text-muted-foreground">{resource.description}</p>
+                    ) : null}
+                  </li>
+                ))}
+                {resources.templates.map((template) => (
+                  <li key={`template:${template.server}:${template.uriTemplate}`} className="rounded-md px-2 py-1.5 text-[11px]">
+                    <p className="font-medium">{template.name}</p>
+                    <p dir="ltr" className="truncate font-mono text-[10px] text-muted-foreground">
+                      {template.server} · {template.uriTemplate}
+                    </p>
+                  </li>
+                ))}
+                {resourceCount === 0 ? (
+                  <li className="px-2 py-2 text-[11px] text-muted-foreground">
+                    No resources or templates reported by connected servers.
+                  </li>
+                ) : null}
+              </ul>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                This 2.1.4 status API exposes server status and resources/templates; it does not
+                enumerate MCP tools. Tool availability remains backend/runtime state.
+              </p>
+            </div>
+            <ErrorNotice error={error} />
           </div>
-        </div>
-      ) : null}
-    </CommandDialogShell>
+        ) : null}
+      </CommandDialogShell>
+
+      <AlertDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          if (!removing) setRemoveTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove MCP server?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove {removeTarget ? `“${removeTarget}”` : "this server"} from this project&apos;s MCP configuration? Connected sessions lose its tools.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={removing} aria-busy={removing} onClick={() => void removeServer()}>
+              {removing ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
+              Remove server
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -798,11 +1045,15 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   )
 }
 
-function PluginsDialog({ nav, onClose }: Props) {
+function PluginsDialog({ nav, onClose, onResult }: Props) {
   const directory = nav.activeSession?.location.directory ?? nav.directory ?? null
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [error, setError] = useState<string | null>(null)
+  const [checked, setChecked] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [updateTarget, setUpdateTarget] = useState<string | null>(null)
+  const [updating, setUpdating] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const request = useRef(0)
 
@@ -812,6 +1063,7 @@ function PluginsDialog({ nav, onClose }: Props) {
     void Promise.resolve().then(async () => {
       setStatus("loading")
       setError(null)
+      setChecked(false)
       try {
         const response = await openCode.plugin.list({ location: { directory } })
         if (token !== request.current) return
@@ -819,7 +1071,7 @@ function PluginsDialog({ nav, onClose }: Props) {
         setStatus("ready")
       } catch (failure) {
         if (token !== request.current) return
-        setError(errorMessage(failure))
+        setError(sanitizedNativeError(failure))
         setStatus("error")
       }
     })
@@ -830,76 +1082,168 @@ function PluginsDialog({ nav, onClose }: Props) {
 
   if (!directory) return null
 
+  const busy = checking || updating
+
+  async function checkForUpdates() {
+    if (busy || !directory) return
+    setChecking(true)
+    setError(null)
+    try {
+      const response = await openCode.plugin.check({ location: { directory } })
+      setPlugins(response.data)
+      setChecked(true)
+      const outdated = response.data.filter(
+        (plugin) => plugin.source.type === "package" && plugin.source.outdated
+      ).length
+      onResult(
+        outdated > 0
+          ? `Update check complete: ${outdated} plugin${outdated === 1 ? "" : "s"} with updates available.`
+          : "Update check complete: no plugin updates available."
+      )
+    } catch (failure) {
+      setError(sanitizedNativeError(failure))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function applyUpdate() {
+    if (!updateTarget || updating || !directory) return
+    const target = updateTarget
+    setUpdating(true)
+    setError(null)
+    try {
+      await openCode.plugin.update({ location: { directory }, targets: [target] })
+      setUpdateTarget(null)
+      const response = await openCode.plugin.list({ location: { directory } })
+      setPlugins(response.data)
+      onResult(`Updated ${target} through the native plugin API.`)
+    } catch (failure) {
+      setError(sanitizedNativeError(failure, [target]))
+    } finally {
+      setUpdating(false)
+    }
+  }
+
   return (
-    <CommandDialogShell
-      title="Plugins"
-      description="Read-only native plugin metadata for this project. This view does not install, update, or remove plugins."
-      onClose={onClose}
-      footer={
-        <>
-          <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose}>Close</Button>
-          <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setReloadKey((current) => current + 1)} disabled={status === "loading"}>
-            {status === "loading" ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
-            Refresh
-          </Button>
-        </>
-      }
-    >
-      {status === "loading" ? (
-        <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-          Loading plugin metadata…
-        </p>
-      ) : null}
-      {status === "error" ? (
-        <div role="alert" className="space-y-2 text-xs text-destructive">
-          <p>{error}</p>
-          <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>Retry</Button>
-        </div>
-      ) : null}
-      {status === "ready" ? (
-        <div className="space-y-3">
-          <p className="text-[11px] text-muted-foreground">
-            Plugin code can execute in the server. This view shows installed plugin metadata only;
-            it does not change plugin packages or configuration.
+    <>
+      <CommandDialogShell
+        title="Plugins"
+        description="Native plugin metadata and confirmed updates for this project."
+        pending={busy}
+        onClose={onClose}
+        footer={
+          <>
+            <Button type="button" variant="outline" className="h-11 px-4" onClick={onClose} disabled={busy}>Close</Button>
+            <Button type="button" variant="outline" className="h-11 px-4" onClick={() => setReloadKey((current) => current + 1)} disabled={status === "loading" || busy}>
+              {status === "loading" ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : <RefreshCwIcon aria-hidden="true" className="size-4" />}
+              Refresh
+            </Button>
+            <Button type="button" className="h-11 px-4" onClick={() => void checkForUpdates()} disabled={status !== "ready" || busy} aria-busy={checking}>
+              {checking ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
+              Check for updates
+            </Button>
+          </>
+        }
+      >
+        {status === "loading" ? (
+          <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+            Loading plugin metadata…
           </p>
-          <ul className="space-y-1" aria-label="Plugins">
-            {plugins.map((plugin, index) => (
-              <li key={plugin.id ?? `${plugin.source.type}:${index}`} className="rounded-lg border border-border p-2.5 text-[11px]">
-                <div className="flex items-start gap-2">
-                  {plugin.state.status === "active" ? (
-                    <CheckCircle2Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-diff-added" />
-                  ) : (
-                    <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-diff-removed" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{plugin.id ?? plugin.source.type}</p>
-                    <p dir="ltr" className="break-all font-mono text-[10px] text-muted-foreground">
-                      {plugin.source.type === "package"
-                        ? `${plugin.source.target}${plugin.source.version ? ` · ${plugin.source.version}` : ""}${plugin.source.outdated ? " · update available" : ""}`
-                        : plugin.source.type === "local"
-                          ? plugin.source.path
-                          : plugin.source.type}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {plugin.state.status === "active" ? "Active" : `Failed: ${plugin.state.error}`}
-                      {" · "}
-                      {Object.entries(plugin.features)
-                        .filter(([, enabled]) => enabled)
-                        .map(([feature]) => feature)
-                        .join(", ") || "no features"}
-                    </p>
-                  </div>
-                </div>
-              </li>
-            ))}
-            {plugins.length === 0 ? (
-              <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">No plugins.</li>
+        ) : null}
+        {status === "error" ? (
+          <div role="alert" className="space-y-2 text-xs text-destructive">
+            <p>{error}</p>
+            <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setReloadKey((current) => current + 1)}>Retry</Button>
+          </div>
+        ) : null}
+        {status === "ready" ? (
+          <div className="space-y-3">
+            <p className="text-[11px] text-muted-foreground">
+              Plugin code can execute in the server. Updates are applied by the native backend after confirmation.
+            </p>
+            {checked ? (
+              <p role="status" className="text-[11px] text-muted-foreground">
+                Update check finished for server {nav.serverVersion ?? "version unknown"}. Only confirmed outdated plugins offer an update action.
+              </p>
             ) : null}
-          </ul>
-        </div>
-      ) : null}
-    </CommandDialogShell>
+            <ul className="space-y-1" aria-label="Plugins">
+              {plugins.map((plugin, index) => {
+                const packageSource = plugin.source.type === "package" ? plugin.source : null
+                const canUpdate = Boolean(packageSource?.outdated)
+                const target = packageSource?.target ?? plugin.id ?? null
+                return (
+                  <li key={plugin.id ?? `${plugin.source.type}:${index}`} className="rounded-lg border border-border p-2.5 text-[11px]">
+                    <div className="flex min-w-0 flex-wrap items-start gap-2">
+                      {plugin.state.status === "active" ? (
+                        <CheckCircle2Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-diff-added" />
+                      ) : (
+                        <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-diff-removed" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{plugin.id ?? plugin.source.type}</p>
+                        <p dir="ltr" className="break-all font-mono text-[10px] text-muted-foreground">
+                          {packageSource
+                            ? `${packageSource.target}${packageSource.version ? ` · ${packageSource.version}` : ""}${packageSource.outdated ? " · update available" : ""}`
+                            : plugin.source.type === "local"
+                              ? plugin.source.path
+                              : plugin.source.type}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {plugin.state.status === "active" ? "Active" : `Failed: ${plugin.state.error}`}
+                          {" · "}
+                          {Object.entries(plugin.features)
+                            .filter(([, enabled]) => enabled)
+                            .map(([feature]) => feature)
+                            .join(", ") || "no features"}
+                        </p>
+                      </div>
+                      {canUpdate && target ? (
+                        <Button type="button" variant="outline" className="h-11 px-3 text-xs" onClick={() => setUpdateTarget(target)} disabled={busy}>
+                          Update
+                        </Button>
+                      ) : null}
+                    </div>
+                  </li>
+                )
+              })}
+              {plugins.length === 0 ? (
+                <li className="rounded-lg border border-border p-3 text-xs text-muted-foreground">No plugins.</li>
+              ) : null}
+            </ul>
+            <p className="text-[10px] text-muted-foreground">
+              The {nav.serverVersion ?? "running"} plugin protocol exposes check and update only; install and remove are not available in this client.
+            </p>
+            <ErrorNotice error={error} />
+          </div>
+        ) : null}
+      </CommandDialogShell>
+
+      <AlertDialog
+        open={updateTarget !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          if (!updating) setUpdateTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Update plugin?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Update {updateTarget ? `“${updateTarget}”` : "this plugin"} through the native plugin API? Plugin code runs in the server.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={updating}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={updating} aria-busy={updating} onClick={() => void applyUpdate()}>
+              {updating ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
+              Update plugin
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }
 
@@ -1112,6 +1456,30 @@ function ReloadDialog({ nav, onClose, onResult }: Props) {
 
 function DebugDialog({ nav, onClose, onResult }: Props) {
   const [copied, setCopied] = useState(false)
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof openCode.server.info>> | null>(null)
+  const [infoStatus, setInfoStatus] = useState<"loading" | "ready" | "error">("loading")
+  const request = useRef(0)
+
+  useEffect(() => {
+    const token = ++request.current
+    void Promise.resolve().then(async () => {
+      setInfoStatus("loading")
+      try {
+        const value = await openCode.server.info()
+        if (token !== request.current) return
+        setInfo(value)
+        setInfoStatus("ready")
+      } catch {
+        if (token !== request.current) return
+        setInfo(null)
+        setInfoStatus("error")
+      }
+    })
+    return () => {
+      request.current += 1
+    }
+  }, [])
+
   const diagnostics = useMemo(
     () =>
       sanitizedClientDiagnostics({
@@ -1144,11 +1512,27 @@ function DebugDialog({ nav, onClose, onResult }: Props) {
     ]
   )
 
+  const native = useMemo(() => {
+    if (!info) return null
+    return {
+      nativeVersion: info.version,
+      nativePid: info.pid,
+      nativeUrls:
+        info.urls.map(safeServerUrl).filter((value): value is string => Boolean(value)).join(", ") || "none",
+      persistentPty:
+        info.capabilities?.persistentPty === undefined
+          ? "unreported"
+          : String(info.capabilities.persistentPty),
+    }
+  }, [info])
+
+  const rows = { ...diagnostics, ...(native ?? {}) }
+
   async function copy() {
     try {
-      await copyText(JSON.stringify(diagnostics, null, 2))
+      await copyText(JSON.stringify(rows, null, 2))
       setCopied(true)
-      onResult("Sanitized client diagnostics copied.")
+      onResult("Sanitized client and native diagnostics copied.")
     } catch (failure) {
       onResult(errorMessage(failure), false)
     }
@@ -1157,7 +1541,7 @@ function DebugDialog({ nav, onClose, onResult }: Props) {
   return (
     <CommandDialogShell
       title="Client diagnostics"
-      description="Sanitized client/network/state counts. No config, environment, prompts, or server heap dump."
+      description="Sanitized client state and allowlisted native server info. No config, environment, prompts, or heap dump."
       onClose={onClose}
       footer={
         <>
@@ -1168,14 +1552,28 @@ function DebugDialog({ nav, onClose, onResult }: Props) {
         </>
       }
     >
+      {infoStatus === "loading" ? (
+        <p role="status" className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+          Reading allowlisted native server info…
+        </p>
+      ) : null}
+      {infoStatus === "error" ? (
+        <p role="alert" className="mb-2 text-xs text-destructive">
+          Native server info is unavailable; showing sanitized client state only.
+        </p>
+      ) : null}
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12px]">
-        {Object.entries(diagnostics).map(([key, value]) => (
+        {Object.entries(rows).map(([key, value]) => (
           <div key={key} className="col-span-2 grid grid-cols-[auto_1fr] gap-3">
             <dt className="text-muted-foreground">{key}</dt>
             <dd className="min-w-0 truncate font-mono text-[11px]">{String(value)}</dd>
           </div>
         ))}
       </dl>
+      <p className="mt-2 text-[10px] text-muted-foreground">
+        Heap dumps and native debug bodies are never exposed through this browser client.
+      </p>
     </CommandDialogShell>
   )
 }
@@ -1212,5 +1610,13 @@ export function IntegrationCommandDialogs({
       return <ReloadDialog {...props} />
     case "debug":
       return <DebugDialog {...props} />
+    case "status":
+      return <StatusDialog {...props} />
+    case "pair":
+      return <PairDialog {...props} />
+    case "highlights":
+      return <HighlightsDialog {...props} />
+    case "usage":
+      return <UsageDialog {...props} />
   }
 }

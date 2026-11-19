@@ -77,10 +77,12 @@
     "test:bun": "bun run build:bun && bun test tests --isolate",
     "test:browser": "bun tests/browser/run.ts",
     "test:browser:perf": "bun tests/browser/perf.ts",
+    "test:http-matrix": "bun tests/http-command-matrix.ts",
     "verify": "bun run typecheck && bun run lint && bun run test",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -b && tsc --noEmit -p plugins/notes/tsconfig.json",
+    "audit:slash": "bun scripts/audit-slash-commands.ts",
     "preview": "bun server/bun-server.ts",
     "icons:generate": "bun scripts/generate-icons.mjs"
   },

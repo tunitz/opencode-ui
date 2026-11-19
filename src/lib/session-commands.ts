@@ -21,17 +21,109 @@ export function isAbsoluteDirectory(value: string): boolean {
   )
 }
 
+/**
+ * Durable history visible before a staged revert. Upstream 2.1.4 calls this
+ * `messagesBeforeRevert`; a staged boundary hides the boundary message itself
+ * and everything after it from /undo, /copy, and the session view.
+ */
+export function messagesBeforeRevert(
+  messages: readonly SessionMessageInfo[],
+  revertMessageID?: string | null
+): readonly SessionMessageInfo[] {
+  if (!revertMessageID) return messages
+  const index = messages.findIndex((message) => message.id === revertMessageID)
+  return index === -1 ? messages : messages.slice(0, index)
+}
+
 /** Latest real user message, matching the TUI's /undo boundary selection. */
 export function findUndoBoundary(
-  messages: readonly SessionMessageInfo[]
+  messages: readonly SessionMessageInfo[],
+  revertMessageID?: string | null
 ): SessionMessageUser | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
+  const visible = messagesBeforeRevert(messages, revertMessageID)
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const message = visible[index]
     if (message.type === "user" && message.text.trim()) {
       return message
     }
   }
   return null
+}
+
+/**
+ * Text for the native /copy command: the latest assistant text OR the latest
+ * completed compaction summary, never a message at/after a staged revert.
+ * Mirrors upstream 2.1.4 `messages.copy`.
+ */
+export function copyableAssistantText(
+  messages: readonly SessionMessageInfo[],
+  revertMessageID?: string | null
+): string | null {
+  const visible = messagesBeforeRevert(messages, revertMessageID)
+  for (let index = visible.length - 1; index >= 0; index -= 1) {
+    const message = visible[index]
+    if (message.type === "assistant") {
+      const text = message.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim()
+      if (text) return text
+    }
+    if (
+      message.type === "compaction" &&
+      message.status === "completed" &&
+      message.summary.trim()
+    ) {
+      return message.summary.trim()
+    }
+  }
+  return null
+}
+
+/** Node `path.posix.resolve`-style normalization, without importing Node into the browser. */
+function normalizePosixPath(value: string): string {
+  const absolute = value.startsWith("/")
+  const parts: string[] = []
+  for (const segment of value.split("/")) {
+    if (!segment || segment === ".") continue
+    if (segment === "..") {
+      if (parts.length > 0 && parts[parts.length - 1] !== "..") parts.pop()
+      else if (!absolute) parts.push("..")
+      continue
+    }
+    parts.push(segment)
+  }
+  const joined = parts.join("/")
+  if (absolute) return `/${joined}`
+  return joined || "."
+}
+
+/**
+ * Resolve a /cd argument against the session directory (relative paths) or the
+ * home directory (`~`, `~/…`). When home is unknown the `~` form is preserved
+ * so the engine's location lookup can expand it. No role/safety gating here:
+ * the native location lookup and move are the authority on what is reachable.
+ */
+export function resolveSessionDirectory(
+  input: string,
+  baseDirectory: string,
+  homeDirectory?: string | null
+): string | null {
+  const value = input.trim()
+  if (!value || value.includes("\0") || /[\r\n]/.test(value)) return null
+  const home = homeDirectory?.trim() || ""
+  let candidate: string
+  if (value === "~") {
+    candidate = home || "~"
+  } else if (value.startsWith("~/")) {
+    candidate = home ? `${home}/${value.slice(2)}` : value
+  } else if (value.startsWith("/")) {
+    candidate = value
+  } else {
+    candidate = `${baseDirectory.trim() || "/"}/${value}`
+  }
+  return normalizePosixPath(candidate)
 }
 
 /**
@@ -67,9 +159,12 @@ export function formatByteSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-export function sessionExportFilename(session: SessionInfo): string {
+export function sessionExportFilename(
+  session: SessionInfo,
+  format: "json" | "markdown" = "json"
+): string {
   const id = session.id.replace(/[^A-Za-z0-9_-]/g, "_")
-  return `session-${id || "transcript"}.json`
+  return `session-${id || "transcript"}.${format === "markdown" ? "md" : "json"}`
 }
 
 export function timelineTime(created: number): string {

@@ -210,6 +210,8 @@ export type OpenCodeState = {
   commandsStatus: LoadStatus
   commandsError: string | null
   commandsDirectory: string | null
+  /** Bumped on every catalog read/invalidation; guards stale command execution. */
+  catalogEpoch: number
   pendingPermissions: PermissionRequest[]
   pendingForms: FormInfo[]
   permissionBusy: Record<string, true>
@@ -232,6 +234,15 @@ export type OpenCodeState = {
 }
 
 export type SessionListChange = { sessionID: string | null; parentID?: string }
+
+/**
+ * The native client tags command-missing rejections as `CommandNotFoundError`
+ * (via `_tag` or `name`). Keeping this check pure lets the composer treat a
+ * stale/unknown command as a catalog refresh rather than a generic failure.
+ */
+export function isUnknownCommandError(error: unknown): boolean {
+  return errorTag(error) === "CommandNotFoundError"
+}
 
 export type OpenCodeController = OpenCodeState & {
   subscribeSessionListChanges: (listener: (change: SessionListChange) => void) => () => void
@@ -294,7 +305,8 @@ export type OpenCodeController = OpenCodeState & {
   executeCommand: (
     name: string,
     text: string,
-    attachments: readonly ComposerAttachment[]
+    attachments: readonly ComposerAttachment[],
+    skills?: readonly PromptSkillAttachment[]
   ) => Promise<string | null>
   reloadCommands: () => void
   retryCatalogs: () => void
@@ -403,6 +415,7 @@ export function useOpenCode(): OpenCodeController {
   const [commandsStatus, setCommandsStatus] = useState<LoadStatus>("idle")
   const [commandsError, setCommandsError] = useState<string | null>(null)
   const [commandsDirectory, setCommandsDirectory] = useState<string | null>(null)
+  const [catalogEpoch, setCatalogEpoch] = useState(0)
   const [commandsReloadKey, setCommandsReloadKey] = useState(0)
   const [pendingPermissions, setPendingPermissions] = useState<
     PermissionRequest[]
@@ -1253,6 +1266,8 @@ export function useOpenCode(): OpenCodeController {
       setCommandsDirectory(targetDirectory)
       setCommands([])
       setCommandsStatus("loading")
+      // A directory switch drops the old catalog; any captured epoch is now stale.
+      setCatalogEpoch((current) => current + 1)
     } else {
       setCommandsStatus((current) => (current === "ready" ? current : "loading"))
     }
@@ -1265,6 +1280,7 @@ export function useOpenCode(): OpenCodeController {
       if (request !== commandRequest.current) return
       setCommands(response.data)
       setCommandsStatus("ready")
+      setCatalogEpoch((current) => current + 1)
     } catch (error) {
       if (request !== commandRequest.current) return
       // Keep a valid same-directory snapshot while showing the failure.
@@ -1417,6 +1433,7 @@ export function useOpenCode(): OpenCodeController {
             event.type === "config.updated"
           ) {
             setCommandsReloadKey((current) => current + 1)
+            setCatalogEpoch((current) => current + 1)
             continue
           }
 
@@ -1939,6 +1956,9 @@ export function useOpenCode(): OpenCodeController {
         setCommandsDirectory(null)
         setCommandsStatus("idle")
         setCommandsError(null)
+        // No directory / disconnected: the catalog is gone, so invalidate
+        // any epoch captured from a previously loaded command.
+        setCatalogEpoch((current) => current + 1)
       })
       return
     }
@@ -2871,7 +2891,8 @@ export function useOpenCode(): OpenCodeController {
     async (
       name: string,
       text: string,
-      submittedAttachments: readonly ComposerAttachment[]
+      submittedAttachments: readonly ComposerAttachment[],
+      skills: readonly PromptSkillAttachment[] = []
     ): Promise<string | null> => {
       const sessionID = activeSessionRef.current
       if (!sessionID) return "Select a session first."
@@ -2899,7 +2920,11 @@ export function useOpenCode(): OpenCodeController {
                 files: submittedAttachments.map(promptFileForAttachment),
               }
             : {}),
-          ...(running ? { delivery: "steer" as const } : {}),
+          ...(skills.length > 0
+            ? { skills: skills.map((skill) => ({ id: skill.id })) }
+            : {}),
+          // Native commands queue behind an active run instead of steering it.
+          ...(running ? { delivery: "queue" as const } : {}),
         })
         const submittedIDs = new Set(submittedAttachments.map((attachment) => attachment.id))
         setSessionAttachments(sessionID, (current) =>
@@ -2907,6 +2932,12 @@ export function useOpenCode(): OpenCodeController {
         )
         return null
       } catch (error) {
+        if (isUnknownCommandError(error)) {
+          // The command vanished between selection and the POST. Refresh the
+          // catalog without retrying the mutation; the user must pick again.
+          reloadCommands()
+          return "The command is no longer available. The catalog was refreshed; choose the command again."
+        }
         return errorMessage(error)
       } finally {
         delete admissionsRef.current[sessionID]
@@ -2917,7 +2948,7 @@ export function useOpenCode(): OpenCodeController {
         })
       }
     },
-    [sessions, setSessionAttachments]
+    [reloadCommands, sessions, setSessionAttachments]
   )
 
   const interruptSession = useCallback(async () => {
@@ -3289,6 +3320,7 @@ export function useOpenCode(): OpenCodeController {
     try {
       await openCode.location.reload()
       setCommandsReloadKey((current) => current + 1)
+      setCatalogEpoch((current) => current + 1)
       // A configuration reload can change the catalog; drop any cached catalog
       // for this directory so the reload is authoritative, not a stale SWR hit.
       const cacheKey = commandDirectory || ALL_PROJECTS_CATALOG_KEY
@@ -3366,6 +3398,7 @@ export function useOpenCode(): OpenCodeController {
     commandsStatus,
     commandsError,
     commandsDirectory,
+    catalogEpoch,
     pendingPermissions,
     pendingForms,
     permissionBusy,

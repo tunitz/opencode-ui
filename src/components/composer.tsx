@@ -27,6 +27,7 @@ import {
 import { Dictation } from "@/components/dictation"
 import { BtwDialog } from "@/components/btw-dialog"
 import { FilesPanel } from "@/components/files-panel"
+import { TerminalDialog } from "@/components/terminal-dialog"
 import {
   Dialog,
   DialogContent,
@@ -81,11 +82,13 @@ import {
 import {
   filterSlashCommands,
   findSlashCommand,
-  latestAssistantText,
+  isStaleServerCommand,
   mergeSlashCommands,
   parseSlashInput,
+  resolveSlashSubmit,
   slashQuery,
   type SlashCommand,
+  type SlashSubmitDecision,
 } from "@/lib/commands"
 import {
   attachmentFromBrowserFile,
@@ -109,6 +112,7 @@ import {
   type StashEntry,
 } from "@/lib/prompt-recall"
 import { useKeybindings } from "@/lib/use-keybindings"
+import { copyableAssistantText } from "@/lib/session-commands"
 import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
 import { copyText } from "@/lib/clipboard"
@@ -360,11 +364,16 @@ export function Composer({
   const [sessionDialogText, setSessionDialogText] = useState("")
   const [integrationDialog, setIntegrationDialog] =
     useState<IntegrationCommandDialogKind | null>(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const [btwQuestion, setBtwQuestion] = useState<string | null>(null)
   const composingRef = useRef(createSessionCompositionState())
   const activeDraftKeyRef = useRef<string | null>(null)
   const submittingRef = useRef(createSessionSubmissionLock())
   const serverCommandOverrideRef = useRef<string | null>(null)
+  // Epoch stamped on the server command captured in the picker. Compared with
+  // the live catalog epoch immediately before the POST so a catalog change
+  // between selection and submit can never run a stale/failed command.
+  const serverCommandEpochRef = useRef<number | null>(null)
   const lastPlainDraftRef = useRef<Record<string, string>>({})
   const draftRevisionsRef = useRef<Record<string, number>>({})
   const persistedDraftsRef = useRef<Record<string, string> | null>(null)
@@ -617,8 +626,8 @@ export function Composer({
   }, [draftKey])
 
   const slashCommands = useMemo(
-    () => mergeSlashCommands(nav.commands),
-    [nav.commands]
+    () => mergeSlashCommands(nav.commands, nav.catalogEpoch),
+    [nav.commands, nav.catalogEpoch]
   )
   const pickerQuery = slashQuery(draft)
   const filteredCommands = useMemo(
@@ -631,7 +640,10 @@ export function Composer({
       ? Math.min(commandIndex, filteredCommands.length - 1)
       : -1
   const slashDraft = parseSlashInput(draft)
-  const unknownSlash = slashDraft !== null && !findSlashCommand(slashCommands, slashDraft.name)
+  const unknownSlash =
+    slashDraft !== null &&
+    slashDraft.name.length > 0 &&
+    !findSlashCommand(slashCommands, slashDraft.name)
   const slashText = draft.startsWith("/")
   const selectedSkills = skillsBySession[draftKey] ?? []
   const citations = citationsBySession[draftKey] ?? []
@@ -812,13 +824,21 @@ export function Composer({
   }
 
   async function openNewSessionUi() {
+    if (clickVisible('button[aria-label="New session"]')) return true
     if (clickVisibleText("New session")) return true
     if (!(await openSessionsUi())) return false
     await waitForUi()
-    return clickVisibleText("New session")
+    return (
+      clickVisible('button[aria-label="New session"]') ||
+      clickVisibleText("New session")
+    )
   }
 
   async function openSettingsUi() {
+    if (onOpenSettings) {
+      onOpenSettings()
+      return true
+    }
     if (clickVisible('button[aria-label="Settings"]')) return true
     if (!(await openSessionsUi())) return false
     await waitForUi()
@@ -826,10 +846,13 @@ export function Composer({
   }
 
   async function openThemesUi() {
-    if (clickVisible('button[aria-label^="Theme:"]')) return true
-    if (!(await openSessionsUi())) return false
-    await waitForUi()
-    return clickVisible('button[aria-label^="Theme:"]')
+    // Appearance lives only in Settings; the old standalone theme trigger was
+    // removed. openSettings defaults to the Appearance section.
+    if (onOpenSettings) {
+      onOpenSettings()
+      return true
+    }
+    return openSettingsUi()
   }
 
   function clearExactDraft(sessionKey: string, submitted: string, revision: number) {
@@ -1062,7 +1085,10 @@ export function Composer({
         return { ok: true, message: "Opened Changes." }
       }
       case "copy": {
-        const text = latestAssistantText(nav.messages)
+        const text = copyableAssistantText(
+          nav.messages,
+          nav.activeSession?.revert?.messageID
+        )
         if (!text) {
           return { ok: false, message: "No assistant message text to copy." }
         }
@@ -1094,6 +1120,14 @@ export function Composer({
         }
         openIntegrationDialog("worktrees")
         return { ok: true, message: "Opened the project worktree manager." }
+      case "terminal": {
+        const directory = nav.activeSession?.location?.directory ?? nav.location?.directory
+        if (!directory) {
+          return { ok: false, message: "Select a session or project directory first." }
+        }
+        window.setTimeout(() => setTerminalOpen(true), 160)
+        return { ok: true, message: "Opened a browser terminal." }
+      }
       case "plugins":
         openIntegrationDialog("plugins")
         return { ok: true, message: "Opened native plugin metadata." }
@@ -1115,25 +1149,18 @@ export function Composer({
           ok: true,
           message: "Opened the side-question panel. Press Ask to make the model request.",
         }
-      case "status": {
-        const session = nav.activeSession
-        const project =
-          nav.scope === "all"
-            ? "All projects"
-            : (nav.location?.project.canonical ?? "No project")
-        return {
-          ok: true,
-          message: [
-            `Connection: ${nav.connection}`,
-            `stream: ${nav.streamStatus}`,
-            `project: ${project}`,
-            session ? `session: ${session.id}` : "no selected session",
-            session?.model
-              ? `model: ${session.model.providerID}/${session.model.id}${session.model.variant ? ` · ${session.model.variant}` : ""}`
-              : "model: none",
-          ].join(" · "),
-        }
-      }
+      case "status":
+        openIntegrationDialog("status")
+        return { ok: true, message: "Opened native status." }
+      case "pair":
+        openIntegrationDialog("pair")
+        return { ok: true, message: "Opened native device pairing." }
+      case "highlights":
+        openIntegrationDialog("highlights")
+        return { ok: true, message: "Loading release highlights." }
+      case "usage":
+        openIntegrationDialog("usage")
+        return { ok: true, message: "Loading native usage limits." }
       case "rename": {
         if (!nav.activeSession) {
           return { ok: false, message: "Select a session first." }
@@ -1230,7 +1257,8 @@ export function Composer({
 
   async function executeServerCommand(
     command: SlashCommand,
-    argumentsText: string
+    argumentsText: string,
+    capturedEpoch: number
   ) {
     const session = nav.activeSession
     const directory = session?.location?.directory
@@ -1241,11 +1269,23 @@ export function Composer({
       })
       return
     }
+    // Re-validate the catalog snapshot at the point of submission. Any gap
+    // between picking the command and sending it (status, directory, epoch or
+    // a removed command) invalidates the selection and blocks the POST.
     if (
-      nav.commandsDirectory !== directory ||
-      !nav.commands.some((candidate) => candidate.name === command.name)
+      isStaleServerCommand({
+        commandsStatus: nav.commandsStatus,
+        commandsDirectory: nav.commandsDirectory,
+        catalogEpoch: nav.catalogEpoch,
+        commands: nav.commands,
+        commandName: command.name,
+        capturedEpoch,
+        directory,
+      })
     ) {
       nav.reloadCommands()
+      serverCommandOverrideRef.current = null
+      serverCommandEpochRef.current = null
       setCommandFeedback({
         tone: "error",
         text: "The project command catalog changed. Reopen / and choose the command again.",
@@ -1257,6 +1297,7 @@ export function Composer({
     const sessionKey = draftKey
     const revision = draftRevisionsRef.current[sessionKey] ?? 0
     const attachments = nav.attachments
+    const submittedSkills = selectedSkills
     if (!submittingRef.current.acquire(sessionKey)) return
     setExecutingCommand((current) => ({ ...current, [sessionKey]: command.name }))
     setError(null)
@@ -1264,15 +1305,18 @@ export function Composer({
       const failure = await nav.executeCommand(
         command.name,
         argumentsText,
-        attachments
+        attachments,
+        submittedSkills
       )
       if (failure) {
         if (activeDraftKeyRef.current === sessionKey) setError(failure)
         return
       }
       clearExactDraft(sessionKey, submitted, revision)
+      clearExactSkills(sessionKey, submittedSkills)
       if (activeDraftKeyRef.current === sessionKey) {
         serverCommandOverrideRef.current = null
+        serverCommandEpochRef.current = null
         setCommandFeedback({
           tone: "status",
           text: `/${command.name} accepted by the backend.`,
@@ -1293,6 +1337,11 @@ export function Composer({
     if (command.source === "server" || command.arguments === "required") {
       serverCommandOverrideRef.current =
         command.source === "server" ? command.name : null
+      // Capture the catalog epoch at selection time. The command object in
+      // `slashCommands` is rebuilt on every catalog change, so holding the
+      // epoch here is what lets us detect a change before the POST.
+      serverCommandEpochRef.current =
+        command.source === "server" ? command.catalogEpoch : null
       setDraft(`/${command.name} `)
       setCommandPickerDismissed(true)
       focusComposer()
@@ -1300,6 +1349,7 @@ export function Composer({
     }
 
     serverCommandOverrideRef.current = null
+    serverCommandEpochRef.current = null
     const submitted = draft
     const sessionKey = draftKey
     const revision = draftRevisionsRef.current[sessionKey] ?? 0
@@ -1337,6 +1387,7 @@ export function Composer({
       explicitlySelectedServer ?? findSlashCommand(slashCommands, parsed.name)
     if (!command) {
       serverCommandOverrideRef.current = null
+      serverCommandEpochRef.current = null
       setCommandFeedback({
         tone: "error",
         text: `Unknown command /${parsed.name}. Choose a command or send this as a literal message.`,
@@ -1344,6 +1395,13 @@ export function Composer({
       setCommandPickerDismissed(true)
       return true
     }
+
+    // A picker-selected server command uses the epoch captured at activation;
+    // a fully typed one is captured here at submission time.
+    const capturedEpoch =
+      explicitlySelectedServer !== null
+        ? (serverCommandEpochRef.current ?? command.catalogEpoch)
+        : command.catalogEpoch
 
     const argumentsText = parsed.argumentsText
     if (command.arguments === "required" && !argumentsText.trim()) {
@@ -1372,11 +1430,13 @@ export function Composer({
     }
 
     if (command.source === "server") {
-      await executeServerCommand(command, argumentsText)
+      serverCommandEpochRef.current = capturedEpoch
+      await executeServerCommand(command, argumentsText, capturedEpoch)
       return true
     }
 
     serverCommandOverrideRef.current = null
+    serverCommandEpochRef.current = null
     const submitted = draft
     const sessionKey = draftKey
     const revision = draftRevisionsRef.current[sessionKey] ?? 0
@@ -1603,21 +1663,57 @@ export function Composer({
     }
   }
 
+  /** Apply a pure submit decision (see resolveSlashSubmit). */
+  function applySubmitDecision(
+    decision: SlashSubmitDecision,
+    delivery: "steer" | "queue" | null
+  ) {
+    switch (decision.kind) {
+      case "composing":
+      case "ignore":
+        return
+      case "picker-error":
+        setCommandFeedback({ tone: "error", text: decision.message })
+        return
+      case "command":
+        void submitSlashDraft()
+        return
+      case "literal-prompt":
+        void submit(delivery)
+        return
+    }
+  }
+
+  /**
+   * Single entry point for explicit submits. A leading-slash draft is always
+   * dispatched as a command; an unknown name stays an explicit error with a
+   * Send-as-literal action instead of becoming a prompt.
+   */
+  function submitActiveDraft(
+    delivery: "steer" | "queue" | null = responding ? "steer" : null
+  ) {
+    applySubmitDecision(
+      resolveSlashSubmit({
+        draft,
+        isComposing: composingRef.current.isComposing(draftKey),
+        isTouch: touchInputRef.current,
+        pickerOpen: pickerQuery !== null,
+      }),
+      delivery
+    )
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (composingRef.current.isComposing(draftKey)) return
-    if (slashDraft) {
-      void submitSlashDraft()
-      return
-    }
-    if (pickerQuery !== null) {
-      setCommandFeedback({
-        tone: "error",
-        text: "Choose a command or continue typing.",
-      })
-      return
-    }
-    void submit(responding ? "steer" : null)
+    applySubmitDecision(
+      resolveSlashSubmit({
+        draft,
+        isComposing: composingRef.current.isComposing(draftKey),
+        isTouch: touchInputRef.current,
+        pickerOpen: pickerQuery !== null,
+      }),
+      responding ? "steer" : null
+    )
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1639,7 +1735,7 @@ export function Composer({
     if (backgroundBinding && matchesKeybinding(native, backgroundBinding, platform)) {
       event.preventDefault()
       if (canSend) {
-        void submit(responding ? "steer" : null)
+        submitActiveDraft(responding ? "steer" : null)
         focusComposer()
       }
       return
@@ -1690,7 +1786,15 @@ export function Composer({
         )
         return
       }
-      if (event.key === "Enter" && !touchInputRef.current && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && filteredCommands.length > 0) {
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        !touchInputRef.current &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        filteredCommands.length > 0
+      ) {
         event.preventDefault()
         const command = filteredCommands[activeCommandIndex]
         if (command) void activateSlashCommand(command)
@@ -1702,27 +1806,25 @@ export function Composer({
       return
     }
 
-    // Virtual keyboards insert a newline; only Send/command-item activation submits.
-    if (touchInputRef.current) {
-      return
-    }
-
-    if (
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.altKey ||
-      !canSend
-    ) {
-      return
-    }
-
+    const decision = resolveSlashSubmit({
+      draft,
+      isComposing:
+        composingRef.current.isComposing(draftKey) ||
+        native.isComposing ||
+        native.keyCode === 229,
+      isTouch: touchInputRef.current,
+      pickerOpen: pickerQuery !== null,
+      viaKeyboardEnter: true,
+      submitAllowed:
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        canSend,
+    })
+    if (decision.kind === "composing" || decision.kind === "ignore") return
     event.preventDefault()
-    if (slashDraft) {
-      void submitSlashDraft()
-      return
-    }
-    void submit()
+    applySubmitDecision(decision, responding ? "steer" : null)
   }
 
   async function handleInterrupt() {
@@ -2360,6 +2462,15 @@ export function Composer({
         onResult={(text, ok = true) => {
           setCommandFeedback({ tone: ok ? "status" : "error", text })
         }}
+      />
+      <TerminalDialog
+        open={terminalOpen}
+        onOpenChange={(next) => {
+          setTerminalOpen(next)
+          if (!next) focusComposer()
+        }}
+        directory={nav.activeSession?.location?.directory ?? nav.location?.directory ?? ""}
+        sessionID={nav.activeSessionID ?? undefined}
       />
       {btwQuestion !== null ? (
         <BtwDialog

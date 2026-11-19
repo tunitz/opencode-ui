@@ -11,7 +11,10 @@ import { readFile } from "node:fs/promises"
 
 const repoRoot = resolve(import.meta.dir, "../..")
 
-export async function buildFixture(outDir: string): Promise<{ url: string }> {
+export async function buildFixture(
+  outDir: string,
+  entrypoint: string = join(repoRoot, "tests/browser/fixture.tsx")
+): Promise<{ url: string }> {
   await mkdir(join(outDir, "assets"), { recursive: true })
 
   const cssEntry = join(repoRoot, "src/index.css")
@@ -33,7 +36,7 @@ export async function buildFixture(outDir: string): Promise<{ url: string }> {
   const tailwindCss = compiler.build([...candidates])
 
   const result = await Bun.build({
-    entrypoints: [join(repoRoot, "tests/browser/fixture.tsx")],
+    entrypoints: [entrypoint],
     outdir: outDir,
     target: "browser",
     splitting: true,
