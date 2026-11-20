@@ -23,7 +23,7 @@ import {
   type SpacesInput,
   type UpdateNoteInput,
   type UpdateSpaceInput,
-} from "@tunitz/opencode-notes"
+} from "../plugins/notes/src/index.ts"
 
 export const NOTES_ROUTE = "/api/ui/notes"
 export const NOTES_EVENTS_ROUTE = "/api/ui/notes/events"
@@ -132,7 +132,12 @@ export type NotesApi = {
   dispose: () => void
 }
 
-type SseClient = { controller: ReadableStreamDefaultController<Uint8Array> }
+type SseClient = {
+  controller: ReadableStreamDefaultController<Uint8Array>
+  cleanup: () => void
+}
+
+const MAX_SSE_CLIENTS = 64
 
 /**
  * HTTP surface over one NotesService per server process, plus a change-event
@@ -150,13 +155,17 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
   const emit: (event: ChangeEvent) => void = () => notifyChange()
 
   function notifyChange(): void {
-    if (clients.size === 0) return
+    if (clients.size === 0 || disposed) return
     const frame = encoder.encode(`event: changed\ndata: ${JSON.stringify({ at: Date.now() })}\n\n`)
-    for (const client of clients) {
+    for (const client of [...clients]) {
       try {
+        if (client.controller.desiredSize !== null && client.controller.desiredSize <= 0) {
+          client.cleanup()
+          continue
+        }
         client.controller.enqueue(frame)
       } catch {
-        clients.delete(client)
+        client.cleanup()
       }
     }
   }
@@ -183,16 +192,24 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
   }
 
   function startWatching(): void {
+    if (disposed) return
     watching ??= (async () => {
       for (const name of WATCH_DIRECTORIES) {
+        if (disposed) return
         const dir = join(dataDir, name)
         try {
           await mkdir(dir, { recursive: true, mode: 0o700 })
         } catch {
           continue
         }
+        if (disposed) return
         try {
-          const watcher = watch(dir, { persistent: false }, scheduleChange)
+          const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
+            if (typeof filename === "string" && (filename.endsWith(".lock") || filename.endsWith(".tmp"))) {
+              return
+            }
+            scheduleChange()
+          })
           watcher.on("error", () => watcher.close())
           watchers.push(watcher)
         } catch {
@@ -214,17 +231,15 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
         // Already closed.
       }
     }
-    for (const client of clients) {
-      try {
-        client.controller.close()
-      } catch {
-        // Already closed.
-      }
+    for (const client of [...clients]) {
+      client.cleanup()
     }
     clients.clear()
   }
 
   function eventStream(request: Request): Response {
+    if (disposed) return errorResponse("service_unavailable", 503, "Notes service is shutting down")
+    if (clients.size >= MAX_SSE_CLIENTS) return errorResponse("too_many_connections", 503, "Too many event streams")
     if (watchEnabled) startWatching()
     let heartbeat: ReturnType<typeof setInterval> | undefined
     let client: SseClient | undefined
@@ -249,12 +264,21 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        client = { controller }
+        if (disposed || request.signal.aborted) {
+          try {
+            controller.close()
+          } catch {
+            // Already closed.
+          }
+          return
+        }
+        client = { controller, cleanup }
         clients.add(client)
         try {
           controller.enqueue(encoder.encode(": connected\n\n"))
         } catch {
-          // The client vanished before the opening comment.
+          cleanup()
+          return
         }
         heartbeat = setInterval(() => {
           try {
@@ -275,6 +299,7 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
   }
 
   async function handleRequest(request: Request): Promise<Response> {
+    if (disposed) return errorResponse("service_unavailable", 503, "Notes service is shutting down")
     const path = new URL(request.url).pathname
     if (path === NOTES_EVENTS_ROUTE) {
       if (request.method !== "GET") return errorResponse("method_not_allowed", 405)

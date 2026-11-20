@@ -3,6 +3,7 @@ import {
   type AgentConfigEntry,
   type AgentConfigModel,
 } from "@/lib/agent-config-types"
+import type { AgentInfo } from "@/lib/opencode"
 
 export type AgentGroup = "primary" | "subagents" | "hidden"
 
@@ -36,6 +37,15 @@ export function groupedAgents(
     group,
     agents: buckets[group].sort((a, b) => a.id.localeCompare(b.id)),
   }))
+}
+
+/**
+ * Agents that can own a top-level session. The native `all` mode can also be
+ * selected as a primary agent, but New Session deliberately exposes only
+ * `primary` agents and never hidden entries.
+ */
+export function primaryAgents(agents: readonly AgentInfo[]): AgentInfo[] {
+  return agents.filter((agent) => agent.mode === "primary" && !agent.hidden)
 }
 
 export function agentModelLabel(model: AgentConfigModel | null): string {

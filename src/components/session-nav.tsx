@@ -60,7 +60,7 @@ import { IntegrationCommandDialogs } from "@/components/integration-command-dial
 import {
   SettingsButton,
   SettingsTriggerButton,
-} from "@/components/settings-workspace"
+} from "@/components/settings-trigger"
 import { useOptionalSettingsWorkspace } from "@/components/settings-context"
 import { useOptionalWorkspace } from "@/components/workspace-context"
 import { projectName } from "@/components/project-select"
@@ -94,10 +94,11 @@ import {
   sessionTreeRows,
   type SessionTreeRow,
 } from "@/lib/session-tree"
-import type { OpenCodeController } from "@/lib/use-opencode"
+import type { LoadStatus, OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
 import { recordPerfRender } from "@/lib/perf-probe"
+import { fullActivityTime, relativeActivityTime } from "@/lib/relative-time"
 import type { SessionShortcuts, SessionShortcut } from "@/lib/session-shortcuts"
 import { useSessionShortcuts } from "@/lib/use-session-shortcuts"
 import { worktreeNavigationProject } from "@/lib/worktree-navigation"
@@ -205,6 +206,9 @@ const SessionRow = memo(function SessionRow({
   onSelect,
   onRename,
   onDelete,
+  archived = false,
+  onArchive,
+  onUnarchive,
   shortcut,
   onShortcut,
 }: {
@@ -218,10 +222,14 @@ const SessionRow = memo(function SessionRow({
   onSelect: (sessionID: string) => void
   onRename: (sessionID: string, title: string) => Promise<string | null>
   onDelete: (sessionID: string) => Promise<string | null>
+  archived?: boolean
+  onArchive?: (sessionID: string) => Promise<string | null>
+  onUnarchive?: (sessionID: string) => Promise<string | null>
   shortcut?: SessionShortcut
   onShortcut: (sessionID: string, change: Partial<SessionShortcut>) => boolean
 }) {
   const title = session.title?.trim() || session.id
+  const activityLabel = relativeActivityTime(session.time.updated)
   const [renameOpen, setRenameOpen] = useState(false)
   const [draft, setDraft] = useState(title)
   const [renamePending, setRenamePending] = useState(false)
@@ -293,8 +301,9 @@ const SessionRow = memo(function SessionRow({
     <div className="flex items-stretch gap-0.5">
       <Button
         variant="ghost"
+        data-session-id={session.id}
         aria-current={active ? "page" : undefined}
-        title={session.id}
+        title={`${session.id}\nLast activity: ${fullActivityTime(session.time.updated)}`}
         onClick={() => onSelect(session.id)}
         className={cn(
           "session-nav-item h-auto min-h-11 min-w-0 flex-1 flex-col items-start justify-center gap-0.5 rounded-lg py-1.5 ps-2.5 pe-2 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -331,6 +340,10 @@ const SessionRow = memo(function SessionRow({
             <span dir="ltr" className="min-w-0 truncate font-mono">
               {scopeLabel ?? session.id}
             </span>
+            <span className="shrink-0 tabular-nums" aria-label={`Last activity ${fullActivityTime(session.time.updated)}`}>
+              {activityLabel}
+            </span>
+            {archived ? <span className="shrink-0">Archived</span> : null}
             {descendantCount > 0 ? (
               <span className="shrink-0">
                 {descendantCount} loaded {descendantCount === 1 ? "subagent" : "subagents"}
@@ -373,6 +386,18 @@ const SessionRow = memo(function SessionRow({
             Rename session
             <span className="sr-only"> for {title}</span>
           </DropdownMenuItem>
+          {onArchive ? (
+            <DropdownMenuItem onClick={() => void onArchive(session.id)}>
+              <RotateCwIcon aria-hidden="true" />
+              Archive session
+            </DropdownMenuItem>
+          ) : null}
+          {onUnarchive ? (
+            <DropdownMenuItem onClick={() => void onUnarchive(session.id)}>
+              <RotateCwIcon aria-hidden="true" />
+              Unarchive session
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem variant="destructive" onClick={openDelete}>
             <Trash2Icon aria-hidden="true" />
             Delete session
@@ -532,6 +557,89 @@ const SessionRow = memo(function SessionRow({
   )
 })
 
+/**
+ * Inner scroll for one session group or subtree. It owns its own wheel/scroll
+ * chaining and bottom fade so long lists never take over the whole sidebar.
+ */
+function IncrementalViewport({
+  children,
+  label,
+  maxHeightClass,
+  hasMore,
+  loading,
+  onLoadMore,
+}: {
+  children: ReactNode
+  label: string
+  maxHeightClass: string
+  hasMore: boolean
+  loading: boolean
+  onLoadMore: () => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const [faded, setFaded] = useState(false)
+
+  const syncFade = useCallback(() => {
+    const element = scrollRef.current
+    if (!element) return
+    setFaded(
+      element.scrollTop + element.clientHeight < element.scrollHeight - 4
+    )
+  }, [])
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    syncFade()
+    const observer = new ResizeObserver(syncFade)
+    observer.observe(element)
+    element.addEventListener("scroll", syncFade, { passive: true })
+    return () => {
+      observer.disconnect()
+      element.removeEventListener("scroll", syncFade)
+    }
+  }, [children, syncFade])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    const sentinel = sentinelRef.current
+    if (!hasMore || loading || !root || !sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoadMore()
+      },
+      { root, rootMargin: "48px 0px" }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loading, onLoadMore, children])
+
+  return (
+    <div
+      ref={scrollRef}
+      role="group"
+      aria-label={label}
+      className={cn(
+        "min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain ps-0.5 pe-1",
+        maxHeightClass
+      )}
+      style={
+        faded
+          ? { maskImage: "linear-gradient(to bottom, black calc(100% - 1.5rem), transparent)" }
+          : undefined
+      }
+    >
+      <div className="space-y-0.5">{children}</div>
+      {hasMore ? (
+        <div ref={sentinelRef} aria-hidden="true" className="flex h-8 items-center justify-center text-[11px] text-muted-foreground">
+          {loading ? "Loading more…" : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 type SessionTreeProps = {
   rows: readonly SessionTreeRow<SessionInfo>[]
   activeSessionID: string | null
@@ -539,10 +647,20 @@ type SessionTreeProps = {
   unreadSessionIDs: Record<string, true>
   projects: Project[]
   expandedIDs: ReadonlySet<string>
-  onToggle: (sessionID: string) => void
+  onToggle: (sessionID: string, hasLoadedChildren: boolean) => Promise<boolean>
   onSelect: (sessionID: string) => void
   onRename: (sessionID: string, title: string) => Promise<string | null>
   onDelete: (sessionID: string) => Promise<string | null>
+  loadSubsessionPage: (
+    parentID: string,
+    cursor?: string | null
+  ) => Promise<
+    | { ok: true; hasChildren: boolean; nextCursor: string | null }
+    | { ok: false; error: string }
+  >
+  archived?: boolean
+  onArchive?: (sessionID: string) => Promise<string | null>
+  onUnarchive?: (sessionID: string) => Promise<string | null>
   shortcuts: SessionShortcuts
   onShortcut: (sessionID: string, change: Partial<SessionShortcut>) => boolean
 }
@@ -559,6 +677,57 @@ function SessionTree({ rows, ...context }: SessionTreeProps) {
   )
 }
 
+/** An expanded subtree reveals ten children at a time inside its own scroll. */
+function SubsessionList({
+  parentID,
+  rows,
+  context,
+}: {
+  parentID: string
+  rows: readonly SessionTreeRow<SessionInfo>[]
+  context: SessionTreeContext
+}) {
+  const [visibleCount, setVisibleCount] = useState(10)
+  const [cursor, setCursor] = useState<string | null | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const hasMore = visibleCount < rows.length || cursor !== null
+
+  const loadMore = useCallback(async () => {
+    if (visibleCount < rows.length) {
+      setVisibleCount((current) => Math.min(rows.length, current + 10))
+      return
+    }
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    const result = await context.loadSubsessionPage(parentID, cursor ?? null)
+    setLoading(false)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+    setCursor(result.nextCursor)
+  }, [context, cursor, loading, parentID, rows.length, visibleCount])
+
+  return (
+    <div className="ms-3 border-s border-sidebar-border ps-1">
+      <IncrementalViewport
+        label="Subagents"
+        maxHeightClass="max-h-60"
+        hasMore={hasMore}
+        loading={loading}
+        onLoadMore={() => void loadMore()}
+      >
+        {rows.slice(0, visibleCount).map((child) => (
+          <SessionTreeNode key={child.session.id} row={child} {...context} />
+        ))}
+      </IncrementalViewport>
+      {error ? <p role="alert" className="px-2 py-1 text-[11px] text-destructive">{error}</p> : null}
+    </div>
+  )
+}
+
 const SessionTreeNode = memo(function SessionTreeNode({
   row,
   activeSessionID,
@@ -570,15 +739,18 @@ const SessionTreeNode = memo(function SessionTreeNode({
   onSelect,
   onRename,
   onDelete,
+  loadSubsessionPage,
+  archived,
+  onArchive,
+  onUnarchive,
   shortcuts,
   onShortcut,
 }: { row: SessionTreeRow<SessionInfo> } & SessionTreeContext) {
   const { session, children } = row
   const title = session.title?.trim() || session.id
-  const hasChildren = children.length > 0
-  const expanded = hasChildren && expandedIDs.has(session.id)
+  const expanded = expandedIDs.has(session.id)
   const childrenID = `session-subtree-${session.id}`
-  const descendants = hasChildren ? countSessionTreeDescendants(row) : 0
+  const descendants = countSessionTreeDescendants(row)
 
   return (
     <div>
@@ -590,153 +762,53 @@ const SessionTreeNode = memo(function SessionTreeNode({
         scopeLabel={sessionProjectLabel(session, projects)}
         descendantCount={descendants}
         expandControl={
-          hasChildren ? (
-            <Button
-              variant="ghost"
-              aria-expanded={expanded}
-              aria-controls={expanded ? childrenID : undefined}
-              aria-label={`${expanded ? "Hide" : "Show"} ${descendants} loaded subagent ${
-                descendants === 1 ? "session" : "sessions"
-              } for ${title}`}
-              onClick={() => onToggle(session.id)}
-              className="size-11 shrink-0 self-center rounded-lg text-muted-foreground"
-            >
+          <Button
+            variant="ghost"
+            aria-expanded={expanded}
+            aria-controls={expanded && children.length > 0 ? childrenID : undefined}
+            aria-label={`${expanded ? "Hide" : "Show"} subagents for ${title}`}
+            onClick={() => { void onToggle(session.id, children.length > 0) }}
+            className="size-11 shrink-0 self-center rounded-lg text-muted-foreground"
+          >
               <ChevronRightIcon
                 aria-hidden="true"
                 className={cn(
                   "size-3.5 transition-transform motion-reduce:transition-none",
                   expanded && "rotate-90"
                 )}
-              />
-            </Button>
-          ) : null
+            />
+          </Button>
         }
         onSelect={onSelect}
         onRename={onRename}
         onDelete={onDelete}
+        archived={archived}
+        onArchive={onArchive}
+        onUnarchive={onUnarchive}
         shortcut={shortcuts[session.id]}
         onShortcut={onShortcut}
       />
-      {expanded ? (
-        <div
-          id={childrenID}
-          className="ms-3 border-s border-sidebar-border ps-1"
-        >
-          {children.map((child) => (
-            <SessionTreeNode
-              key={child.session.id}
-              row={child}
-              activeSessionID={activeSessionID}
-              runningSessionIDs={runningSessionIDs}
-              unreadSessionIDs={unreadSessionIDs}
-              projects={projects}
-              expandedIDs={expandedIDs}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              onRename={onRename}
-              onDelete={onDelete}
-              shortcuts={shortcuts}
-              onShortcut={onShortcut}
-            />
-          ))}
+      {expanded && children.length > 0 ? (
+        <div id={childrenID}>
+          <SubsessionList parentID={session.id} rows={children} context={{
+            activeSessionID,
+            runningSessionIDs,
+            unreadSessionIDs,
+            projects,
+            expandedIDs,
+            onToggle,
+            onSelect,
+            onRename,
+            onDelete,
+            loadSubsessionPage,
+            archived,
+            onArchive,
+            onUnarchive,
+            shortcuts,
+            onShortcut,
+          }} />
         </div>
       ) : null}
-    </div>
-  )
-})
-
-type SessionSearchResult = {
-  session: SessionInfo
-  scope: string
-  text: string
-}
-
-const SessionSearchRow = memo(function SessionSearchRow({
-  result,
-  active,
-  running,
-  unread,
-  onSelect,
-}: {
-  result: SessionSearchResult
-  active: boolean
-  running: boolean
-  unread: boolean
-  onSelect: (sessionID: string) => void
-}) {
-  const { session, scope } = result
-  const title = session.title?.trim() || session.id
-
-  return (
-    <button
-      type="button"
-      aria-current={active ? "page" : undefined}
-      title={session.id}
-      onClick={() => onSelect(session.id)}
-      className={cn(
-        "session-nav-item flex min-h-11 w-full min-w-0 flex-col items-start justify-center gap-0.5 rounded-lg px-2.5 py-1.5 text-start font-normal text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-        active &&
-          "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-      )}
-    >
-      <span className="flex w-full min-w-0 items-center gap-1.5">
-        <span dir="auto" className="min-w-0 flex-1 truncate text-[13px]">
-          {title}
-        </span>
-        {running ? (
-          <LoaderCircleIcon
-            aria-hidden="true"
-            className="size-3.5 shrink-0 animate-spin text-muted-foreground"
-          />
-        ) : null}
-        {unread ? (
-          <span
-            aria-hidden="true"
-            className="size-1.5 shrink-0 rounded-full bg-primary"
-          />
-        ) : null}
-      </span>
-      {running || unread ? (
-        <span className="sr-only">
-          {[running ? "Running" : null, unread ? "New activity" : null]
-            .filter(Boolean)
-            .join(". ")}
-        </span>
-      ) : null}
-      <span className="flex w-full min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
-        <span dir="ltr" className="min-w-0 truncate font-mono">
-          {scope || session.id}
-        </span>
-      </span>
-    </button>
-  )
-})
-
-const SessionSearchResults = memo(function SessionSearchResults({
-  results,
-  activeSessionID,
-  runningSessionIDs,
-  unreadSessionIDs,
-  onSelect,
-}: {
-  results: readonly SessionSearchResult[]
-  activeSessionID: string | null
-  runningSessionIDs: Record<string, true>
-  unreadSessionIDs: Record<string, true>
-  onSelect: (sessionID: string) => void
-}) {
-  return (
-    <div className="space-y-0.5" aria-label="Session search results">
-      {results.map((result) => (
-        <SessionSearchRow
-          key={result.session.id}
-          result={result}
-          active={result.session.id === activeSessionID}
-          running={Boolean(runningSessionIDs[result.session.id])}
-          unread={Boolean(unreadSessionIDs[result.session.id])}
-          onSelect={onSelect}
-        />
-      ))}
     </div>
   )
 })
@@ -766,6 +838,43 @@ function subscribeToDayStart(onStoreChange: () => void): () => void {
   return () => clearInterval(timer)
 }
 
+function PagedSessionTree({
+  rows,
+  context,
+  label,
+  hasMore,
+  loading,
+  onLoadMore,
+}: {
+  rows: readonly SessionTreeRow<SessionInfo>[]
+  context: SessionTreeContext
+  label: string
+  hasMore: boolean
+  loading: boolean
+  onLoadMore: () => void
+}) {
+  const [visibleCount, setVisibleCount] = useState(10)
+  const loadMore = useCallback(() => {
+    if (visibleCount < rows.length) {
+      setVisibleCount((current) => Math.min(rows.length, current + 10))
+      return
+    }
+    onLoadMore()
+  }, [onLoadMore, rows.length, visibleCount])
+
+  return (
+    <IncrementalViewport
+      label={label}
+      maxHeightClass="max-h-80"
+      hasMore={hasMore || visibleCount < rows.length}
+      loading={loading}
+      onLoadMore={loadMore}
+    >
+      <SessionTree rows={rows.slice(0, visibleCount)} {...context} />
+    </IncrementalViewport>
+  )
+}
+
 function SessionList({
   nav,
   onSelect = nav.selectSession,
@@ -787,6 +896,8 @@ function SessionList({
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [archivedOpen, setArchivedOpen] = useState(false)
+  const [pinnedExtras, setPinnedExtras] = useState<SessionInfo[]>([])
+  const pinnedExtrasRef = useRef<SessionInfo[]>([])
   const onSelectRef = useRef(onSelect)
   useEffect(() => {
     onSelectRef.current = onSelect
@@ -799,17 +910,26 @@ function SessionList({
   // keep the memoized tree rows from re-rendering for that churn alone.
   const renameSessionRef = useRef(nav.renameSession)
   const deleteSessionRef = useRef(nav.deleteSession)
+  const setSessionArchivedRef = useRef(nav.setSessionArchived)
   useEffect(() => {
     renameSessionRef.current = nav.renameSession
     deleteSessionRef.current = nav.deleteSession
-  }, [nav.renameSession, nav.deleteSession])
+    setSessionArchivedRef.current = nav.setSessionArchived
+  }, [nav.renameSession, nav.deleteSession, nav.setSessionArchived])
   const handleRename = useCallback(
-    (sessionID: string, title: string) =>
-      renameSessionRef.current(sessionID, title),
+    (sessionID: string, title: string) => renameSessionRef.current(sessionID, title),
     []
   )
   const handleDelete = useCallback(
     (sessionID: string) => deleteSessionRef.current(sessionID),
+    []
+  )
+  const handleArchive = useCallback(
+    (sessionID: string) => setSessionArchivedRef.current(sessionID, true),
+    []
+  )
+  const handleUnarchive = useCallback(
+    (sessionID: string) => setSessionArchivedRef.current(sessionID, false),
     []
   )
   // Live run/unread maps change on activity frames; deferring them keeps the
@@ -819,7 +939,104 @@ function SessionList({
   const searchQuery = query.trim()
   const searching = searchQuery.length > 0
   const deferredQuery = useDeferredValue(searchQuery)
-  const pendingSearch = searching && deferredQuery !== searchQuery
+  const [searchRows, setSearchRows] = useState<SessionInfo[]>([])
+  const [searchCursor, setSearchCursor] = useState<string | null>(null)
+  const [searchStatus, setSearchStatus] = useState<LoadStatus>("idle")
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const searchRequest = useRef(0)
+  const searchCursorRef = useRef<string | null>(null)
+  const loadingSearchRef = useRef(false)
+  const searchPageRef = useRef(nav.searchSessionPage)
+  const loadSubsessionRef = useRef(nav.loadSubsessionPage)
+  const loadPinnedRef = useRef(nav.loadPinnedSessions)
+  useEffect(() => {
+    searchPageRef.current = nav.searchSessionPage
+    loadSubsessionRef.current = nav.loadSubsessionPage
+    loadPinnedRef.current = nav.loadPinnedSessions
+  }, [nav.searchSessionPage, nav.loadSubsessionPage, nav.loadPinnedSessions])
+
+  // Pinned IDs are external server state; resolving them keeps the section
+  // complete even when the pinned session is outside the current paged list.
+  useEffect(() => {
+    const ids = Object.entries(shortcuts)
+      .filter(([, shortcut]) => shortcut?.pinned)
+      .map(([sessionID]) => sessionID)
+    const known = new Set([
+      ...nav.sessions.map((session) => session.id),
+      ...pinnedExtrasRef.current.map((session) => session.id),
+    ])
+    const missing = ids.filter((id) => !known.has(id)).slice(0, 50)
+    if (missing.length === 0) return
+    let cancelled = false
+    void loadPinnedRef.current(missing).then((rows) => {
+      if (cancelled || rows.length === 0) return
+      setPinnedExtras((current) => {
+        const seen = new Set(current.map((session) => session.id))
+        const next = [...current, ...rows.filter((session) => !seen.has(session.id))]
+        pinnedExtrasRef.current = next
+        return next
+      })
+    })
+    return () => { cancelled = true }
+  }, [shortcuts, nav.sessions])
+
+  /* eslint-disable react-hooks/set-state-in-effect -- search state is keyed
+     to the deferred query, so each new query starts from an empty page. */
+  useEffect(() => {
+    const request = ++searchRequest.current
+    searchCursorRef.current = null
+    setSearchCursor(null)
+    setSearchRows([])
+    setSearchError(null)
+    if (!deferredQuery) {
+      setSearchStatus("idle")
+      return
+    }
+    setSearchStatus("loading")
+    const timer = setTimeout(() => {
+      void searchPageRef.current(deferredQuery).then((result) => {
+        if (request !== searchRequest.current) return
+        if (!result.ok) {
+          setSearchError(result.error)
+          setSearchStatus("error")
+          return
+        }
+        searchCursorRef.current = result.nextCursor
+        setSearchCursor(result.nextCursor)
+        setSearchRows(result.sessions)
+        setSearchStatus("ready")
+      })
+    }, 180)
+    return () => clearTimeout(timer)
+  }, [deferredQuery])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const loadMoreSearch = useCallback(async () => {
+    const cursor = searchCursorRef.current
+    if (!cursor || loadingSearchRef.current || !deferredQuery) return
+    const request = searchRequest.current
+    loadingSearchRef.current = true
+    setSearchStatus("loading")
+    try {
+      const result = await searchPageRef.current(deferredQuery, cursor)
+      if (request !== searchRequest.current) return
+      if (!result.ok) {
+        setSearchError(result.error)
+        setSearchStatus("error")
+        return
+      }
+      searchCursorRef.current = result.nextCursor
+      setSearchCursor(result.nextCursor)
+      setSearchRows((current) => {
+        const seen = new Set(current.map((session) => session.id))
+        return [...current, ...result.sessions.filter((session) => !seen.has(session.id))]
+      })
+      setSearchStatus("ready")
+    } finally {
+      loadingSearchRef.current = false
+    }
+  }, [deferredQuery])
+
   const dayStart = useSyncExternalStore(
     subscribeToDayStart,
     currentDayStart,
@@ -833,56 +1050,42 @@ function SessionList({
     () => sessionTreeRows(sortedSessions),
     [sortedSessions]
   )
-  const pinnedRows = useMemo(
-    () =>
-      sessionTreeRows(
-        sortedSessions.filter((session) => shortcuts[session.id]?.pinned)
-      ),
-    [sortedSessions, shortcuts]
+  const pinnedRows = useMemo(() => {
+    const known = new Set(sortedSessions.map((session) => session.id))
+    const source = [
+      ...sortedSessions,
+      ...pinnedExtras.filter((session) => !known.has(session.id)),
+    ].sort((a, b) => b.time.updated - a.time.updated)
+    return sessionTreeRows(source.filter((session) => shortcuts[session.id]?.pinned))
+  }, [sortedSessions, pinnedExtras, shortcuts])
+  const archivedRows = useMemo(
+    () => sessionTreeRows(nav.archivedSessions),
+    [nav.archivedSessions]
+  )
+  const searchTreeRows = useMemo(
+    () => sessionTreeRows(searchRows),
+    [searchRows]
   )
   const groups = useMemo(
     () => groupSessionTreeRows(treeRows, dayStart),
     [treeRows, dayStart]
   )
-  const searchIndex = useMemo(
-    () =>
-      [...nav.sessions]
-        .sort((a, b) => b.time.updated - a.time.updated)
-        .map((session) => {
-          const scope = sessionProjectLabel(session, nav.projects)
-          const localLabel = shortcuts[session.id]?.label ?? ""
-          return {
-            session,
-            scope,
-            text: [session.title, session.id, scope, localLabel]
-              .filter(Boolean)
-              .join(" ")
-              .toLocaleLowerCase(),
-          }
-        }),
-    [nav.projects, nav.sessions, shortcuts]
-  )
-  const searchResults = useMemo(() => {
-    if (!deferredQuery) return []
-    const words = deferredQuery.toLocaleLowerCase().split(/\s+/)
-    return searchIndex.filter(({ text }) =>
-      words.every((word) => text.includes(word))
-    )
-  }, [deferredQuery, searchIndex])
   const activeAncestors = useMemo(
     () => sessionAncestorIDs(nav.sessions, nav.activeSessionID),
     [nav.sessions, nav.activeSessionID]
   )
   const activeGroup = sessionGroupForID(
     nav.sessions,
-    // A nested session's group is its top-level parent's group, which is the
-    // panel the tree row actually renders in.
     activeAncestors.at(-1) ?? nav.activeSessionID,
     dayStart
   )
   const [openGroup, setOpenGroup] = useState<SessionGroup | null>(activeGroup)
   const lastActiveGroup = useRef<SessionGroup | null>(activeGroup)
-  const [expandedIDs, setExpandedIDs] = useState<ReadonlySet<string>>(() => new Set())
+  const [expandedID, setExpandedID] = useState<string | null>(null)
+  const expandedIDs = useMemo(
+    () => (expandedID ? new Set([expandedID]) : new Set<string>()),
+    [expandedID]
+  )
 
   // The selected session's group is the default-open panel; every other group
   // starts closed. Moving the selection to another group opens that group and
@@ -893,32 +1096,88 @@ function SessionList({
       lastActiveGroup.current = null
       return
     }
-
-    if (activeGroup === lastActiveGroup.current) {
-      return
-    }
-
+    if (activeGroup === lastActiveGroup.current) return
     lastActiveGroup.current = activeGroup
     setOpenGroup(activeGroup)
   }, [activeGroup])
 
-  const toggleSessionTree = useCallback((sessionID: string) => {
-    setExpandedIDs((current) => {
-      const next = new Set(current)
-
-      if (next.has(sessionID)) {
-        next.delete(sessionID)
-      } else {
-        next.add(sessionID)
+  const loadSubsessionPage = useCallback(
+    async (parentID: string, cursor: string | null = null) => {
+      const result = await loadSubsessionRef.current(parentID, cursor)
+      if (!result.ok) return { ok: false as const, error: result.error }
+      return {
+        ok: true as const,
+        hasChildren: result.sessions.length > 0,
+        nextCursor: result.nextCursor,
       }
+    },
+    []
+  )
 
-      return next
-    })
-  }, [])
+  const toggleSessionTree = useCallback(
+    async (sessionID: string, hasLoadedChildren: boolean) => {
+      if (expandedID === sessionID) {
+        setExpandedID(null)
+        return true
+      }
+      if (!hasLoadedChildren) {
+        // An empty subtree still toggles the chevron; there is simply no panel.
+        void loadSubsessionPage(sessionID)
+      }
+      setExpandedID(sessionID)
+      return true
+    },
+    [expandedID, loadSubsessionPage]
+  )
+
+  const treeContext = useMemo(
+    () => ({
+      activeSessionID: highlightedSessionID,
+      runningSessionIDs: deferredRunningSessionIDs,
+      unreadSessionIDs: deferredUnreadSessionIDs,
+      projects: nav.projects,
+      expandedIDs,
+      onToggle: toggleSessionTree,
+      onSelect: handleSelect,
+      onRename: handleRename,
+      onDelete: handleDelete,
+      loadSubsessionPage,
+      shortcuts,
+      onShortcut: updateShortcut,
+    }),
+    [
+      highlightedSessionID,
+      deferredRunningSessionIDs,
+      deferredUnreadSessionIDs,
+      nav.projects,
+      expandedIDs,
+      toggleSessionTree,
+      handleSelect,
+      handleRename,
+      handleDelete,
+      loadSubsessionPage,
+      shortcuts,
+      updateShortcut,
+    ]
+  )
+  const activeTreeContext = useMemo(
+    () => ({ ...treeContext, onArchive: handleArchive }),
+    [treeContext, handleArchive]
+  )
+  const archiveTreeContext = useMemo(
+    () => ({ ...treeContext, archived: true, onUnarchive: handleUnarchive }),
+    [treeContext, handleUnarchive]
+  )
 
   function closeSearch() {
     setSearchOpen(false)
     setQuery("")
+  }
+
+  function loadMoreGroup() {
+    if (nav.sessionsHasMore && !nav.loadingMoreSessions) {
+      void nav.loadMoreSessions()
+    }
   }
 
   return (
@@ -927,7 +1186,7 @@ function SessionList({
         count={
           nav.sessionsStatus === "ready"
             ? searching
-              ? searchResults.length
+              ? searchRows.length
               : nav.sessions.length
             : null
         }
@@ -940,82 +1199,67 @@ function SessionList({
       <div className="px-3">
         <nav aria-label="Sessions" aria-busy={nav.sessionsStatus === "loading"}>
           {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
-          {nav.sessionsStatus === "loading" ? (
+          {nav.sessionsStatus === "loading" && !searching ? (
             <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
               Loading sessions…
             </p>
           ) : null}
-          {nav.sessionsStatus === "error" ? (
+          {nav.sessionsStatus === "error" && !searching ? (
             <div role="alert" className="space-y-2 px-2.5 py-1.5">
               <p className="text-xs break-words text-destructive">
                 {nav.sessionsError ?? "Could not load sessions."}
               </p>
-              <Button
-                variant="outline"
-                onClick={nav.refreshSessions}
-                className="h-11 w-full text-[13px]"
-              >
+              <Button variant="outline" onClick={nav.refreshSessions} className="h-11 w-full text-[13px]">
                 Retry sessions
               </Button>
             </div>
           ) : null}
-          {nav.sessionsStatus === "ready" && nav.sessions.length === 0 ? (
-            <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
-              No sessions yet.
-            </p>
+          {nav.sessionsStatus === "ready" && nav.sessions.length === 0 && !searching ? (
+            <p className="px-2.5 py-2 text-[13px] text-muted-foreground">No sessions yet.</p>
           ) : null}
-          {nav.sessionsStatus === "ready" && searching && nav.sessions.length > 0 ? (
-            <Accordion
-              multiple
-              defaultValue={["search-results"]}
-              className="mt-2 space-y-2 py-1"
-            >
+          {searching ? (
+            <Accordion multiple defaultValue={["search-results"]} className="mt-2 space-y-2 py-1">
               <AccordionSection
                 value="search-results"
                 title="Search results"
-                count={searchResults.length}
+                count={searchStatus === "loading" ? undefined : searchRows.length}
                 contentClassName="p-1"
               >
-                {searchResults.length > 0 ? (
-                  <SessionSearchResults
-                    results={searchResults}
-                    activeSessionID={highlightedSessionID}
-                    runningSessionIDs={nav.runningSessionIDs}
-                    unreadSessionIDs={nav.unreadSessionIDs}
-                    onSelect={handleSelect}
-                  />
-                ) : pendingSearch ? null : (
-                  <p
-                    role="status"
-                    className="px-2.5 py-2 text-[13px] break-words text-muted-foreground"
-                  >
+                {searchError ? (
+                  <p role="alert" className="px-2.5 py-2 text-[13px] break-words text-destructive">{searchError}</p>
+                ) : null}
+                {searchStatus === "loading" && searchRows.length === 0 ? (
+                  <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">Searching sessions…</p>
+                ) : null}
+                {searchStatus === "ready" && searchTreeRows.length === 0 ? (
+                  <p role="status" className="px-2.5 py-2 text-[13px] break-words text-muted-foreground">
                     No sessions match “{searchQuery}”.
                   </p>
-                )}
+                ) : null}
+                {searchTreeRows.length > 0 ? (
+                  <PagedSessionTree
+                    key={`search-${deferredQuery}`}
+                    rows={searchTreeRows}
+                    context={activeTreeContext}
+                    label="Session search results"
+                    hasMore={searchCursor !== null}
+                    loading={searchStatus === "loading"}
+                    onLoadMore={() => void loadMoreSearch()}
+                  />
+                ) : null}
               </AccordionSection>
             </Accordion>
           ) : null}
           {!searching && pinnedRows.length > 0 ? (
             <Accordion defaultValue={["pinned"]} className="space-y-2 py-1">
-              <AccordionSection
-                value="pinned"
-                title="Pinned sessions"
-                count={pinnedRows.length}
-                contentClassName="p-1"
-              >
-                <SessionTree
+              <AccordionSection value="pinned" title="Pinned sessions" count={pinnedRows.length} contentClassName="p-1">
+                <PagedSessionTree
                   rows={pinnedRows}
-                  activeSessionID={highlightedSessionID}
-                  runningSessionIDs={deferredRunningSessionIDs}
-                  unreadSessionIDs={deferredUnreadSessionIDs}
-                  projects={nav.projects}
-                  expandedIDs={expandedIDs}
-                  onToggle={toggleSessionTree}
-                  onSelect={handleSelect}
-                  onRename={handleRename}
-                  onDelete={handleDelete}
-                  shortcuts={shortcuts}
-                  onShortcut={updateShortcut}
+                  context={activeTreeContext}
+                  label="Pinned sessions"
+                  hasMore={nav.sessionsHasMore}
+                  loading={nav.loadingMoreSessions}
+                  onLoadMore={loadMoreGroup}
                 />
               </AccordionSection>
             </Accordion>
@@ -1036,11 +1280,7 @@ function SessionList({
             >
               {SESSION_GROUPS.map((label) => {
                 const rows = groups[label]
-
-                if (!rows.length) {
-                  return null
-                }
-
+                if (!rows.length && label !== "Today") return null
                 return (
                   <AccordionSection
                     key={label}
@@ -1049,20 +1289,20 @@ function SessionList({
                     count={rows.length}
                     contentClassName="p-1"
                   >
-                    <SessionTree
-                      rows={rows}
-                      activeSessionID={highlightedSessionID}
-                      runningSessionIDs={deferredRunningSessionIDs}
-                      unreadSessionIDs={deferredUnreadSessionIDs}
-                      projects={nav.projects}
-                      expandedIDs={expandedIDs}
-                      onToggle={toggleSessionTree}
-                      onSelect={handleSelect}
-                      onRename={handleRename}
-                      onDelete={handleDelete}
-                      shortcuts={shortcuts}
-                      onShortcut={updateShortcut}
-                    />
+                    {rows.length > 0 ? (
+                      <PagedSessionTree
+                        rows={rows}
+                        context={activeTreeContext}
+                        label={`${label} sessions`}
+                        hasMore={nav.sessionsHasMore}
+                        loading={nav.loadingMoreSessions}
+                        onLoadMore={loadMoreGroup}
+                      />
+                    ) : (
+                      <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
+                        No sessions today.
+                      </p>
+                    )}
                   </AccordionSection>
                 )
               })}
@@ -1070,64 +1310,45 @@ function SessionList({
           ) : null}
           {!searching ? (
             <Accordion
-              key="archived"
-              value={archivedOpen ? ["archived"] : []}
+              key="archive"
+              value={archivedOpen ? ["archive"] : []}
               onValueChange={(value) => {
-                const next = value.includes("archived")
+                const next = value.includes("archive")
                 setArchivedOpen(next)
-                if (next) void nav.loadArchivedSessions()
+                if (next && nav.archivedStatus === "idle") void nav.loadArchivedSessions()
               }}
               className="mt-2 space-y-2 pb-3"
             >
               <AccordionSection
-                value="archived"
-                title="Archived"
+                value="archive"
+                title="Archive"
                 count={nav.archivedStatus === "loading" ? undefined : nav.archivedSessions.length}
                 contentClassName="p-1"
               >
                 {nav.archivedStatus === "error" ? (
                   <div role="alert" className="space-y-1 px-2 py-1 text-xs text-destructive">
                     <p className="break-words">{nav.archivedError ?? "Could not load archived sessions."}</p>
-                    <Button variant="outline" className="h-11 px-3 text-xs" onClick={() => void nav.loadArchivedSessions()}>
-                      Retry
-                    </Button>
+                    <Button variant="outline" className="h-11 px-3 text-xs" onClick={() => void nav.loadArchivedSessions()}>Retry</Button>
                   </div>
                 ) : null}
                 {nav.archivedStatus === "loading" && nav.archivedSessions.length === 0 ? (
-                  <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
-                    Loading archived sessions…
-                  </p>
+                  <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">Loading archived sessions…</p>
                 ) : null}
                 {nav.archivedSessions.length === 0 && (nav.archivedStatus === "ready" || nav.archivedStatus === "idle") ? (
-                  <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
-                    No archived sessions in this scope.
-                  </p>
+                  <p className="px-2.5 py-2 text-[13px] text-muted-foreground">No archived sessions in this scope.</p>
                 ) : null}
-                <ul className="space-y-0.5" aria-label="Archived sessions">
-                  {nav.archivedSessions.map((session) => (
-                    <li key={session.id} className="flex items-center gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="h-11 min-w-0 flex-1 justify-start px-2.5 text-start font-normal"
-                        title={session.id}
-                        onClick={() => void nav.openSessionByID(session.id)}
-                      >
-                        <span dir="auto" className="min-w-0 truncate text-[13px]">
-                          {session.title?.trim() || session.id}
-                        </span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-11 shrink-0 px-2 text-[11px]"
-                        onClick={() => void nav.unarchiveSession(session.id)}
-                      >
-                        Unarchive
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
+                {archivedRows.length > 0 ? (
+                  <PagedSessionTree
+                    rows={archivedRows}
+                    context={archiveTreeContext}
+                    label="Archived sessions"
+                    hasMore={nav.archivedHasMore}
+                    loading={nav.loadingMoreArchived}
+                    onLoadMore={() => {
+                      if (nav.archivedHasMore && !nav.loadingMoreArchived) void nav.loadMoreArchivedSessions()
+                    }}
+                  />
+                ) : null}
               </AccordionSection>
             </Accordion>
           ) : null}
@@ -1247,6 +1468,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   return (
     <aside
       data-sidebar="sessions"
+      aria-label="Sessions sidebar"
       style={{ backgroundColor: "var(--sidebar)" }}
       className={cn(
         "hidden h-svh shrink-0 flex-col border-e border-sidebar-border bg-sidebar transition-[width] duration-200 motion-reduce:transition-none md:flex",
@@ -1269,9 +1491,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                 />
               }
             >
-              <PanelLeftOpenIcon aria-hidden="true" className="size-5" />
+              <PanelLeftOpenIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
             </TooltipTrigger>
-            <TooltipContent side="right">Expand sidebar</TooltipContent>
+            <TooltipContent side="inline-end">Expand sidebar</TooltipContent>
           </Tooltip>
         ) : (
           <>
@@ -1283,7 +1505,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                 <path d="M12 10l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
-            <span className="text-sm font-semibold tracking-tight">OpenUI</span>
+            <span className="text-sm font-semibold tracking-tight">opencode-ui</span>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1298,9 +1520,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                   />
                 }
               >
-                <PanelLeftCloseIcon aria-hidden="true" className="size-5" />
+                <PanelLeftCloseIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
               </TooltipTrigger>
-              <TooltipContent side="right">Collapse sidebar</TooltipContent>
+              <TooltipContent side="inline-end">Collapse sidebar</TooltipContent>
             </Tooltip>
           </>
         )}
@@ -1324,7 +1546,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
             >
               <GitBranchIcon aria-hidden="true" className="size-4" />
             </TooltipTrigger>
-            <TooltipContent side="right">Project worktrees</TooltipContent>
+            <TooltipContent side="inline-end">Project worktrees</TooltipContent>
           </Tooltip>
         ) : (
           <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
@@ -1403,7 +1625,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         showCloseButton={false}
         className="w-[350px]! max-w-[92vw] gap-0 border-e-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
       >
-        <SheetHeader className="flex-row items-start justify-between px-5 pt-5 pb-3">
+        <SheetHeader className="flex-row items-start justify-between px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-3">
           <div className="space-y-1">
             <SheetTitle className="text-[22px] font-semibold tracking-tight">
               Sessions
@@ -1440,7 +1662,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
             }}
           />
         </ScrollArea>
-        <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4">
+        <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <SettingsTriggerButton
             onClick={() => {
               pendingSettings.current = true

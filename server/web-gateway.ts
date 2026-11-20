@@ -11,12 +11,16 @@ type GatewayOptions = {
   authGate?: (request: Request) => Promise<AuthGateDecision>
   /** Auth endpoint handler mounted at /api/ui/auth/*. */
   auth?: Handler
+  /** Engine connections handler mounted at /api/ui/connections*. */
+  connections?: Handler
   /** Notes HTTP API mounted at /api/ui/notes/* (including the change stream). */
   notes?: Handler
   /** Plugins HTTP API mounted at /api/ui/plugins*. */
   plugins?: Handler
   /** Shared session pins and labels mounted at /api/ui/session-shortcuts. */
   sessionShortcuts?: Handler
+  /** Read-only UI host environment mounted at /api/ui/environment. */
+  environment?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler
@@ -47,10 +51,18 @@ export function createWebGateway(options: GatewayOptions) {
       }
     }
     if (isUpgrade) {
-      return options.bridge.upgrade(request, server)
+      const upgraded = await options.bridge.upgrade(request, server)
+      return upgraded ? secureWebResponse(request, upgraded) : undefined
     }
-    // Engine events are long-lived and may legitimately be quiet indefinitely.
-    if (path === "/api/event" || path === "/api/ui/notes/events") server.timeout(request, 0)
+    // Engine events and artifact download streams may stay open indefinitely.
+    if (
+      path === "/api/event" ||
+      path === "/api/ui/notes/events" ||
+      path.startsWith("/api/ui/artifacts/") ||
+      path.startsWith("/api/ui/project-artifacts/")
+    ) {
+      server.timeout(request, 0)
+    }
     return dispatch(request, server.requestIP?.(request)?.address)
   }
 }

@@ -24,7 +24,6 @@ import {
   XIcon,
 } from "lucide-react"
 
-import { Dictation } from "@/components/dictation"
 import { BtwDialog } from "@/components/btw-dialog"
 import { FilesPanel } from "@/components/files-panel"
 import { TerminalDialog } from "@/components/terminal-dialog"
@@ -111,9 +110,7 @@ import {
   stashPrompt,
   type StashEntry,
 } from "@/lib/prompt-recall"
-import { useKeybindings } from "@/lib/use-keybindings"
 import { copyableAssistantText } from "@/lib/session-commands"
-import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
 import { copyText } from "@/lib/clipboard"
 import { Markdown } from "@/components/markdown"
@@ -340,7 +337,6 @@ export function Composer({
   const [storageWarning, setStorageWarning] = useState(false)
   const [storageConflictKey, setStorageConflictKey] = useState<string | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [dictationError, setDictationError] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [attaching, setAttaching] = useState(false)
   const [skillsBySession, setSkillsBySession] = useState<
@@ -358,6 +354,15 @@ export function Composer({
     tone: "status" | "error"
     text: string
   } | null>(null)
+  // FYI command feedback must never become a permanent status line.
+  useEffect(() => {
+    if (!commandFeedback) return
+    const timer = window.setTimeout(
+      () => setCommandFeedback(null),
+      commandFeedback.tone === "error" ? 9_000 : 6_000
+    )
+    return () => window.clearTimeout(timer)
+  }, [commandFeedback])
   const [executingCommand, setExecutingCommand] = useState<Record<string, string>>({})
   const [sessionDialog, setSessionDialog] =
     useState<SessionCommandDialogKind | null>(null)
@@ -416,7 +421,6 @@ export function Composer({
 
   const activeSession = nav.activeSession
   const draftKey = nav.activeSessionID ?? "__none__"
-  const { bindings } = useKeybindings()
   const undo = useUndoToast()
   const [recallIndex, setRecallIndex] = useState(-1)
   const [citationsBySession, setCitationsBySession] = useState<
@@ -439,7 +443,6 @@ export function Composer({
     setError(null)
     setInterruptError(null)
     setAttachmentError(null)
-    setDictationError(null)
     setSettingsError(null)
     setCommandFeedback(null)
     setRecallIndex(-1)
@@ -524,48 +527,60 @@ export function Composer({
     })
   }
 
-  useEffect(() => {
-    const listener = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionID: string; path: string }>).detail
-      if (!composingRef.current.isComposing(draftKey) && detail?.sessionID === nav.activeSessionID && typeof detail.path === "string") insertReference(detail.path)
+  const latestWindowHandlersRef = useRef({
+    draftKey,
+    activeSessionID: nav.activeSessionID,
+    insertReference,
+    setDraft,
+    editor,
+  })
+  useLayoutEffect(() => {
+    latestWindowHandlersRef.current = {
+      draftKey,
+      activeSessionID: nav.activeSessionID,
+      insertReference,
+      setDraft,
+      editor,
     }
-    window.addEventListener("composer-insert-project-reference", listener)
-    return () => window.removeEventListener("composer-insert-project-reference", listener)
   })
 
-  // Citations arrive as attributed plain text plus a removable chip. The text
-  // itself is written into the draft so drafts and stashes keep it.
   useEffect(() => {
-    const listener = (event: Event) => {
+    const onInsertReference = (event: Event) => {
+      const { draftKey: key, activeSessionID, insertReference: insert } = latestWindowHandlersRef.current
+      const detail = (event as CustomEvent<{ sessionID: string; path: string }>).detail
+      if (!composingRef.current.isComposing(key) && detail?.sessionID === activeSessionID && typeof detail.path === "string") insert(detail.path)
+    }
+    const onCitation = (event: Event) => {
+      const { draftKey: key, activeSessionID, setDraft: update, editor: currentEditor } = latestWindowHandlersRef.current
       const detail = (event as CustomEvent<{ sessionID: string | null; text: string; quote: string }>).detail
-      if (!detail || detail.sessionID !== nav.activeSessionID || typeof detail.text !== "string") return
-      const current = draftsRef.current[draftKey] ?? ""
+      if (!detail || detail.sessionID !== activeSessionID || typeof detail.text !== "string") return
+      const current = draftsRef.current[key] ?? ""
       const insertion = `${current && !current.endsWith("\n") ? "\n\n" : ""}${detail.text}`
-      setDraft(current + insertion)
+      update(current + insertion)
       citationSequence.current += 1
       const id = `citation-${citationSequence.current}`
       setCitationsBySession((state) => ({
         ...state,
-        [draftKey]: [...(state[draftKey] ?? []), { id, text: detail.text, quote: detail.quote }],
+        [key]: [...(state[key] ?? []), { id, text: detail.text, quote: detail.quote }],
       }))
-      requestAnimationFrame(() => editor.focus())
+      requestAnimationFrame(() => currentEditor.focus())
     }
-    window.addEventListener("composer-citation", listener)
-    return () => window.removeEventListener("composer-citation", listener)
-  })
-
-  // Sending a message is a local action; a successful take-back or restored
-  // prompt arrives here so the composer can keep drafts honest.
-  useEffect(() => {
-    const listener = (event: Event) => {
+    const onRestoreText = (event: Event) => {
+      const { activeSessionID, setDraft: update, editor: currentEditor } = latestWindowHandlersRef.current
       const detail = (event as CustomEvent<{ sessionID: string | null; text: string }>).detail
-      if (!detail || detail.sessionID !== nav.activeSessionID || typeof detail.text !== "string") return
-      setDraft(detail.text)
-      requestAnimationFrame(() => editor.focus())
+      if (!detail || detail.sessionID !== activeSessionID || typeof detail.text !== "string") return
+      update(detail.text)
+      requestAnimationFrame(() => currentEditor.focus())
     }
-    window.addEventListener("composer-restore-text", listener)
-    return () => window.removeEventListener("composer-restore-text", listener)
-  })
+    window.addEventListener("composer-insert-project-reference", onInsertReference)
+    window.addEventListener("composer-citation", onCitation)
+    window.addEventListener("composer-restore-text", onRestoreText)
+    return () => {
+      window.removeEventListener("composer-insert-project-reference", onInsertReference)
+      window.removeEventListener("composer-citation", onCitation)
+      window.removeEventListener("composer-restore-text", onRestoreText)
+    }
+  }, [])
 
   // Taking a queued prompt back cancels the native inbox item and restores its
   // exact text and attachments; it must re-enter the queue at the end.
@@ -750,7 +765,6 @@ export function Composer({
   const visibleError =
     error ??
     interruptError ??
-    dictationError ??
     attachmentError ??
     settingsError ??
     (commandFeedback?.tone === "error" ? commandFeedback.text : null)
@@ -1684,25 +1698,6 @@ export function Composer({
     }
   }
 
-  /**
-   * Single entry point for explicit submits. A leading-slash draft is always
-   * dispatched as a command; an unknown name stays an explicit error with a
-   * Send-as-literal action instead of becoming a prompt.
-   */
-  function submitActiveDraft(
-    delivery: "steer" | "queue" | null = responding ? "steer" : null
-  ) {
-    applySubmitDecision(
-      resolveSlashSubmit({
-        draft,
-        isComposing: composingRef.current.isComposing(draftKey),
-        isTouch: touchInputRef.current,
-        pickerOpen: pickerQuery !== null,
-      }),
-      delivery
-    )
-  }
-
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     applySubmitDecision(
@@ -1719,25 +1714,6 @@ export function Composer({
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const native = event.nativeEvent
     if (composingRef.current.isComposing(draftKey) || native.isComposing || native.keyCode === 229) {
-      return
-    }
-
-    const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
-    const stashBinding = bindings.find((binding) => binding.command === "composer.stash")
-    const backgroundBinding = bindings.find(
-      (binding) => binding.command === "composer.backgroundSend"
-    )
-    if (stashBinding && matchesKeybinding(native, stashBinding, platform)) {
-      event.preventDefault()
-      handleStash()
-      return
-    }
-    if (backgroundBinding && matchesKeybinding(native, backgroundBinding, platform)) {
-      event.preventDefault()
-      if (canSend) {
-        submitActiveDraft(responding ? "steer" : null)
-        focusComposer()
-      }
       return
     }
 
@@ -2179,20 +2155,6 @@ export function Composer({
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
-
-          <Dictation
-            key={draftKey}
-            enabled={Boolean(activeSession)}
-            onError={setDictationError}
-            onText={(text) => {
-              if (activeDraftKeyRef.current !== draftKey) return
-              if (composingRef.current.isComposing(draftKey)) {
-                setError("Dictation text was not inserted during text composition. Please try again.")
-                return
-              }
-              editor.insertPlainText(text)
-            }}
-          />
 
           <div className="min-w-0 flex-1" aria-hidden="true" />
 

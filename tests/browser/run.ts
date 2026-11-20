@@ -10,7 +10,6 @@
  * /tmp/opencode.
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import {
   chromium,
@@ -20,6 +19,7 @@ import {
 } from "playwright-core"
 
 import { buildFixture } from "./build"
+import { findChromiumExecutable } from "./chromium"
 import { parseSessionShortcuts, updateSessionShortcut } from "@/lib/session-shortcuts"
 
 const repoRoot = resolve(import.meta.dir, "../..")
@@ -563,6 +563,9 @@ const server = Bun.serve({
     if (pathname === "/api/ui/auth/status") {
       return json({ configured: true, required: true, authenticated: true })
     }
+    if (pathname === "/api/ui/environment") {
+      return json({ homeDirectory: "/home/synthetic" })
+    }
     if (pathname === "/api/location") {
       const requested =
         url.searchParams.get("location[directory]") ??
@@ -699,32 +702,13 @@ const server = Bun.serve({
 const base = `http://127.0.0.1:${server.port}`
 await mkdir(shotDir, { recursive: true })
 
-function findExecutable() {
-  const candidates = [
-    process.env.OPENCODE_UI_CHROMIUM,
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
-    ),
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1247/chrome-linux64/chrome"
-    ),
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1248/chrome-linux/chrome"
-    ),
-  ].filter((entry): entry is string => Boolean(entry))
-  return candidates.find((entry) => existsSync(entry)) ?? null
-}
-
-const executablePath = findExecutable()
+const executablePath = findChromiumExecutable()
 let browser: Browser | null = null
 let blocker: string | null = null
 
 if (!executablePath) {
   blocker =
-    "No installed Chromium executable was found under ~/.cache/ms-playwright; no browser tests ran."
+    "No installed Chromium executable was found under ~/.cache/ms-playwright (set OPENCODE_UI_CHROMIUM to override); no browser tests ran."
 } else {
   browser = await chromium.launch({
     headless: true,
@@ -971,7 +955,7 @@ if (browser) {
         const sidebarVisible = await page.locator("aside").isVisible()
         check("desktop sidebar is visible", sidebarVisible)
 
-        const alphaRow = page.locator('button[title="s-alpha"]')
+        const alphaRow = page.locator('button[data-session-id="s-alpha"]')
         const alphaBox = await alphaRow.boundingBox()
         check(
           "session row is at least 44px tall",
@@ -980,7 +964,7 @@ if (browser) {
         )
 
         const expand = page.getByRole("button", {
-          name: "Show 1 loaded subagent session for Alpha",
+          name: "Show subagents for Alpha",
         })
         check("subagent expand control is visible", await expand.isVisible())
         check(
@@ -997,17 +981,17 @@ if (browser) {
         await expand.click()
         check(
           "subagent row is shown after expansion",
-          await page.locator('button[title="s-beta"]').isVisible()
+          await page.locator('button[data-session-id="s-beta"]').isVisible()
         )
         const collapse = page.getByRole("button", {
-          name: "Hide 1 loaded subagent session for Alpha",
+          name: "Hide subagents for Alpha",
         })
         check(
           "subagent expand control reports expanded",
           (await collapse.getAttribute("aria-expanded")) === "true"
         )
 
-        await page.locator('button[title="s-beta"]').click()
+        await page.locator('button[data-session-id="s-beta"]').click()
         await page.getByText("Active: s-beta").waitFor({ state: "visible" })
         const callsAfterSelect = await qaCalls(page)
         check(
@@ -1025,7 +1009,7 @@ if (browser) {
             .getByRole("button", { name: "Return to parent session" })
             .count()) === 0
         )
-        await page.locator('button[title="s-alpha"]').click()
+        await page.locator('button[data-session-id="s-alpha"]').click()
         await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
         check(
           "pinned group is hidden when no session is pinned",
@@ -1076,23 +1060,23 @@ if (browser) {
         )
         check(
           "pinned sessions default expanded and still show in their date group",
-          (await page.locator('button[title="s-alpha"]').count()) === 2,
-          `rows=${await page.locator('button[title="s-alpha"]').count()}`
+          (await page.locator('button[data-session-id="s-alpha"]').count()) === 2,
+          `rows=${await page.locator('button[data-session-id="s-alpha"]').count()}`
         )
         await pinnedGroup.click()
         check(
           "collapsing the pinned group hides only its rows",
-          (await page.locator('button[title="s-alpha"]').count()) === 1,
-          `rows=${await page.locator('button[title="s-alpha"]').count()}`
+          (await page.locator('button[data-session-id="s-alpha"]').count()) === 1,
+          `rows=${await page.locator('button[data-session-id="s-alpha"]').count()}`
         )
         await pinnedGroup.click()
 
-        const yesterday = page.getByRole("button", { name: "Yesterday" })
-        await yesterday.waitFor({ state: "visible" })
-        await yesterday.click()
+        const previous = page.getByRole("button", { name: "Previous" })
+        await previous.waitFor({ state: "visible" })
+        await previous.click()
         check(
           "date grouping keeps older sessions reachable",
-          await page.locator('button[title="s-gamma"]').isVisible()
+          await page.locator('button[data-session-id="s-gamma"]').isVisible()
         )
 
         const sidebar = page.locator('[data-sidebar="sessions"]')
@@ -1105,7 +1089,7 @@ if (browser) {
         check(
           "collapsing the desktop sidebar leaves an icon rail",
           (collapsedBox?.width ?? Number.POSITIVE_INFINITY) < 100 &&
-            (await page.locator('button[title="s-alpha"]').count()) === 0
+            (await page.locator('button[data-session-id="s-alpha"]').count()) === 0
         )
         await page.getByRole("button", { name: "Expand sidebar" }).click()
         await page.waitForFunction(() => {
@@ -1114,7 +1098,7 @@ if (browser) {
         })
         check(
           "expanding the desktop sidebar restores the session list",
-          await page.locator('button[title="s-alpha"]').first().isVisible()
+          await page.locator('button[data-session-id="s-alpha"]').first().isVisible()
         )
 
         await page.getByRole("button", { name: /^Pinned sessions/ }).click()
@@ -1343,7 +1327,7 @@ if (browser) {
           ),
           JSON.stringify(sheetBox)
         )
-        const mobileAlpha = sessionsSheet.locator('button[title="s-alpha"]')
+        const mobileAlpha = sessionsSheet.locator('button[data-session-id="s-alpha"]')
         const mobileRowBox = await mobileAlpha.boundingBox()
         check(
           "mobile session row remains a 44px touch target",
@@ -2329,6 +2313,48 @@ if (browser) {
         } finally {
           await opened.context.close()
         }
+      }
+    }
+  )
+
+  await run(
+    "desktop inspector width can be dragged and persists",
+    async ({ check }) => {
+      const opened = await openPage({ width: 1280, height: 900 }, "inspector")
+      const page = opened.page
+      try {
+        const panel = page.locator('[data-inspector-mode="full"]')
+        const handle = page.locator("[data-inspector-resize]")
+        await handle.waitFor({ state: "visible" })
+        const before = await panel.evaluate(
+          (element) => element.getBoundingClientRect().width
+        )
+        const box = await handle.boundingBox()
+        if (!box) throw new Error("resize handle had no bounding box")
+        const x = box.x + box.width / 2
+        const y = box.y + box.height / 2
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x - 70, y, { steps: 5 })
+        await page.mouse.up()
+        const after = await panel.evaluate(
+          (element) => element.getBoundingClientRect().width
+        )
+        check(
+          "dragging the separator narrows the inspector",
+          after < before - 40,
+          `before=${before} after=${after}`
+        )
+        const stored = await page.evaluate(() =>
+          localStorage.getItem("opencode-ui:desktop-inspector-width:v1")
+        )
+        check(
+          "the resized width is persisted",
+          stored !== null && Math.abs(Number(stored) - after) < 2,
+          `stored=${stored} after=${after}`
+        )
+      } finally {
+        await opened.context.close()
       }
     }
   )
@@ -3459,7 +3485,7 @@ if (browser) {
         const count = await page
           .locator("[data-notes-status-filters]")
           .evaluate((row) => {
-            const live = row.parentElement?.querySelector(
+            const live = row.parentElement?.parentElement?.querySelector(
               '[aria-live="polite"]'
             )
             return live?.textContent?.trim() ?? ""
@@ -4003,6 +4029,94 @@ if (browser) {
         await page
           .getByRole("button", { name: "Open Release plan" })
           .waitFor({ state: "visible" })
+        const edges = await page.evaluate(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          if (!row) return null
+          const first = row.querySelector("button")
+          return {
+            mask: getComputedStyle(row).maskImage,
+            rowLeft: row.getBoundingClientRect().left,
+            firstLeft: first?.getBoundingClientRect().left ?? 0,
+            rightButton: Boolean(
+              row.parentElement?.querySelector(
+                '[aria-label="Scroll status filters right"]'
+              )
+            ),
+          }
+        })
+        check(
+          "the All pill is never masked away at the start",
+          Boolean(
+            edges &&
+              edges.mask === "none" &&
+              edges.firstLeft >= edges.rowLeft - 1
+          ),
+          JSON.stringify(edges)
+        )
+        check(
+          "an overflowing filter row offers a right scroll button",
+          Boolean(edges?.rightButton),
+          JSON.stringify(edges)
+        )
+        await page
+          .getByRole("button", { name: "Scroll status filters right" })
+          .click()
+        await page.waitForFunction(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          return Boolean(row && row.scrollLeft > 0)
+        })
+        check("the arrow button scrolls the filter row", true)
+        await page.evaluate(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          if (row) row.scrollLeft = row.scrollWidth
+        })
+        await page.waitForFunction(
+          () =>
+            !document.querySelector(
+              '[aria-label="Scroll status filters right"]'
+            ) &&
+            Boolean(
+              document.querySelector('[aria-label="Scroll status filters left"]')
+            )
+        )
+        check("the right arrow hides at maximum scroll", true)
+        const pillReveal = await page.evaluate(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          if (!row) return null
+          row.scrollLeft = 0
+          const pill = row.querySelectorAll("button")[7]
+          pill.click()
+          return { before: 0, label: pill.textContent?.trim() ?? "" }
+        })
+        await page.waitForFunction(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          if (!row) return false
+          const pill = row.querySelectorAll("button")[7]
+          const view = row.getBoundingClientRect()
+          const box = pill.getBoundingClientRect()
+          return row.scrollLeft > 0 && box.left >= view.left && box.right <= view.right
+        })
+        check(
+          "clicking the clipped last filter scrolls it fully into view",
+          Boolean(pillReveal),
+          JSON.stringify(pillReveal)
+        )
+        await page.evaluate(() => {
+          const row = document.querySelector<HTMLElement>(
+            "[data-notes-status-filters]"
+          )
+          if (row) row.scrollLeft = 0
+        })
         const wheel = await page.evaluate(() => {
           const row = document.querySelector<HTMLElement>(
             "[data-notes-status-filters]"
@@ -4512,7 +4626,12 @@ for (const result of results) {
   if (result.consoleErrors.length)
     console.log(`  consoleErrors: ${result.consoleErrors.join(" | ")}`)
 }
+if (blocker) {
+  console.error(`\nBLOCKED: ${blocker}`)
+}
 console.log(
   `\n${passed} passed, ${failed} failed, ${blocked} blocked. Results: ${resultPath}`
 )
-if (failed > 0 || blocked > 0) process.exitCode = 1
+if (failed > 0 || blocked > 0 || Boolean(blocker) || results.length === 0) {
+  process.exitCode = 1
+}

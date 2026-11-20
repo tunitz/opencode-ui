@@ -28,6 +28,7 @@ import { copyText } from "@/lib/clipboard"
 import { fixedDesktopSettingsStyle, fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { errorMessage, openCode } from "@/lib/opencode"
+import { cn } from "@/lib/utils"
 import type {
   PromptSkillAttachment,
   SessionInfo,
@@ -80,6 +81,8 @@ export function CommandDialogShell({
   footer,
   children,
   initialFocusContent = false,
+  contentClassName,
+  bodyClassName,
 }: {
   title: string
   description: string
@@ -90,6 +93,8 @@ export function CommandDialogShell({
   /** Focus the scrollable content instead of the first control (e.g. a text
    *  input that would open its options list and the mobile keyboard). */
   initialFocusContent?: boolean
+  contentClassName?: string
+  bodyClassName?: string
 }) {
   const isDesktop = useIsDesktop()
   const contentRef = useRef<HTMLDivElement | null>(null)
@@ -100,7 +105,7 @@ export function CommandDialogShell({
         {isDesktop ? <DialogTitle className="text-[17px] font-semibold tracking-tight">{title}</DialogTitle> : <SheetTitle className="text-[17px] font-semibold tracking-tight">{title}</SheetTitle>}
         {isDesktop ? <DialogDescription className="text-[12px]">{description}</DialogDescription> : <SheetDescription className="text-[12px]">{description}</SheetDescription>}
       </DialogHeader>
-      <div ref={contentRef} tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none">{children}</div>
+      <div ref={contentRef} tabIndex={-1} className={cn("min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none", bodyClassName)}>{children}</div>
       <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {footer}
       </DialogFooter>
@@ -116,7 +121,10 @@ export function CommandDialogShell({
     >
       <DialogContent
         showCloseButton={!pending}
-        className="flex w-[min(44rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0 sm:max-w-none"
+        className={cn(
+          "flex w-[min(44rem,92vw)] flex-col gap-0 overflow-x-hidden overflow-y-auto p-0 sm:max-w-none",
+          contentClassName
+        )}
         style={fixedDesktopSettingsStyle()}
         {...(initialFocus ? { initialFocus } : {})}
       >
@@ -125,7 +133,7 @@ export function CommandDialogShell({
     </Dialog>
   ) : (
     <Sheet open onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" showCloseButton={!pending} className="gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl p-0" style={fixedMobileDrawerStyle()} {...(initialFocus ? { initialFocus } : {})}>
+      <SheetContent side="bottom" showCloseButton={!pending} className={cn("gap-0 overflow-x-hidden overflow-y-auto rounded-t-xl p-0", contentClassName)} style={fixedMobileDrawerStyle()} {...(initialFocus ? { initialFocus } : {})}>
         {content}
       </SheetContent>
     </Sheet>

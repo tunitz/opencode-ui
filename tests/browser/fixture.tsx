@@ -157,6 +157,8 @@ function useSyntheticNav(initialInspectorOpen = false) {
     sessions,
     sessionsStatus: "ready",
     sessionsError: null,
+    sessionsHasMore: false,
+    loadingMoreSessions: false,
     runningSessionIDs: { "s-beta": true },
     unreadSessionIDs: { "s-gamma": true },
     activeSessionID,
@@ -191,11 +193,15 @@ function useSyntheticNav(initialInspectorOpen = false) {
     archivedSessions: [] as SessionInfo[],
     archivedStatus: "ready" as const,
     archivedError: null,
+    archivedHasMore: false,
+    loadingMoreArchived: false,
     inbox: [],
     inboxStatus: "ready" as const,
     inboxError: null,
     inboxBusy: {},
     composerRestore: null,
+    compactionNotice: null,
+    clearCompactionNotice: () => undefined,
     selectProject: async (projectID: string) => {
       log("selectProject", projectID)
       setScope("project")
@@ -220,6 +226,19 @@ function useSyntheticNav(initialInspectorOpen = false) {
     retryConnection: () => log("retryConnection"),
     retryProjects: () => log("retryProjects"),
     refreshSessions: () => log("refreshSessions"),
+    loadMoreSessions: async () => {
+      log("loadMoreSessions")
+      return null
+    },
+    loadSubsessionPage: async (parentID: string, cursor?: string | null) => {
+      log("loadSubsessionPage", `${parentID}:${cursor ?? "first"}`)
+      return { ok: true as const, sessions: [], nextCursor: null }
+    },
+    loadPinnedSessions: async () => [],
+    loadMoreArchivedSessions: async () => {
+      log("loadMoreArchivedSessions")
+      return null
+    },
     dismissStartupNotice: () => log("dismissStartupNotice"),
     createSession: async () => {
       log("createSession")
@@ -272,6 +291,7 @@ function useSyntheticNav(initialInspectorOpen = false) {
     loadSessionContext: async () => null,
     loadSessionStats: async () => null,
     searchSessions: async () => ({ ok: true, sessions: [] }),
+    searchSessionPage: async () => ({ ok: true as const, sessions: [], nextCursor: null }),
     closeInspector: () => {
       log("closeInspector")
       setInspectorOpen(false)

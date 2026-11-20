@@ -28,7 +28,6 @@ describe("flag parsing", () => {
       "--host=0.0.0.0",
       "--port", "1234",
       "--engine-url=http://engine.test:8090",
-      "--service-file", "/tmp/service.json",
       "--allowed-host", "local.test",
       "--allowed-host=other.test",
       "--allowed-origin", "http://local.test:1234",
@@ -41,7 +40,6 @@ describe("flag parsing", () => {
     expect(flags.host).toBe("0.0.0.0")
     expect(flags.port).toBe("1234")
     expect(flags.engineUrl).toBe("http://engine.test:8090")
-    expect(flags.serviceFile).toBe("/tmp/service.json")
     expect(flags.allowedHosts).toEqual(["local.test", "other.test"])
     expect(flags.allowedOrigins).toEqual(["http://local.test:1234", "http://other.test:1234"])
     expect(flags.artifactRoots).toEqual(["/tmp/one", "/tmp/two"])
@@ -57,6 +55,7 @@ describe("flag parsing", () => {
 
   test("rejects unknown flags, positionals, repeated scalars and missing values", () => {
     expect(failure(["--token", "secret"])?.message).toContain("Unknown option")
+    expect(failure(["--service-file", "/tmp/registration.json"])?.message).toContain("Unknown option")
     expect(failure(["positional"])?.message).toContain("Unexpected positional argument")
     expect(failure(["--host", "a.test", "--host", "b.test"])?.message).toContain("Do not repeat --host")
     expect(failure(["--port"])?.message).toContain("--port requires a nonempty value")
@@ -89,14 +88,12 @@ describe("direct-server option mapping", () => {
     const options = serverOptionsFromFlags(parseCliFlags([
       "--host", "0.0.0.0", "--port", "1234",
       "--engine-url", "http://engine.test:8090",
-      "--service-file", "/tmp/service.json",
       "--artifact-root", "/tmp/artifacts",
     ]))
     expect(options).toEqual({
       hostname: "0.0.0.0",
       port: 1234,
       engineUrl: "http://engine.test:8090",
-      serviceFile: "/tmp/service.json",
       artifactRoots: ["/tmp/artifacts"],
     })
   })
@@ -171,10 +168,11 @@ describe("direct-server entry", () => {
     expect(rejected.stderr.toString()).toContain("Unknown option")
   })
 
-  test("refactored CLI keeps its help and package defaults", () => {
+  test("CLI documents engine URL as a prefill rather than a default connection", () => {
     const help = Bun.spawnSync(["bun", "bin/opencode-ui.ts", "--help"], { cwd: repoRoot })
     expect(help.exitCode).toBe(0)
-    expect(help.stdout.toString()).toContain("http://127.0.0.1:4096")
+    expect(help.stdout.toString()).toContain("Prefill the first connection's engine URL")
+    expect(help.stdout.toString()).not.toContain("--service-file")
     expect(help.stdout.toString()).toContain("Usage: opencode-ui")
     const version = Bun.spawnSync(["bun", "bin/opencode-ui.ts", "--version"], { cwd: repoRoot })
     expect(version.exitCode).toBe(0)

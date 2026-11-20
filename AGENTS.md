@@ -27,11 +27,10 @@ established. Do not upgrade either pin without checking the native contracts and
 
 - Bun 1.4.4.
 - A separately installed and running OpenCode V2 engine compatible with `@opencode/client` 2.1.4.
-- An existing engine service-registration JSON with a nonempty `password`, readable by the UI
-  server. The server uses Basic username `opencode`.
+- A connection profile configured through the UI with the engine password.
 
-The UI does not install, start, or reconfigure the engine. Never expose the registration password
-to the browser, logs, command-line flags, or version control.
+The UI does not install, start, or reconfigure the engine. Never return saved engine passwords
+to the browser or expose them in logs, command-line flags, or version control.
 
 ## Local development
 
@@ -43,8 +42,8 @@ bun run start
 ```
 
 `bun run start` serves `dist-bun-build/` on `127.0.0.1:5174` and accepts the shared flags described
-below. When the production build is missing it runs `scripts/build-bun.ts` first. On a loopback bind
-the password gate stays inactive until a password is set; a non-loopback bind requires one. Use
+below. When the production build is missing it runs `scripts/build-bun.ts` first. The first visit
+requires setting a UI password, then shows the home screen with a shortcut to Settings → Connections. Use
 `bun run start --host 0.0.0.0 --port 1234 --allowed-host ui.example.test --allowed-origin http://ui.example.test:1234`
 for another interface (substitute the real reachable hostname or IP).
 
@@ -73,21 +72,22 @@ overwrite or disturb an existing production `dist-bun-build/`.
 
 ### Runtime defaults
 
-| Mode | Entry point | Engine default | Service file | Allowlist environment | Assets |
-| --- | --- | --- | --- | --- | --- |
-| Start (checkout) | `bun run start` (aliases `bun run start:bun`, `bun run preview`) → `server/bun-server.ts` | `http://127.0.0.1:8090` | `~/.config/opencode/service.json` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` when no explicit security flags | `dist-bun-build/`; built automatically when missing, or `dist-bun-dev/` with `OPENCODE_UI_BUILD_TARGET=dev` |
-| Dev | `bun run dev` → `server/bun-server.ts` | `http://127.0.0.1:8090` | `~/.config/opencode/service.json` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` | `dist-bun-dev/` |
-| CLI / package | `bin/opencode-ui.ts` | `http://127.0.0.1:4096` | `$XDG_CONFIG_HOME/opencode/service.json` or `~/.config/opencode/service.json` | Not read; use `--allowed-host` / `--allowed-origin` | `dist-bun-build/` |
+| Mode | Entry point | Allowlist environment | Assets |
+| --- | --- | --- | --- |
+| Start (checkout) | `bun run start` (aliases `bun run start:bun`, `bun run preview`) → `server/bun-server.ts` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` when no explicit security flags | `dist-bun-build/`; built automatically when missing, or `dist-bun-dev/` with `OPENCODE_UI_BUILD_TARGET=dev` |
+| Dev | `bun run dev` → `server/bun-server.ts` | `OPENCODE_UI_ALLOWED_HOSTS`, `OPENCODE_UI_ALLOWED_ORIGINS` | `dist-bun-dev/` |
+| CLI / package | `bin/opencode-ui.ts` | Not read; use `--allowed-host` / `--allowed-origin` | `dist-bun-build/` |
 
-The start entry, dev server, and CLI all accept `--host`, `--port`, `--engine-url`, `--service-file`,
-repeatable `--allowed-host` / `--allowed-origin` / `--artifact-root`, `--help`, and `--version`;
-flags override environment values. The direct server keeps the legacy artifact root
-`/tmp/opencode/shots` when `OPENCODE_UI_ARTIFACT_ROOTS` is absent. The CLI starts with no artifact
-roots unless `--artifact-root` or the environment list is supplied. Use the CLI for the isolated
-defaults and explicit service-file and engine selection.
+The server and CLI accept `--host`, `--port`, `--engine-url`, repeatable `--allowed-host` /
+`--allowed-origin` / `--artifact-root`, `--help`, and `--version`; flags override environment values.
+`--engine-url` only prefills the first-run connection form. The direct server keeps the legacy
+artifact root `/tmp/opencode/shots` when `OPENCODE_UI_ARTIFACT_ROOTS` is absent. The CLI starts with
+no artifact roots unless `--artifact-root` or the environment list is supplied.
 
 Password/session state defaults to `~/.local/share/opencode-ui/auth/state.json` and can be moved with
-`OPENCODE_UI_AUTH_STATE`. Notes data defaults to `$XDG_DATA_HOME/opencode-notes/v1` (or
+`OPENCODE_UI_AUTH_STATE`. Saved engine connection profiles default to
+`~/.local/share/opencode-ui/connections.json` (mode `0600`) and can be moved with
+`OPENCODE_UI_CONNECTIONS_STATE`. Notes data defaults to `$XDG_DATA_HOME/opencode-notes/v1` (or
 `~/.local/share/opencode-notes/v1`) and can be moved with `OPENCODE_NOTES_DATA_DIR`; legacy engine
 data is read from `$XDG_DATA_HOME/opencode/opencode.db` unless `OPENCODE_ENGINE_DB_PATH` is set.
 
@@ -135,8 +135,7 @@ bun pm pack
 The package name is `@tunitz/opencode-ui`; the unscoped `opencode-ui` package is unrelated. Confirm
 package-name ownership and credentials privately, and get explicit authorization before publishing.
 Do not publish from a dirty tree or include private files, credentials, or local state. The package
-ships the UI server modules plus the `plugins/notes` sources and declares
-`@tunitz/opencode-notes` as a workspace dependency.
+ships the UI server modules together with the internal `plugins/notes` sources directly.
 
 ## Code and UX conventions
 
@@ -146,10 +145,11 @@ ships the UI server modules plus the `plugins/notes` sources and declares
   actual component capabilities and restrictions in [docs/components.md](docs/components.md).
 - Preserve mobile and desktop accessibility: Light, Dark, and System themes, 44px targets,
   keyboard and focus behavior, RTL, reduced motion, and accessible names.
-- Settings is a full workspace, not a dialog: section list plus detail at container width ≥40rem,
-  one pane below it, and the Back-to-conversation control on the left of the app header. Notes and
-  Settings are mutually exclusive main panes. Appearance controls live only in Settings →
-  Appearance; do not reintroduce sidebar theme triggers or appearance dialogs.
+- Settings is a full workspace, not a dialog: sticky horizontal section tabs above the active
+  section pane, with the Back-to-conversation control on the left of the app header. Notes and
+  Settings are mutually exclusive main panes, and the desktop Session Inspector hides while either
+  is active. Appearance controls live only in Settings → Appearance; do not reintroduce sidebar
+  theme triggers or appearance dialogs.
 - Never use `window.confirm`, `window.alert`, or `window.prompt`. Confirm destructive or
   draft-losing actions with the app `AlertDialog` pattern, and keep focus return explicit.
 - Preserve composer behavior: on touch, Enter inserts a newline and only Send submits; on a
@@ -157,8 +157,9 @@ ships the UI server modules plus the `plugins/notes` sources and declares
   composition. Preserve browser-local drafts and preferences.
 - Notes run on the local UI server (`/api/ui/notes/*` plus the change SSE), not an engine plugin.
   Keep drafts in the per-directory adapter cache so they survive project switches.
-- Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal`, for
-  example, is reported as unsupported because no terminal UI is mounted.
+- Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal` is shipped
+  as a lazy xterm dialog backed by native PTY APIs and the same-origin `/api/pty/{id}/connect`
+  WebSocket bridge.
 
 ## Notes workflow
 
@@ -179,8 +180,7 @@ ships the UI server modules plus the `plugins/notes` sources and declares
 
 - The UI server holds an engine credential; do not expose it to the browser or logs. Keep secrets,
   subscriptions, capability IDs, transcripts, and private state out of version control.
-- A shared browser password gate protects `/api/*` (including SSE and WebSocket upgrades) whenever a
-  password is set or the bind host is non-loopback. It is an access boundary, not multi-tenant
+- A required browser password gate protects `/api/*` (including SSE and WebSocket upgrades). It is an access boundary, not multi-tenant
   isolation; non-loopback use still needs secure transport and an appropriate network boundary.
 - Preserve explicit host and Origin checks, WebSocket guards, route/method allowlists, JSON
   mutation checks, no wildcard CORS, and `no-store` API responses. Do not bypass artifact

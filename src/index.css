@@ -69,8 +69,8 @@
     --destructive: oklch(0.53 0.2 27);
     --diff-added: oklch(0.43 0.13 155);
     --diff-removed: oklch(0.48 0.19 27);
-    --border: oklch(0.925 0.002 270);
-    --input: oklch(0.89 0.003 270);
+    --border: oklch(0.88 0.004 270);
+    --input: oklch(0.70 0.006 270);
     --ring: oklch(0.53 0.21 268);
     /* Scoped composer Send accent; deliberately not a global theme recolor. */
     --composer-send: #0b6cf0;
@@ -105,14 +105,14 @@
     --secondary: oklch(0.24 0.005 265);
     --secondary-foreground: oklch(0.93 0.002 270);
     --muted: oklch(0.24 0.005 265);
-    --muted-foreground: oklch(0.73 0.006 270);
-    --accent: oklch(0.39 0.01 270);
+    --muted-foreground: oklch(0.75 0.006 270);
+    --accent: oklch(0.31 0.008 270);
     --accent-foreground: oklch(0.93 0.002 270);
-    --destructive: oklch(0.76 0.17 25);
+    --destructive: oklch(0.80 0.15 25);
     --diff-added: oklch(0.8 0.14 155);
     --diff-removed: oklch(0.8 0.13 25);
-    --border: oklch(0.28 0.005 270);
-    --input: oklch(0.35 0.008 270);
+    --border: oklch(0.32 0.006 270);
+    --input: oklch(0.45 0.008 270);
     --ring: oklch(0.79 0.09 270);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
@@ -138,57 +138,57 @@
 }
 :root.dark[data-palette="slate"] {
     --background: #141d28; --card: #1b2836; --popover: #293b4d;
-    --secondary: #223242; --muted: #223242; --accent: #40566a;
+    --secondary: #223242; --muted: #223242; --accent: #2b3f52;
     --sidebar: #192532; --sidebar-accent: #283c4e;
-    --border: #304253; --sidebar-border: #304253; --input: #40566a;
+    --border: #304253; --sidebar-border: #304253; --input: #4c647a;
 }
 :root[data-palette="sand"] {
     --background: #fcfaf6; --card: #fcfaf6; --popover: #fcfaf6;
     --secondary: #f2eee6; --muted: #f2eee6; --accent: #ebe5da;
     --sidebar: #f6f2eb; --sidebar-accent: #eae3d7;
-    --border: #e3dbce; --sidebar-border: #e3dbce; --input: #d4cabb;
+    --border: #e3dbce; --sidebar-border: #e3dbce; --input: #9b8f7f;
 }
 :root.dark[data-palette="sand"] {
-    --background: #211d19; --card: #2c2722; --popover: #403830;
-    --secondary: #342e28; --muted: #342e28; --accent: #594d40;
+    --background: #211d19; --card: #2c2722; --popover: #3a332b;
+    --secondary: #342e28; --muted: #342e28; --accent: #44392f;
     --sidebar: #29231e; --sidebar-accent: #3c332b;
-    --border: #463b31; --sidebar-border: #463b31; --input: #594d40;
+    --border: #463b31; --sidebar-border: #463b31; --input: #6d6051;
 }
 :root[data-palette="forest"] {
     --background: #f5faf6; --card: #f5faf6; --popover: #f5faf6;
     --secondary: #e8f1e9; --muted: #e8f1e9; --accent: #dfebe1;
     --sidebar: #ebf4ed; --sidebar-accent: #dbe9de;
-    --border: #d2e1d5; --sidebar-border: #d2e1d5; --input: #c5d8c9;
+    --border: #d2e1d5; --sidebar-border: #d2e1d5; --input: #7e9684;
 }
 :root.dark[data-palette="forest"] {
     --background: #19221c; --card: #222d25; --popover: #303d33;
-    --secondary: #29352c; --muted: #29352c; --accent: #435448;
+    --secondary: #29352c; --muted: #29352c; --accent: #2f4034;
     --sidebar: #1d2920; --sidebar-accent: #2c3c30;
-    --border: #344639; --sidebar-border: #344639; --input: #435448;
+    --border: #344639; --sidebar-border: #344639; --input: #526958;
 }
 :root[data-palette="plum"] {
     --background: #fbf7fb; --card: #fbf7fb; --popover: #fbf7fb;
     --secondary: #f2ebf3; --muted: #f2ebf3; --accent: #eae0ec;
     --sidebar: #f5eef6; --sidebar-accent: #eadeec;
-    --border: #e1d4e3; --sidebar-border: #e1d4e3; --input: #d6c7d9;
+    --border: #e1d4e3; --sidebar-border: #e1d4e3; --input: #958299;
 }
 :root.dark[data-palette="plum"] {
-    --background: #231c24; --card: #2e2530; --popover: #403442;
-    --secondary: #362b38; --muted: #362b38; --accent: #544458;
+    --background: #231c24; --card: #2e2530; --popover: #3c303e;
+    --secondary: #362b38; --muted: #362b38; --accent: #403244;
     --sidebar: #2a212c; --sidebar-accent: #3c2e3f;
-    --border: #463649; --sidebar-border: #463649; --input: #544458;
+    --border: #463649; --sidebar-border: #463649; --input: #67546b;
 }
 :root[data-palette="ocean"] {
     --background: #f3fafb; --card: #f3fafb; --popover: #f3fafb;
     --secondary: #e4f1f3; --muted: #e4f1f3; --accent: #dbeaed;
     --sidebar: #eaf4f5; --sidebar-accent: #d8e9eb;
-    --border: #cee1e4; --sidebar-border: #cee1e4; --input: #c1d7da;
+    --border: #cee1e4; --sidebar-border: #cee1e4; --input: #789499;
 }
 :root.dark[data-palette="ocean"] {
     --background: #172124; --card: #202d30; --popover: #2e3d40;
-    --secondary: #273639; --muted: #273639; --accent: #405357;
+    --secondary: #273639; --muted: #273639; --accent: #2c3e42;
     --sidebar: #1b292c; --sidebar-accent: #293b3e;
-    --border: #314448; --sidebar-border: #314448; --input: #405357;
+    --border: #314448; --sidebar-border: #314448; --input: #4e656a;
 }
 
 /* Accent pairs are deliberately distinct in each scheme for readable text. */
@@ -282,54 +282,6 @@ pre {
 
 pre {
     text-align: start;
-}
-
-/* OpenUI CodeBlock is integrated only for fenced code. Its syntax renderer is
-   lazy-loaded; the copy control is composed outside the library button because
-   the stock control is hover-only, 32px, and has no clipboard fallback. The
-   wrapper stays LTR inside RTL pages and preserves the rest of the app theme. */
-/* Code-specific syntax tokens. These are intentionally scoped to the OpenUI
-   CodeBlock and do not recolor the rest of the UI. Light values target the
-   light muted code surface; dark values are the light-on-dark counterparts.
-   All token colors maintain >=4.5:1 against the conservative muted surface. */
-.openui-code-shell {
-    --code-keyword: #0b5bd3;
-    --code-string: #0f6b3c;
-    --code-function: #6a35c9;
-    --code-number: #9a4b00;
-    --code-comment: #596273;
-    --code-operator: var(--foreground);
-    --code-punctuation: var(--foreground);
-}
-
-.dark .openui-code-shell {
-    --code-keyword: #82b8ff;
-    --code-string: #8fe0a7;
-    --code-function: #d0b3ff;
-    --code-number: #ffc46b;
-    --code-comment: #a9b2c0;
-    --code-operator: var(--foreground);
-    --code-punctuation: var(--foreground);
-}
-
-.openui-code-shell .openui-code-block-wrapper {
-    min-width: 0;
-    max-width: 100%;
-}
-
-.openui-code-shell .openui-code-block-syntax-highlighter {
-    max-width: 100%;
-    overflow-x: auto !important;
-    /* Reserve the top-right copy target so it never covers the first line. */
-    padding-top: 3.5rem !important;
-}
-
-.openui-code-shell .openui-code-block-copy-button {
-    display: none !important;
-}
-
-.openui-code-shell .openui-code-copy {
-    direction: ltr;
 }
 
 /* OpenUI Card/CardHeader/Image/Table are used only inside existing structured

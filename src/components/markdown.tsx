@@ -61,6 +61,8 @@ const EMPTY_ARTIFACTS: ToolArtifact[] = []
 // note attachment degrades to its paperclip button instead of a huge data URL.
 const MAX_NOTE_ATTACHMENT_IMAGE_CHARS = 4_000_000
 
+const EMPTY_SIGNATURES: readonly string[] = []
+
 function useThrottledValue<T>(value: T, delayMs: number): T {
   const [throttled, setThrottled] = useState(value)
   const latestRef = useRef(value)
@@ -71,11 +73,18 @@ function useThrottledValue<T>(value: T, delayMs: number): T {
   // the final value is always delivered on the trailing edge.
   useEffect(() => {
     latestRef.current = value
+    if (delayMs <= 0) {
+      if (timerRef.current !== null) {
+        globalThis.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      return
+    }
     if (timerRef.current !== null) return
     timerRef.current = globalThis.setTimeout(() => {
       timerRef.current = null
       setThrottled(latestRef.current)
-    }, delayMs > 0 ? delayMs : 0) as unknown as number
+    }, delayMs) as unknown as number
   }, [value, delayMs])
 
   useEffect(
@@ -85,7 +94,7 @@ function useThrottledValue<T>(value: T, delayMs: number): T {
     []
   )
 
-  return throttled
+  return delayMs <= 0 ? value : throttled
 }
 
 type TableAlignment = "left" | "center" | "right"
@@ -311,7 +320,7 @@ function NoteAttachmentImage({
 export const Markdown = memo(function Markdown({
   children,
   artifactSessionID = null,
-  artifactExcludeSignatures = [],
+  artifactExcludeSignatures = EMPTY_SIGNATURES,
   streaming = false,
   notes,
 }: {
@@ -447,6 +456,9 @@ export const Markdown = memo(function Markdown({
           }
           return <span>{children}</span>
         }
+        if (!href) {
+          return <span>{children}</span>
+        }
         return (
           <a href={href} target="_blank" rel="noopener noreferrer">
             {children}
@@ -531,7 +543,7 @@ export const Markdown = memo(function Markdown({
       tbody: ({ children }) => <TableBody>{children}</TableBody>,
       tr: ({ children }) => <TableRow>{children}</TableRow>,
       th: ({ children, align, style }) => (
-        <TableHead align={tableAlignment(align, style)}>
+        <TableHead scope="col" align={tableAlignment(align, style)}>
           {children}
         </TableHead>
       ),

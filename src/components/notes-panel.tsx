@@ -11,6 +11,8 @@ import {
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   EllipsisIcon,
   FilePlusIcon,
   PaperclipIcon,
@@ -35,6 +37,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -720,6 +723,7 @@ export function NotesPanel({
   const noteComposerRef = useRef<HTMLTextAreaElement | null>(null)
   const attachInputRef = useRef<HTMLInputElement | null>(null)
   const statusFiltersRef = useRef<HTMLDivElement | null>(null)
+  const [filterEdges, setFilterEdges] = useState({ start: false, end: false })
   const uploadCursor = useRef<number | null>(null)
   // Keep unsaved work when moving between notes, including the mobile back action.
   const [drafts] = useState(() => {
@@ -1143,6 +1147,58 @@ export function NotesPanel({
     return () => row.removeEventListener("wheel", onWheel)
   }, [snapshot])
 
+  // Inspector-style edge buttons make the horizontal filter row usable with a
+  // two-button mouse or keyboard. The row starts unmasked so the first chip is
+  // never clipped, and the buttons only appear when there is more to reveal.
+  useEffect(() => {
+    const row = statusFiltersRef.current
+    if (!row) return
+    const sync = () => {
+      const maximum = row.scrollWidth - row.clientWidth
+      const position = Math.abs(row.scrollLeft)
+      setFilterEdges({
+        start: position > 2,
+        end: maximum > 2 && position < maximum - 2,
+      })
+    }
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(row)
+    row.addEventListener("scroll", sync, { passive: true })
+    window.addEventListener("resize", sync)
+    return () => {
+      observer.disconnect()
+      row.removeEventListener("scroll", sync)
+      window.removeEventListener("resize", sync)
+    }
+  }, [snapshot])
+
+  function revealStatusFilter(element: HTMLElement) {
+    const row = statusFiltersRef.current
+    if (!row) return
+    const pill = element.getBoundingClientRect()
+    const view = row.getBoundingClientRect()
+    const inset = 44
+    if (pill.left < view.left + inset) {
+      row.scrollLeft -= view.left + inset - pill.left
+    } else if (pill.right > view.right - inset) {
+      row.scrollLeft += pill.right - (view.right - inset)
+    }
+  }
+
+  function selectStatus(next: string, element?: HTMLElement | null) {
+    setStatus(next as typeof status)
+    if (element) requestAnimationFrame(() => revealStatusFilter(element))
+  }
+
+  function scrollStatusFilters(direction: -1 | 1) {
+    const row = statusFiltersRef.current
+    if (!row) return
+    const rtl = document.documentElement.getAttribute("dir") === "rtl"
+    row.scrollLeft +=
+      direction * (rtl ? -1 : 1) * Math.max(120, row.clientWidth * 0.75)
+  }
+
   function openFilePicker() {
     setFileQuery("")
     setFileResults([])
@@ -1416,19 +1472,24 @@ export function NotesPanel({
                 />
               </div>
               <div className="flex min-w-0 flex-col gap-2">
-                <div
-                  ref={statusFiltersRef}
-                  role="group"
-                  aria-label="Filter by status"
-                  data-notes-status-filters
-                  className="flex min-w-0 gap-1.5 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%_-_1rem),transparent)] rtl:[mask-image:linear-gradient(to_left,transparent,black_1rem,black_calc(100%_-_1rem),transparent)]"
-                >
+                <div className="relative min-w-0">
+                  <div
+                    ref={statusFiltersRef}
+                    role="group"
+                    aria-label="Filter by status"
+                    data-notes-status-filters
+                    className={cn(
+                      "flex min-w-0 gap-1.5 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+                      filterEdges.start && "ps-11 rtl:pe-11 rtl:ps-0",
+                      filterEdges.end && "pe-11 rtl:ps-11 rtl:pe-0"
+                    )}
+                  >
                   <Button
                     type="button"
                     variant={status === "all" ? "secondary" : "outline"}
                     className="h-11 min-h-11 shrink-0 rounded-full px-4 text-sm"
                     aria-pressed={status === "all"}
-                    onClick={() => setStatus("all")}
+                    onClick={(event) => selectStatus("all", event?.currentTarget)}
                   >
                     All
                   </Button>
@@ -1440,7 +1501,7 @@ export function NotesPanel({
                       className="h-11 min-h-11 shrink-0 gap-1.5 rounded-full px-4 text-sm"
                       aria-pressed={status === option}
                       aria-label={`Filter by status: ${NOTE_STATUS_LABELS[option]} (${statusCategoryLabel(option)})`}
-                      onClick={() => setStatus(option)}
+                      onClick={(event) => selectStatus(option, event?.currentTarget)}
                     >
                       <span
                         aria-hidden="true"
@@ -1450,6 +1511,43 @@ export function NotesPanel({
                       {NOTE_STATUS_LABELS[option]}
                     </Button>
                   ))}
+                  </div>
+                  {filterEdges.start ? (
+                    <>
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent rtl:bg-linear-to-l"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label="Scroll status filters left"
+                        className="absolute inset-y-0 start-0 h-11 w-11 rounded-full text-muted-foreground transition-none active:translate-y-0"
+                        onClick={() => scrollStatusFilters(-1)}
+                      >
+                        <ChevronLeftIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
+                      </Button>
+                    </>
+                  ) : null}
+                  {filterEdges.end ? (
+                    <>
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent rtl:bg-linear-to-r"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label="Scroll status filters right"
+                        className="absolute inset-y-0 end-0 h-11 w-11 rounded-full text-muted-foreground transition-none active:translate-y-0"
+                        onClick={() => scrollStatusFilters(1)}
+                      >
+                        <ChevronRightIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
                 <div className="flex min-w-0 items-center gap-2">
                   <DropdownMenu>

@@ -107,7 +107,7 @@ export function PendingInbox({ nav }: { nav: OpenCodeController }) {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger render={trigger} />
-      <SheetContent side="bottom" className="overflow-hidden rounded-t-xl px-4 pb-4" style={fixedMobileDrawerStyle()}>
+      <SheetContent side="bottom" className="overflow-hidden rounded-t-xl px-4 pb-[max(1rem,env(safe-area-inset-bottom))]" style={fixedMobileDrawerStyle()}>
         <SheetHeader className="shrink-0 px-0 pe-12">
           <SheetTitle className="text-base font-semibold tracking-tight">
             Pending requests

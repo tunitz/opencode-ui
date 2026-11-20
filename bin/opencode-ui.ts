@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { homedir } from "node:os"
 import { resolve } from "node:path"
 import { readFile } from "node:fs/promises"
 import { BunConfigurationError, isLoopbackHost, validateHostname, validateOrigin, validatePath, validatePort } from "../server/bun-config.ts"
@@ -16,8 +15,7 @@ async function main() {
 
   const hostname = validateHostname(flags.host ?? process.env.OPENCODE_UI_HOST ?? "127.0.0.1")
   const port = validatePort(flags.port ?? process.env.OPENCODE_UI_PORT ?? "5174")
-  const engineUrl = validateOrigin(flags.engineUrl ?? "http://127.0.0.1:4096")
-  const serviceFile = resolve(validatePath(flags.serviceFile ?? resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "opencode/service.json")))
+  const engineUrl = flags.engineUrl === undefined ? undefined : validateOrigin(flags.engineUrl)
   const allowedHosts = ["127.0.0.1", "localhost", "[::1]", ...flags.allowedHosts.map(validateHostname)]
   const allowedOrigins = [
     `http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`,
@@ -28,20 +26,17 @@ async function main() {
   if (!isLoopbackHost(hostname) && (!allowedHosts.some((host) => !isLoopbackHost(host)) || !allowedOrigins.some((origin) => !isLoopbackHost(new URL(origin).hostname)))) {
     throw new BunConfigurationError("Non-loopback binding requires explicit non-loopback --allowed-host and --allowed-origin. Use --help for security requirements.")
   }
-  if (new URL(engineUrl).protocol === "http:" && !isLoopbackHost(new URL(engineUrl).hostname)) {
-    console.warn("Warning: remote HTTP engine transport is unencrypted. Use HTTPS or a trusted secure tunnel to protect credentials and private traffic.")
-  }
   // Defer all service imports until after help/version and validation. Assets are
   // package-relative, independent of cwd and OPENCODE_UI_BUILD_TARGET.
   const { startBunServer } = await import("../server/bun-server.ts")
-  await startBunServer({ hostname, port, engineUrl, serviceFile, artifactRoots,
+  await startBunServer({ hostname, port, engineUrl, artifactRoots,
     assetDirectory: resolve(import.meta.dirname, "../dist-bun-build"),
     security: { allowedHosts, allowedOrigins },
   })
-  console.log(`OpenCode UI listening on port ${port}. Set a UI password in Settings → Access; non-loopback binds require one.`)
+  console.log(`OpenCode UI listening on port ${port}. Set a UI password on first visit. Change it later in Settings → Access.`)
 }
 
 void main().catch((error: unknown) => {
-  console.error(error instanceof BunConfigurationError ? error.message : "Could not start OpenCode UI. Check the package installation, separate OpenCode engine, and service credential setup.")
+  console.error(error instanceof BunConfigurationError ? error.message : "Could not start OpenCode UI. Check the package installation and listener settings.")
   process.exitCode = 1
 })

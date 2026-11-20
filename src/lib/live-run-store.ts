@@ -22,6 +22,8 @@ export type LiveRunStore = {
   update(
     updater: (current: Record<string, LiveRun>) => Record<string, LiveRun>
   ): void
+  delete(sessionID: string): void
+  reset(): void
   subscribe(sessionID: string, listener: Listener): () => void
 }
 
@@ -101,6 +103,21 @@ export function createLiveRunStore(): LiveRunStore {
       if (dirtySessions.size > 0) {
         scheduleNotify()
       }
+    },
+    delete(sessionID) {
+      if (!(sessionID in runs)) return
+      const next = { ...runs }
+      delete next[sessionID]
+      runs = next
+      dirtySessions.add(sessionID)
+      scheduleNotify()
+    },
+    reset() {
+      const keys = Object.keys(runs)
+      if (keys.length === 0) return
+      runs = {}
+      for (const sessionID of keys) dirtySessions.add(sessionID)
+      scheduleNotify()
     },
     subscribe(sessionID, listener) {
       let listeners = listenersBySession.get(sessionID)

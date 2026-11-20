@@ -181,16 +181,16 @@ test("the tab bar renders every section in registry order with icon and label", 
       "settings-tab-appearance",
       "settings-tab-agents",
       "settings-tab-alerts",
-      "settings-tab-keys",
       "settings-tab-plugins",
+      "settings-tab-connection",
       "settings-tab-access",
     ])
     for (const [id, label] of [
       ["appearance", "Appearance"],
       ["agents", "Agents"],
       ["alerts", "Alerts"],
-      ["keys", "Keys"],
       ["plugins", "Plugins"],
+      ["connection", "Connections"],
       ["access", "Access"],
     ]) {
       const tab = tabByID(root, id)
@@ -256,7 +256,7 @@ test("unsaved agent edits guard tab switches until confirmed", async () => {
   const root = await mount()
   try {
     await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
-    await act(async () => button(root, "Keys").props.onClick())
+    await act(async () => button(root, "Plugins").props.onClick())
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "confirming",
     ])
@@ -269,13 +269,13 @@ test("unsaved agent edits guard tab switches until confirmed", async () => {
     ])
     expect(headings(root)).toEqual(["Appearance"])
 
-    await act(async () => button(root, "Keys").props.onClick())
+    await act(async () => button(root, "Plugins").props.onClick())
     await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "idle",
     ])
-    expect(headings(root)).toEqual(["Keys"])
-    expect(selectedTabs(root)).toEqual(["settings-tab-keys"])
+    expect(headings(root)).toEqual(["Plugins"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-plugins"])
   } finally {
     await act(async () => root.unmount())
   }
@@ -372,7 +372,7 @@ test("both Settings entry points left-align their footer", async () => {
 
   expect(navigation).toContain('"justify-start gap-1 p-3"')
   expect(navigation).toContain(
-    'SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4"'
+    'SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"'
   )
   expect(navigation).not.toContain('"justify-end gap-1 p-3"')
 })

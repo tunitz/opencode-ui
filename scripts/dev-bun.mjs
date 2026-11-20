@@ -27,29 +27,42 @@ async function rebuild() {
   if (pending) { pending = false; void rebuild() }
 }
 
-if (!await runBuild()) process.exit(1)
-const port = process.env.OPENCODE_UI_PORT ?? "5175"
-const host = process.env.OPENCODE_UI_HOST ?? "127.0.0.1"
-const devOrigin = process.env.OPENCODE_UI_DEV_ORIGIN ?? `http://127.0.0.1:${port}`
-server = spawn(process.execPath, ["--watch", "server/bun-server.ts"], {
-  cwd: root, stdio: "inherit",
-  env: { ...process.env, OPENCODE_UI_PORT: port, OPENCODE_UI_HOST: host, OPENCODE_UI_DEV_ORIGIN: devOrigin, OPENCODE_UI_BUILD_TARGET: "dev" },
-})
-console.log(`OpenCode UI dev server: http://${host === "0.0.0.0" ? "<lan-ip-or-hostname>" : host}:${port}`)
-server.once("error", () => { console.error("Could not start the Bun development server."); stop() })
-server.once("exit", () => stop())
-const watchers = ["src", "public"].map((path) => watch(resolve(root, path), { recursive: true }, schedule))
-watchers.push(watch(resolve(root, "index.html"), schedule))
-function schedule() {
-  clearTimeout(timer)
-  timer = setTimeout(() => void rebuild(), 150)
+const cliArgs = process.argv.slice(2)
+if (cliArgs.includes("--help") || cliArgs.includes("-h") || cliArgs.includes("--version") || cliArgs.includes("-v")) {
+  const child = spawn(process.execPath, ["server/bun-server.ts", ...cliArgs], { cwd: root, stdio: "inherit" })
+  child.once("exit", (code) => process.exit(code ?? 0))
+} else {
+  if (!await runBuild()) process.exit(1)
+  const port = process.env.OPENCODE_UI_PORT ?? "5175"
+  const host = process.env.OPENCODE_UI_HOST ?? "127.0.0.1"
+  const devOrigin = process.env.OPENCODE_UI_DEV_ORIGIN ?? `http://127.0.0.1:${port}`
+  server = spawn(process.execPath, ["--watch", "server/bun-server.ts", ...cliArgs], {
+    cwd: root, stdio: "inherit",
+    env: { ...process.env, OPENCODE_UI_PORT: port, OPENCODE_UI_HOST: host, OPENCODE_UI_DEV_ORIGIN: devOrigin, OPENCODE_UI_BUILD_TARGET: "dev" },
+  })
+  console.log(`OpenCode UI dev server: http://${host === "0.0.0.0" ? "<lan-ip-or-hostname>" : host}:${port}`)
+  server.once("error", () => { console.error("Could not start the Bun development server."); stop(1) })
+  server.once("exit", (code) => stop(code && code !== 0 ? code : 0))
+  const watchers = ["src", "public"].map((path) => {
+    const w = watch(resolve(root, path), { recursive: true }, schedule)
+    w.on("error", () => {})
+    return w
+  })
+  const htmlWatcher = watch(resolve(root, "index.html"), schedule)
+  htmlWatcher.on("error", () => {})
+  watchers.push(htmlWatcher)
+  function schedule() {
+    clearTimeout(timer)
+    timer = setTimeout(() => void rebuild(), 150)
+  }
+  function stop(exitCode) {
+    if (stopping) return
+    stopping = true
+    clearTimeout(timer)
+    for (const watcher of watchers) watcher.close()
+    server?.kill()
+    if (typeof exitCode === "number" && exitCode !== 0) process.exitCode = exitCode
+  }
+  process.once("SIGINT", () => stop(0))
+  process.once("SIGTERM", () => stop(0))
 }
-function stop() {
-  if (stopping) return
-  stopping = true
-  clearTimeout(timer)
-  for (const watcher of watchers) watcher.close()
-  server?.kill()
-}
-process.once("SIGINT", stop)
-process.once("SIGTERM", stop)

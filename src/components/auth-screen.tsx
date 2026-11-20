@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { LoaderCircleIcon } from "lucide-react"
+import { EyeIcon, EyeOffIcon, LoaderCircleIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -23,6 +23,7 @@ export function AuthScreen({
   const setup = mode === "setup"
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,6 +33,10 @@ export function AuthScreen({
     setError(null)
     if (password.length < 8) {
       setError("Use at least 8 characters.")
+      return
+    }
+    if (password.length > 256) {
+      setError("Use at most 256 characters.")
       return
     }
     if (setup && password !== confirm) {
@@ -56,6 +61,11 @@ export function AuthScreen({
     }
   }
 
+  const passwordDescribedBy =
+    [setup ? "auth-password-hint" : null, error ? "auth-error" : null]
+      .filter(Boolean)
+      .join(" ") || undefined
+
   return (
     <main className="flex min-h-svh items-center justify-center bg-background px-4 py-10">
       <div className="w-full max-w-sm">
@@ -68,7 +78,7 @@ export function AuthScreen({
           </h1>
           {setup ? (
             <p className="text-sm text-muted-foreground">
-              This password protects the UI on this network.
+              Set an OpenCode UI password. It is separate from your OpenCode engine password.
             </p>
           ) : null}
         </div>
@@ -76,27 +86,46 @@ export function AuthScreen({
         <form onSubmit={submit} noValidate className="space-y-4">
           <Field>
             <FieldLabel htmlFor="auth-password">Password</FieldLabel>
-            <Input
-              id="auth-password"
-              type="password"
-              autoFocus
-              autoComplete={setup ? "new-password" : "current-password"}
-              value={password}
-              disabled={busy}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={setup ? "auth-password-hint" : undefined}
-              className="h-11"
-              onChange={(event) => {
-                setPassword(event.target.value)
-                setError(null)
-              }}
-            />
+            <div className="relative flex items-center">
+              <Input
+                id="auth-password"
+                type={showPassword ? "text" : "password"}
+                autoFocus
+                maxLength={256}
+                autoComplete={setup ? "new-password" : "current-password"}
+                value={password}
+                disabled={busy}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={passwordDescribedBy}
+                className="h-11 pe-12"
+                onChange={(event) => {
+                  setPassword(event.target.value)
+                  setError(null)
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-lg"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                disabled={busy}
+                onClick={() => setShowPassword((value) => !value)}
+                className="absolute end-0 size-11 text-muted-foreground"
+              >
+                {showPassword ? (
+                  <EyeOffIcon aria-hidden="true" className="size-4" />
+                ) : (
+                  <EyeIcon aria-hidden="true" className="size-4" />
+                )}
+              </Button>
+            </div>
             {setup ? (
               <p
                 id="auth-password-hint"
                 className="text-xs text-muted-foreground"
               >
-                At least 8 characters.
+                At least 8 characters. Up to 256.
               </p>
             ) : null}
           </Field>
@@ -106,11 +135,13 @@ export function AuthScreen({
               <FieldLabel htmlFor="auth-confirm">Confirm password</FieldLabel>
               <Input
                 id="auth-confirm"
-                type="password"
+                type={showPassword ? "text" : "password"}
+                maxLength={256}
                 autoComplete="new-password"
                 value={confirm}
                 disabled={busy}
                 aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 className="h-11"
                 onChange={(event) => {
                   setConfirm(event.target.value)
@@ -121,7 +152,7 @@ export function AuthScreen({
           ) : null}
 
           {error ? (
-            <p role="alert" className="text-sm break-words text-destructive">
+            <p id="auth-error" role="alert" className="text-sm break-words text-destructive">
               {error}
             </p>
           ) : null}

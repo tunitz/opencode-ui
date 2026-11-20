@@ -45,7 +45,6 @@ function loadXterm(): Promise<XtermModules> {
     modulesPromise = Promise.all([
       import("@xterm/xterm"),
       import("@xterm/addon-fit"),
-      import("@xterm/xterm/css/xterm.css"),
     ])
       .then(([xterm, fit]) => ({
         Terminal: xterm.Terminal,
@@ -80,8 +79,7 @@ export function usePty({
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
-    const generation = ++generationRef.current
-    const isCurrent = () => !cancelled && generationRef.current === generation
+    generationRef.current += 1
     let observer: ResizeObserver | null = null
     let frame = 0
 
@@ -103,10 +101,12 @@ export function usePty({
       }
     }
 
-    const ensureTerminal = async (): Promise<Terminal> => {
+    const ensureTerminal = async (
+      isAttemptCurrent: () => boolean
+    ): Promise<Terminal> => {
       if (terminalRef.current) return terminalRef.current
       const { Terminal: Xterm, FitAddon: Fit } = await loadXterm()
-      if (!isCurrent()) throw new Error("Terminal closed during load")
+      if (!isAttemptCurrent()) throw new Error("Terminal closed during load")
       const container = containerRef.current
       if (!container) throw new Error("Terminal container is not mounted")
       const term = new Xterm({
@@ -114,8 +114,9 @@ export function usePty({
         convertEol: true,
         cursorBlink: true,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        fontSize: 12,
-        lineHeight: 1.25,
+        fontSize: 11,
+        lineHeight: 1.2,
+        letterSpacing: 0,
         scrollback: 2000,
         theme: {
           background: "#0b0b0f",
@@ -127,7 +128,7 @@ export function usePty({
       const fit = new Fit()
       term.loadAddon(fit)
       term.open(container)
-      if (!isCurrent()) {
+      if (!isAttemptCurrent()) {
         term.dispose()
         throw new Error("Terminal closed during load")
       }
@@ -146,23 +147,53 @@ export function usePty({
       return term
     }
 
-    const connect = async () => {
+    const syncPtySize = (term: Terminal) => {
+      const ptyID = ptyIdRef.current
+      if (!ptyID || term.cols <= 0 || term.rows <= 0) return
+      void client.pty
+        .update({ ptyID, location: { directory }, size: { cols: term.cols, rows: term.rows } })
+        .catch(() => { /* Resize is best effort. */ })
+    }
+
+    const scheduleResize = () => {
+      cancelFrame()
+      frame = requestAnimationFrame(() => {
+        if (cancelled) return
+        const fit = fitAddonRef.current
+        const term = terminalRef.current
+        if (!fit || !term) return
+        const before = { cols: term.cols, rows: term.rows }
+        try { fit.fit() } catch { return }
+        if (term.cols === before.cols && term.rows === before.rows) return
+        syncPtySize(term)
+      })
+    }
+
+    const connect = async (forceFreshPty = false) => {
+      const attempt = ++generationRef.current
+      const isAttemptCurrent = () => !cancelled && generationRef.current === attempt
       setStatus("connecting")
       setMessage(null)
       try {
-        const term = await ensureTerminal()
-        if (!isCurrent()) return
+        const term = await ensureTerminal(isAttemptCurrent)
+        if (!isAttemptCurrent()) return
 
+        if (typeof ResizeObserver !== "undefined" && containerRef.current && !observer) {
+          observer = new ResizeObserver(scheduleResize)
+          observer.observe(containerRef.current)
+        }
+
+        if (forceFreshPty) ptyIdRef.current = null
         let ptyID = ptyIdRef.current
         if (!ptyID) {
           const listed = await client.pty.list({ location: { directory } })
-          if (!isCurrent()) return
+          if (!isAttemptCurrent()) return
           const reusable = listed.data.find((pty) => pty.status === "running")
           if (reusable) {
             ptyID = reusable.id
           } else {
             const created = await client.pty.create({ location: { directory } })
-            if (!isCurrent()) return
+            if (!isAttemptCurrent()) return
             ptyID = created.data.id
           }
           ptyIdRef.current = ptyID
@@ -174,7 +205,7 @@ export function usePty({
           location: { directory },
           "x-opencode-ticket": "1",
         })
-        if (!isCurrent()) return
+        if (!isAttemptCurrent()) return
         const { ticket } = parseConnectTicket(token)
         const url = ptyWebSocketUrl(
           { protocol: window.location.protocol, host: window.location.host },
@@ -187,7 +218,7 @@ export function usePty({
         socketRef.current = socket
 
         socket.onopen = () => {
-          if (!isCurrent()) {
+          if (!isAttemptCurrent()) {
             try { socket.close() } catch { /* ignore */ }
             return
           }
@@ -195,13 +226,16 @@ export function usePty({
           setMessage(null)
           cancelFrame()
           frame = requestAnimationFrame(() => {
-            if (!isCurrent()) return
-            try { fitAddonRef.current?.fit() } catch { /* not laid out yet */ }
+            if (!isAttemptCurrent()) return
+            try {
+              fitAddonRef.current?.fit()
+              syncPtySize(term)
+            } catch { /* not laid out yet */ }
             try { term.focus() } catch { /* ignore */ }
           })
         }
         socket.onmessage = (event) => {
-          if (!isCurrent()) return
+          if (!isAttemptCurrent()) return
           const data = event.data
           if (typeof data === "string") term.write(data)
           else if (data instanceof ArrayBuffer) term.write(new Uint8Array(data))
@@ -210,23 +244,26 @@ export function usePty({
           }
         }
         socket.onerror = () => {
-          if (!isCurrent()) return
+          if (!isAttemptCurrent()) return
           setStatus("error")
           setMessage("Terminal connection failed")
         }
         socket.onclose = (event) => {
-          if (!isCurrent()) return
+          if (!isAttemptCurrent()) return
           // A stale socket closing during reattach must not overwrite the new
           // connection's status. The current socket is the only one that owns
           // the visible connection state.
           if (socketRef.current !== socket) return
           socketRef.current = null
           if (intentionalCloseRef.current) return
+          // Clear cached PTY id so explicit Reattach checks running PTYs or creates a new one.
+          ptyIdRef.current = null
           setStatus("disconnected")
           setMessage(terminalDisconnectMessage(event))
         }
       } catch (failure) {
-        if (!isCurrent()) return
+        if (!isAttemptCurrent()) return
+        ptyIdRef.current = null
         setStatus("error")
         setMessage(
           sanitizeTerminalText(
@@ -237,32 +274,8 @@ export function usePty({
       }
     }
 
-    const scheduleResize = () => {
-      cancelFrame()
-      frame = requestAnimationFrame(() => {
-        if (!isCurrent()) return
-        const fit = fitAddonRef.current
-        const term = terminalRef.current
-        if (!fit || !term) return
-        const before = { cols: term.cols, rows: term.rows }
-        try { fit.fit() } catch { return }
-        if (term.cols === before.cols && term.rows === before.rows) return
-        const ptyID = ptyIdRef.current
-        if (ptyID) {
-          void client.pty
-            .update({ ptyID, location: { directory }, size: { cols: term.cols, rows: term.rows } })
-            .catch(() => { /* Resize is best effort. */ })
-        }
-      })
-    }
-
-    reattachRef.current = () => { void connect() }
-    void connect()
-
-    if (typeof ResizeObserver !== "undefined" && containerRef.current) {
-      observer = new ResizeObserver(scheduleResize)
-      observer.observe(containerRef.current)
-    }
+    reattachRef.current = () => { void connect(true) }
+    void connect(false)
 
     return () => {
       cancelled = true

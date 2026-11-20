@@ -16,12 +16,12 @@
  * snapshot for later optimisation waves. Gates are recorded verbatim; a gate
  * failing here is expected in the baseline and is not a harness error.
  */
-import { existsSync } from "node:fs"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { chromium, type Page } from "playwright-core"
 
 import { buildFixture } from "./build"
+import { findChromiumExecutable } from "./chromium"
 
 const repoRoot = resolve(import.meta.dir, "../..")
 const outDir = await mkdtemp("/tmp/opencode/ui-browser-perf-")
@@ -103,19 +103,7 @@ const server = Bun.serve({
 
 const base = `http://127.0.0.1:${server.port}`
 
-function findExecutable(): string | null {
-  const candidates = [
-    process.env.OPENCODE_UI_CHROMIUM,
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1255/chrome-linux64/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1247/chrome-linux64/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1255/chrome-linux/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1248/chrome-linux/chrome"),
-  ].filter((entry): entry is string => Boolean(entry))
-  return candidates.find((entry) => existsSync(entry)) ?? null
-}
-
-const executablePath = findExecutable()
+const executablePath = findChromiumExecutable()
 let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null
 let blocker: string | null = null
 

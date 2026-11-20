@@ -1,9 +1,9 @@
 import { readFile, stat } from "node:fs/promises"
-import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { createAgentConfigService } from "./agent-config.ts"
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createAuthService } from "./auth.ts"
+import { createEngineConnectionsService } from "./engine-connections.ts"
 import { createNotesApi } from "./notes-api.ts"
 import { createPluginsApi } from "./plugins-api.ts"
 import { createSessionShortcutsService } from "./session-shortcuts.ts"
@@ -21,9 +21,7 @@ installed, running OpenCode V2 engine (compatible with @opencode/client 2.1.4).
 
   --host <host>              Bind hostname/IP (OPENCODE_UI_HOST or 127.0.0.1)
   --port <port>              UI port 1–65535 (OPENCODE_UI_PORT or 5174)
-  --engine-url <origin>      Engine HTTP(S) origin (http://127.0.0.1:8090)
-  --service-file <path>      Registration containing a password
-                            (~/.config/opencode/service.json)
+  --engine-url <origin>      Prefill the first connection's engine URL
   --allowed-host <host>      Add exact trusted hostname/IP (repeatable)
   --allowed-origin <origin> Add exact trusted HTTP(S) origin (repeatable)
   --artifact-root <path>     Allow proven artifact files under this root (repeatable;
@@ -41,7 +39,6 @@ export interface BunServerOptions {
   hostname?: string
   port?: number
   engineUrl?: string
-  serviceFile?: string
   assetDirectory?: string
   artifactRoots?: readonly string[]
   security?: { allowedHosts: readonly string[]; allowedOrigins: readonly string[] }
@@ -124,7 +121,6 @@ export function serverOptionsFromFlags(flags: CliFlags): BunServerOptions {
   if (flags.host !== undefined) options.hostname = flags.host
   options.port = port
   if (flags.engineUrl !== undefined) options.engineUrl = flags.engineUrl
-  if (flags.serviceFile !== undefined) options.serviceFile = flags.serviceFile
   if (flags.artifactRoots.length > 0) options.artifactRoots = flags.artifactRoots
   if (flags.allowedHosts.length > 0 || flags.allowedOrigins.length > 0) {
     options.security = {
@@ -142,8 +138,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
   // No-argument direct invocation deliberately retains the deployment's legacy trust.
   const hostname = validateHostname(options.hostname ?? process.env.OPENCODE_UI_HOST ?? "127.0.0.1")
   const port = validatePort(options.port ?? process.env.OPENCODE_UI_PORT ?? "5174")
-  const target = validateOrigin(options.engineUrl ?? "http://127.0.0.1:8090")
-  const serviceFile = resolve(validatePath(options.serviceFile ?? join(homedir(), ".config", "opencode", "service.json")))
+  const suggestedEngineUrl = options.engineUrl === undefined ? undefined : validateOrigin(options.engineUrl)
   const legacyRoots = process.env.OPENCODE_UI_ARTIFACT_ROOTS?.split(",").map((value) => value.trim()).filter(Boolean)
   const roots = (options.artifactRoots ?? legacyRoots ?? DEFAULT_ARTIFACT_ROOTS).map((value) => resolve(validatePath(value)))
   const developmentOrigin = options.security ? undefined : process.env.OPENCODE_UI_DEV_ORIGIN
@@ -158,18 +153,26 @@ export async function startBunServer(options: BunServerOptions = {}) {
     .map((value) => value.trim())
     .filter(Boolean)
     .map(validateOrigin)
+  const defaultOriginsForPort = [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    `http://[::1]:${port}`,
+  ]
   const security = options.security ? {
     allowedHosts: options.security.allowedHosts.map(validateHostname),
     allowedOrigins: options.security.allowedOrigins.map(validateOrigin),
   } : {
     allowedHosts: [...DEFAULT_ALLOWED_HOSTS, ...devExtraHosts],
     allowedOrigins: [
-      ...DEFAULT_ALLOWED_ORIGINS,
-      ...(developmentOrigin ? [developmentOrigin] : []),
-      ...devExtraOrigins,
+      ...new Set([
+        ...DEFAULT_ALLOWED_ORIGINS,
+        ...defaultOriginsForPort,
+        ...(developmentOrigin ? [developmentOrigin] : []),
+        ...devExtraOrigins,
+      ]),
     ],
   }
-  if (options.security && !isLoopbackHost(hostname) &&
+  if (!isLoopbackHost(hostname) &&
     (!security.allowedHosts.some((host) => !isLoopbackHost(host)) || !security.allowedOrigins.some((origin) => !isLoopbackHost(new URL(origin).hostname)))) {
     throw new BunConfigurationError("Non-loopback binding requires explicit non-loopback --allowed-host and --allowed-origin. The required UI password gate is a shared access boundary, not tenant isolation; use secure transport.")
   }
@@ -188,34 +191,54 @@ export async function startBunServer(options: BunServerOptions = {}) {
       throw new BunConfigurationError("Bun frontend build is unavailable; prepare the direct server's frontend assets with bun run build:bun.")
     }
   }
-  let contents: string
-  try {
-    contents = await readFile(serviceFile, "utf8")
-  } catch {
-    throw new BunConfigurationError("Cannot read the OpenCode service registration. Ensure the separate OpenCode V2 engine is installed/running and the service file is readable; see README.md → Prerequisites. Use --service-file to select an existing registration.")
+  const connections = createEngineConnectionsService({ suggestedEngineUrl })
+  await connections.init()
+  const activeEngine = () => connections.getActiveTarget()
+  const upstream = () => {
+    const current = activeEngine()
+    return { opencodeBaseUrl: current?.engineUrl ?? "", authorization: current?.authorization }
   }
-  let password: string
-  try {
-    const registration: unknown = JSON.parse(contents)
-    if (!registration || typeof registration !== "object" || !("password" in registration) || typeof registration.password !== "string" || !registration.password.trim()) throw new Error()
-    password = registration.password
-  } catch {
-    throw new BunConfigurationError("Invalid OpenCode service registration: expected a JSON object with a nonempty password. See README.md → Prerequisites; select a valid existing registration with --service-file, and never pass credentials on the command line.")
-  }
-  const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
   const auth = createAuthService({
-    required: !isLoopbackHost(hostname),
+    required: true,
     cookieName: process.env.OPENCODE_UI_SESSION_COOKIE,
   })
-  const agents = createAgentConfigService({ opencodeBaseUrl: target, authorization })
-  const artifacts = createArtifactDelivery({ opencodeBaseUrl: target, authorization, roots })
-  const notifications = createNotificationService({ opencodeBaseUrl: target, authorization })
+  const agents = createAgentConfigService({
+    getTarget: upstream,
+  })
+  const artifacts = createArtifactDelivery({
+    getTarget: upstream,
+    roots,
+  })
+  const notifications = createNotificationService({
+    ...upstream(),
+  })
   const notes = createNotesApi()
-  const plugins = createPluginsApi({ engineUrl: target, authorization, repoRoot: resolve(import.meta.dirname, "..") })
+  const plugins = createPluginsApi({
+    engineUrl: "",
+    authorization: "",
+    getTarget: () => activeEngine() ?? { engineUrl: "", authorization: "" },
+    repoRoot: resolve(import.meta.dirname, ".."),
+  })
   const sessionShortcuts = createSessionShortcutsService()
   const application = createBunApplication({
-    target, authorization, directory, agents, artifacts, notifications, auth, notes, plugins, sessionShortcuts,
+    getTarget: () => {
+      const current = activeEngine()
+      return current ? { target: current.engineUrl, authorization: current.authorization } : null
+    },
+    directory,
+    agents,
+    artifacts,
+    notifications,
+    auth,
+    connections,
+    notes,
+    plugins,
+    sessionShortcuts,
     security,
+  })
+  const unsubscribeConnections = connections.onChange(() => {
+    application.resetEngineConnections()
+    notifications.reconfigure(upstream())
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {
     hostname: string; port: number; fetch: typeof application.fetch; websocket: typeof application.websocket
@@ -228,7 +251,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
     throw new BunConfigurationError("Cannot bind the UI listener. Check --host, choose an available --port, and verify local bind permissions.")
   }
   void notifications.start().catch(() => console.warn("OpenCode UI notifications unavailable."))
-  const stop = () => { notifications.stop(); application.dispose(); void server.stop(true) }
+  const stop = () => { unsubscribeConnections(); notifications.stop(); application.dispose(); void server.stop(true) }
   process.once("SIGINT", stop)
   process.once("SIGTERM", stop)
   return server

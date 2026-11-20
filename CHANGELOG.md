@@ -6,12 +6,14 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- `bun run start` as the single start command, with `--host`/`--port`/`--engine-url`/`--service-file`/
+- `bun run start` as the single start command, with `--host`/`--port`/`--engine-url`/
   `--allowed-host`/`--allowed-origin`/`--artifact-root`/`--help`/`--version` and an automatic first-run
   production build when `dist-bun-build/` is missing.
-- Optional UI password gate: first-run setup, sign-in, logout, password change, an HTTP-only 30-day
-  session cookie, and server-side argon2id/hash-only state. Optional on loopback, required on
-  non-loopback binds.
+- First-run UI password setup, sign-in, logout, and password changes in Settings → Access. The
+  password is required on every bind, with an HTTP-only 30-day session cookie and server-side
+  argon2id/hash-only state.
+- With no saved engine, the home screen links to Settings → Connections. The engine password
+  is required and verified before saving; service registration files are no longer used.
 - Settings workspace with Appearance, Agents, Alerts, Keys, Plugins, and Access sections; Notes and
   Settings are mutually exclusive main panes with Back-to-conversation in the app header.
 - Settings → Plugins management of the Notes MCP server, persisting `mcp.servers.notes` in the

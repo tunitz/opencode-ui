@@ -15,8 +15,20 @@ export type AsyncCache<T> = {
   invalidate(key?: string): void
 }
 
+const MAX_CACHE_ENTRIES = 100
+
 export function createAsyncCache<T>(defaultTtlMs = 60_000): AsyncCache<T> {
   const entries = new Map<string, Entry<T>>()
+
+  const setBounded = (key: string, entry: Entry<T>) => {
+    if (entries.has(key)) entries.delete(key)
+    entries.set(key, entry)
+    while (entries.size > MAX_CACHE_ENTRIES) {
+      const oldest = entries.keys().next().value
+      if (oldest === undefined) break
+      entries.delete(oldest)
+    }
+  }
 
   // Start one refresh and share it with every concurrent caller. A stale value
   // (when present) stays in the entry so `peek` and later reads can still use
@@ -26,7 +38,10 @@ export function createAsyncCache<T>(defaultTtlMs = 60_000): AsyncCache<T> {
       .then(load)
       .then(
         (value) => {
-          entries.set(key, { at: Date.now(), value })
+          // Guard against writing stale results if invalidated while in flight.
+          if (entries.get(key)?.promise === promise) {
+            setBounded(key, { at: Date.now(), value })
+          }
           return value
         },
         (error) => {
@@ -35,7 +50,7 @@ export function createAsyncCache<T>(defaultTtlMs = 60_000): AsyncCache<T> {
         }
       )
     const previous = entries.get(key)
-    entries.set(key, {
+    setBounded(key, {
       at: previous?.at ?? Date.now(),
       value: previous?.value,
       promise,

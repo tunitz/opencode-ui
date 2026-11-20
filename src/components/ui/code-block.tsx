@@ -88,7 +88,7 @@ function CodeBlockActions({
 function CodeBlockCopyButton({
   value,
   variant = "ghost",
-  size = "icon-xs",
+  size = "icon-lg",
   className,
   onClick,
   ...props
@@ -118,7 +118,7 @@ function CodeBlockCopyButton({
         size={size}
         aria-label={copied ? "Copied" : failed ? "Copy failed" : "Copy"}
         title={failed ? "Could not copy — select the code and copy manually" : undefined}
-        className={cn(className)}
+        className={cn("size-11 md:size-8", className)}
         onClick={(event) => {
           onClick?.(event)
           void copyText(value).then(
@@ -135,11 +135,9 @@ function CodeBlockCopyButton({
         {...props}
       >
         {copied ? (
-          <CheckIcon
-          />
+          <CheckIcon aria-hidden="true" className="size-4" />
         ) : (
-          <CopyIcon
-          />
+          <CopyIcon aria-hidden="true" className="size-4" />
         )}
       </Button>
       <span aria-live="polite" className="sr-only">

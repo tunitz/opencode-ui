@@ -10,10 +10,10 @@ tools, providers, and history.
 - Files, working-tree diffs, permissions, forms, and session settings.
 - Structured tool output, artifacts, Markdown, tables, and images.
 - Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
-- A Settings workspace for appearance, agents, alerts, keys, plugins, and access.
+- A Settings workspace for appearance, agents, alerts, plugins, engine connections, and access.
 - Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
 - Optional Web Push notifications.
-- UI password gate: optional on loopback, required on non-loopback; the engine credential always stays on the UI server.
+- First-run UI password setup; any saved engine credential stays on the UI server.
 
 ## Architecture
 
@@ -30,15 +30,11 @@ project does not install, start, or modify it.
 
 - Install and start the **OpenCode V2 engine** separately, compatible with the pinned
   `@opencode/client` **2.1.4**. This project does not install or start the engine.
-- Have the engine's existing **service-registration JSON** at `~/.config/opencode/service.json`
-  (or the path selected with `--service-file`) containing a nonempty string `password`, readable by
-  the account running the UI. The server authenticates with Basic username `opencode`; the UI only
-  reads this file.
 - [Bun](https://bun.sh/) **1.4.4**. `package.json` declares the exact version; broader
   compatibility is not established.
 
-Keep the registration private. Never print or log its password, pass it on the command line, put it
-in a URL, or commit it.
+If the engine requires a password, enter it privately during connection setup. Never pass it on the
+command line, put it in a URL, or commit it.
 
 ## Quick start from a checkout
 
@@ -48,13 +44,21 @@ bun run start
 ```
 
 Open <http://127.0.0.1:5174> on the same machine. `bun run start` serves the production build,
-creating it on first run when it is missing. On a loopback bind no sign-in is shown unless a
-password has already been set; any non-loopback bind requires a password and shows the first-run
-setup screen. Set or change it later in Settings → Access.
+creating it on first run when it is missing. On first visit, set an OpenCode UI password. You can
+change it later in Settings → Access.
 
-With no overrides, the server connects to `http://127.0.0.1:8090` and reads the engine's existing
-service-registration JSON at `~/.config/opencode/service.json`. The UI only reads this file; it
-never creates it or accepts the credential on the command line.
+After setup, the home screen shows **No available connections** until you add one. Select **Open
+Connection Settings**, then **Add connection**. Enter a name and the HTTP(S) address shown by
+`opencode service status`.
+
+OpenCode V2's background service can generate its own password even if you never set one. If the
+connection test says a password is required, run `opencode service get password` privately on the
+engine machine and enter the result as the required **Engine password**. Use **Test connection** to
+verify, then **Save and connect**. A failed check does not save or activate a connection.
+
+The engine password is separate from the UI access password. The UI no longer reads engine
+registration files. If an existing connection was using a registration file, edit it and enter
+the engine password.
 
 ### Remote access
 
@@ -69,9 +73,9 @@ Replace `ui.example.test` with your real reachable hostname and use secure trans
 a trusted reverse proxy or tunnel). Set the UI password privately before exposing the service; a
 non-loopback bind requires one. The first visit opens the setup screen when no password is set, or
 the sign-in screen when one is already configured. The setup endpoint works without a session.
-The direct server's built-in allowed origins are fixed to port 5174, so if
-you also change `--port`, you must pass an explicit `--allowed-origin` for the new port. Use
-`bun run start --help` for the complete flag reference.
+The direct server derives its built-in loopback allowed origins from the resolved `--port`, so
+changing `--port` on loopback works automatically; pass an explicit `--allowed-origin` for any
+non-loopback origin. Use `bun run start --help` for the complete flag reference.
 
 ## Published package
 
@@ -90,8 +94,7 @@ security boundary below.
 | --- | --- |
 | `--host <host>` | `OPENCODE_UI_HOST`, otherwise `127.0.0.1`. Bind hostname/IP only. |
 | `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174`. Integer from 1 through 65535. |
-| `--engine-url <origin>` | `http://127.0.0.1:8090` for `bun run start`; `http://127.0.0.1:4096` for the packaged CLI. |
-| `--service-file <path>` | `~/.config/opencode/service.json` for `bun run start`; the CLI additionally honors `$XDG_CONFIG_HOME`. |
+| `--engine-url <origin>` | Optional prefill for first-run setup. Does not create a connection. |
 | `--allowed-host <host>` | Repeatable additions to loopback hosts. Hostname/IP only. |
 | `--allowed-origin <origin>` | Repeatable additions to loopback origins at the UI port. |
 | `--artifact-root <path>` | Repeatable artifact roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. `bun run start` otherwise allows `/tmp/opencode/shots`; the CLI allows none. |
@@ -108,9 +111,13 @@ Common environment variables include:
 - `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
 - `OPENCODE_UI_AUTH_STATE`: overrides the password/session state file, which defaults to
   `~/.local/share/opencode-ui/auth/state.json`.
+- `OPENCODE_UI_CONNECTIONS_STATE`: overrides saved local/remote OpenCode engine profiles, which
+  default to `~/.local/share/opencode-ui/connections.json` (mode `0600`).
 - `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: overrides the shared session pins/labels file, which
   defaults to `~/.local/share/opencode-ui/session-shortcuts.json`. Pins and labels are server-wide
   rather than browser-local.
+- `OPENCODE_UI_SESSION_HOME`: overrides the home directory prefilled by New Session; otherwise the
+  UI host's home directory is used. Remote engines currently keep their own engine-side location default.
 - `OPENCODE_UI_SESSION_COOKIE`: overrides the session cookie name (default `opencode_ui_session`).
   Set a distinct name for a second UI instance on the same host, since cookies are scoped to a host
   and ignore port numbers.
@@ -119,16 +126,15 @@ Common environment variables include:
 - `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
   `~/.local/state/opencode-ui/notifications/state.json`.
 - `OPENCODE_UI_VAPID_SUBJECT`: Web Push contact URI; set an appropriate contact for your use.
-- `OPENCODE_CONFIG_DIR`: local agent configuration directory. This does not select the CLI service
-  file.
+- `OPENCODE_CONFIG_DIR`: local agent configuration directory.
 
 Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL creates
 a separate storage scope, and preferences are not shared across devices.
 
 ## Security boundary
 
-The UI has a single access password. On a loopback bind it is optional; on any non-loopback bind it
-is required, and the first visit prompts for setup. Sessions use an HTTP-only, SameSite=Lax cookie
+The UI has a single required access password, set on first visit. Sessions use an HTTP-only,
+SameSite=Lax cookie
 valid for 30 days; the server stores an argon2id password hash and SHA-256 session-token hashes
 under `~/.local/share/opencode-ui/auth/`, and no password or token is placed in `localStorage` or
 `sessionStorage`. Anyone with the password can exercise the permissions of the engine credential.
@@ -141,10 +147,10 @@ JSON-mutation, artifact-provenance, or `no-store` protections.
 
 ## Notes
 
-Notes are built in and do not depend on an engine plugin. The
-[notes package](plugins/notes/README.md) (`@tunitz/opencode-notes`) is a standalone TypeScript core
-with a plaintext file store. The UI server imports it in-process for the notes workspace and
-`/api/ui/notes/*`; agents use it through an optional MCP stdio server.
+Notes are built in and do not depend on an engine plugin. The internal
+[notes module](plugins/notes/README.md) (`plugins/notes/`) is a standalone TypeScript core
+with a plaintext file store shipped inside this repository. The UI server imports it in-process for
+the notes workspace and `/api/ui/notes/*`; agents use it through an optional MCP stdio server.
 
 The browser Notes workspace and the note reference picker are hidden when the plugin registry
 definitively reports the Notes MCP entry as disabled. A transient or unknown registry state leaves
@@ -195,7 +201,7 @@ multi-user isolated. Do not store secrets in notes.
 ## Status and limitations
 
 - The project is pre-1.0; interfaces and behavior may change.
-- The terminal surface is not shipped. `/terminal` is reported as unsupported rather than faked.
+- `/terminal` opens a lazy xterm browser terminal backed by native PTY APIs and the same-origin WebSocket bridge; reconnects require explicit Reattach.
 - Notifications are best-effort and depend on browser and OS push delivery.
 - The UI password is one shared access password; it is not multi-tenant isolation.
 - Package publication and registry installation are not verified; packaging checks are pending.

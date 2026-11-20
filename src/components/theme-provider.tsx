@@ -62,23 +62,20 @@ function disableTransitionsTemporarily() {
   }
 }
 
-function isEditableTarget(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return false
+function safeStorageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
   }
+}
 
-  if (target.isContentEditable) {
-    return true
+function safeStorageSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Blocked or full storage must not crash the app.
   }
-
-  const editableParent = target.closest(
-    "input, textarea, select, [contenteditable='true']"
-  )
-  if (editableParent) {
-    return true
-  }
-
-  return false
 }
 
 export function ThemeProvider({
@@ -89,7 +86,7 @@ export function ThemeProvider({
   ...props
 }: ThemeProviderProps) {
   const [theme, setThemeState] = React.useState<Theme>(() => {
-    const storedTheme = localStorage.getItem(storageKey)
+    const storedTheme = safeStorageGet(storageKey)
     if (isTheme(storedTheme)) {
       return storedTheme
     }
@@ -97,14 +94,14 @@ export function ThemeProvider({
     return defaultTheme
   })
 
-  const [palette, setPaletteState] = React.useState(() => readPalette(localStorage.getItem(PALETTE_KEY)))
-  const [accent, setAccentState] = React.useState(() => readAccent(localStorage.getItem(ACCENT_KEY)))
+  const [palette, setPaletteState] = React.useState(() => readPalette(safeStorageGet(PALETTE_KEY)))
+  const [accent, setAccentState] = React.useState(() => readAccent(safeStorageGet(ACCENT_KEY)))
   const setPalette = React.useCallback((value: Palette) => {
-    localStorage.setItem(PALETTE_KEY, value)
+    safeStorageSet(PALETTE_KEY, value)
     setPaletteState(value)
   }, [])
   const setAccent = React.useCallback((value: Accent) => {
-    localStorage.setItem(ACCENT_KEY, value)
+    safeStorageSet(ACCENT_KEY, value)
     setAccentState(value)
   }, [])
 
@@ -115,7 +112,11 @@ export function ThemeProvider({
 
   React.useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.storageArea !== localStorage) return
+      try {
+        if (event.storageArea !== localStorage) return
+      } catch {
+        return
+      }
       if (event.key === PALETTE_KEY || event.key === null) setPaletteState(readPalette(event.newValue))
       if (event.key === ACCENT_KEY || event.key === null) setAccentState(readAccent(event.newValue))
     }
@@ -125,7 +126,7 @@ export function ThemeProvider({
 
   const setTheme = React.useCallback(
     (nextTheme: Theme) => {
-      localStorage.setItem(storageKey, nextTheme)
+      safeStorageSet(storageKey, nextTheme)
       setThemeState(nextTheme)
     },
     [storageKey]
@@ -142,6 +143,16 @@ export function ThemeProvider({
 
       root.classList.remove("light", "dark")
       root.classList.add(resolvedTheme)
+
+      const themeColorMeta = document.querySelectorAll<HTMLMetaElement>(
+        'meta[name="theme-color"]'
+      )
+      const color = resolvedTheme === "dark" ? "#1b1b1f" : "#ffffff"
+      for (const meta of themeColorMeta) {
+        if (!meta.media || nextTheme !== "system") {
+          meta.content = color
+        }
+      }
 
       if (restoreTransitions) {
         restoreTransitions()
@@ -170,48 +181,12 @@ export function ThemeProvider({
   }, [theme, applyTheme])
 
   React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat) {
-        return
-      }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return
-      }
-
-      if (isEditableTarget(event.target)) {
-        return
-      }
-
-      if (event.key.toLowerCase() !== "d") {
-        return
-      }
-
-      setThemeState((currentTheme) => {
-        const nextTheme =
-          currentTheme === "dark"
-            ? "light"
-            : currentTheme === "light"
-              ? "dark"
-              : getSystemTheme() === "dark"
-                ? "light"
-                : "dark"
-
-        localStorage.setItem(storageKey, nextTheme)
-        return nextTheme
-      })
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown)
-    }
-  }, [storageKey])
-
-  React.useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {
-      if (event.storageArea !== localStorage) {
+      try {
+        if (event.storageArea !== localStorage) {
+          return
+        }
+      } catch {
         return
       }
 

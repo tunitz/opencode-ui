@@ -112,17 +112,17 @@ export function SubagentNavigation({ nav, title, projectLabel = null }: { nav: O
   return <div className="relative flex min-w-0 flex-1 items-center justify-center md:justify-start">
     {session.parentID ? <Button type="button" variant="ghost" size="icon-lg" className="size-11 shrink-0" aria-label="Return to parent session" disabled={parentBusy} onClick={() => void openParent()}><ArrowLeftIcon aria-hidden="true" className="rtl:rotate-180" /></Button> : null}
     <DropdownMenu open={open} onOpenChange={(next) => { if (next) { setBusy(true); setRetry((value) => value + 1) } setOpen(next) }} modal={false}>
-      <h1 className="min-w-0" title={title} aria-label={title}>
-        <DropdownMenuTrigger render={<Button type="button" variant="ghost" className="h-11 min-w-11 max-w-full gap-1 px-1 text-[13px] font-medium text-foreground" aria-label="Subagents" />}>
-          <span className="flex min-w-0 flex-col items-start gap-0.5">
-            <span dir="auto" className="min-w-0 truncate">{title}</span>
+      <h1 className="min-w-0 max-w-full" title={title}>
+        <DropdownMenuTrigger render={<Button type="button" variant="ghost" className="h-11 min-w-11 max-w-full gap-1 px-1 text-[13px] font-medium text-foreground" aria-label={`${title}${projectLabel ? `, ${projectLabel}` : ""}. Show subagents`} />}>
+          <span className="flex min-w-0 max-w-full flex-col items-start gap-0.5">
+            <span dir="auto" className="max-w-full truncate">{title}</span>
             {projectLabel ? (
               <span dir="ltr" className="max-w-full truncate font-mono text-[10px] text-muted-foreground">
                 {projectLabel}
               </span>
             ) : null}
           </span>
-          <ChevronDownIcon aria-hidden="true" className={open ? "rotate-180" : undefined} />
+          <ChevronDownIcon aria-hidden="true" className={open ? "shrink-0 rotate-180" : "shrink-0"} />
         </DropdownMenuTrigger>
       </h1>
       <DropdownMenuContent align="center" aria-label="Subagents" className="w-72 max-w-[calc(100vw-2rem)]">

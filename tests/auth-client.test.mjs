@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 import {
   AuthApiError,
+  authAwareFetch,
   changePassword,
   getAuthStatus,
   isAuthErrorPayload,
   login,
   logout,
+  registerUnauthorizedHandler,
   setupPassword,
 } from "../src/lib/auth"
 
@@ -171,5 +173,22 @@ describe("isAuthErrorPayload", () => {
     expect(isAuthErrorPayload(null)).toBe(false)
     expect(isAuthErrorPayload("auth_required")).toBe(false)
     expect(isAuthErrorPayload(undefined)).toBe(false)
+  })
+})
+
+describe("authAwareFetch", () => {
+  test("signals only UI API 401s, not engine-proxied auth failures", async () => {
+    const signal = []
+    const unregister = registerUnauthorizedHandler((code) => signal.push(code))
+    respond = () => json({ error: { code: "auth_required" } }, 401)
+    try {
+      await authAwareFetch("/api/agent")
+      expect(signal).toEqual([])
+
+      await authAwareFetch("/api/ui/session-shortcuts")
+      expect(signal).toEqual(["auth_required"])
+    } finally {
+      unregister()
+    }
   })
 })

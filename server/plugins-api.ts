@@ -87,6 +87,8 @@ export type PluginsApiOptions = {
   engineUrl: string
   /** Engine Basic credential. Only ever sent to the engine, never to clients. */
   authorization: string
+  /** Optional live target provider when switching engines at runtime. */
+  getTarget?: () => { engineUrl: string; authorization: string }
   /** Repository root used to build the absolute MCP entry path. */
   repoRoot: string
   fetch?: typeof fetch
@@ -687,7 +689,17 @@ async function mutateConfig(
 }
 
 export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
-  const engineUrl = options.engineUrl.replace(/\/+$/, "")
+  const staticEngineUrl = options.engineUrl.replace(/\/+$/, "")
+  const resolveTarget = () => {
+    if (!options.getTarget) {
+      return { engineUrl: staticEngineUrl, authorization: options.authorization }
+    }
+    const current = options.getTarget()
+    return {
+      engineUrl: current.engineUrl.replace(/\/+$/, ""),
+      authorization: current.authorization,
+    }
+  }
   const fetchImpl = options.fetch ?? fetch
   const timeoutMs = options.timeoutMs ?? ENGINE_TIMEOUT_MS
   // The reconcile runs after the config lock is released, but the in-process
@@ -707,15 +719,18 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
   }
 
   async function engineFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const { engineUrl, authorization } = resolveTarget()
     return fetchImpl(`${engineUrl}${path}`, {
       ...init,
+      redirect: "manual",
+      proxy: false,
       headers: {
-        authorization: options.authorization,
+        ...(authorization ? { authorization } : {}),
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         ...init.headers,
       },
       signal: init.signal ?? AbortSignal.timeout(timeoutMs),
-    })
+    } as RequestInit)
   }
 
   /** Remaining hot-apply budget as a signal; `null` means the budget is spent. */

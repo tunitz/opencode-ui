@@ -51,7 +51,10 @@ export function createSessionShortcutsService(options: {
         cache = parseSessionShortcuts(raw)
         await chmod(stateFile, 0o600)
       } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          loadPromise = null
+          throw error
+        }
         cache = parseSessionShortcuts(null)
       }
       return cache

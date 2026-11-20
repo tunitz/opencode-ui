@@ -23,12 +23,19 @@
     <script>
       ;(() => {
         try {
+          const root = document.documentElement
           const stored = localStorage.getItem("theme")
           const dark =
             stored === "dark" ||
             (stored !== "light" &&
               window.matchMedia("(prefers-color-scheme: dark)").matches)
-          document.documentElement.classList.add(dark ? "dark" : "light")
+          root.classList.add(dark ? "dark" : "light")
+          const palettes = ["default", "slate", "sand", "forest", "plum", "ocean"]
+          const accents = ["default", "blue", "violet", "green", "teal", "rose", "amber"]
+          const palette = localStorage.getItem("appearance-palette")
+          const accent = localStorage.getItem("appearance-accent")
+          if (palette && palettes.includes(palette)) root.dataset.palette = palette
+          if (accent && accents.includes(accent)) root.dataset.accent = accent
         } catch {
           /* localStorage unavailable: first paint falls back to light */
         }

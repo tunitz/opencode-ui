@@ -13,7 +13,14 @@ import { LoaderCircleIcon, RefreshCwIcon } from "lucide-react"
 
 import { AuthScreen, type AuthScreenMode } from "@/components/auth-screen"
 import { Button } from "@/components/ui/button"
-import { AuthApiError, getAuthStatus, logout, type AuthStatus } from "@/lib/auth"
+import {
+  AuthApiError,
+  getAuthStatus,
+  logout,
+  registerUnauthorizedHandler,
+  type AuthStatus,
+} from "@/lib/auth"
+import { liveRunStore } from "@/lib/live-run-store"
 
 export type AuthGateValue = {
   /** Boot status; null while loading or after a failed load. */
@@ -96,6 +103,7 @@ export function AuthGateProvider({
       // The login screen is still the honest next step; the next status check
       // corrects the session state if the cookie outlived the request.
     }
+    liveRunStore.reset()
     setLoadError(null)
     setStatus((current) =>
       current ? { ...current, authenticated: false } : current
@@ -104,9 +112,15 @@ export function AuthGateProvider({
   }, [])
 
   const signalUnauthorized = useCallback((code?: string) => {
+    liveRunStore.reset()
     setLoadError(null)
     setForcedMode(code === "setup_required" ? "setup" : "login")
   }, [])
+
+  useEffect(
+    () => registerUnauthorizedHandler(signalUnauthorized),
+    [signalUnauthorized]
+  )
 
   const value = useMemo<AuthGateValue>(
     () => ({ status, loadError, reloadStatus, signOut, signalUnauthorized }),

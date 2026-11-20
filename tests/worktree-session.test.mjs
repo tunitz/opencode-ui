@@ -111,7 +111,7 @@ test("the shared new-session dialog accepts a preselected worktree directory", (
   expect(dialog).toContain("newSessionProjectError(selectedID, expectedProjectID)")
   expect(dialog).toContain("selected?.directory === directory ? selected.id : null")
   expect(dialog).toContain('aria-label="New session agent and model"')
-  expect(dialog).toContain("agentModelDefaults(agent, targetCatalog.models)")
+  expect(dialog).toContain("agentModelDefaults(agent, nav.models)")
   expect(dialog).toMatch(
     /const created = await createSession\(\s*selectedID,\s*\{ agentID: draft\.agentID, model: draft\.model \},\s*directory\s*\)/
   )
@@ -135,22 +135,18 @@ test("the dialog resets transient state on open instead of remounting", () => {
 })
 
 test("the agent picker stays available when folder location cannot resolve", () => {
-  // Browsing into a subfolder or up above the project root makes location.get
-  // reject, which nulls selectedID. The picker preview (draft + options) must
-  // come from the directory-scoped catalog alone, never from selectedID,
-  // otherwise the picker silently vanished during folder navigation.
-  const draftBlock = dialog.match(
-    /const draft = useMemo<SessionDraft \| null>\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);?/
-  )?.[0]
-  expect(draftBlock).toBeDefined()
-  expect(draftBlock).not.toContain("selectedID")
-  expect(draftBlock).toContain("defaults")
-  expect(draftBlock).toContain("override?.directory === directory")
+  // Browsing into a subfolder or above the project root makes location.get
+  // reject, which nulls selectedID. The picker must come from the settings
+  // catalog and a stable draft, never from folder resolution or a project
+  // catalog discovered while browsing.
+  expect(dialog).toContain("resolveNewSessionDefaults")
+  expect(dialog).toContain("configEntries: nav.configEntries")
+  expect(dialog).toContain("userModifiedRef.current = true")
+  expect(dialog).not.toContain("override")
 
   // Neither the render guard nor the reason chain may gate the picker on a
-  // resolved project; the picker is shown from the ready, directory-scoped
-  // catalog and an unavailable folder is surfaced as an honest reason instead.
-  expect(dialog).toContain('targetCatalog.status === "ready" && draft')
+  // resolved project; an unavailable folder is surfaced honestly instead.
+  expect(dialog).toContain("{draft ? (")
   expect(dialog).not.toMatch(/selectedID\s*&&\s*draft/)
   expect(dialog).not.toMatch(/draft\s*&&\s*selectedID/)
   expect(dialog).toContain("folder === \"unavailable\"")
@@ -162,6 +158,6 @@ test("the agent picker stays available when folder location cannot resolve", () 
       /const canCreate =([\s\S]*?)\n\n  async function handleAgentChange/
     )?.[1] ?? ""
   expect(canCreateBlock).toContain("Boolean(selectedID)")
-  expect(canCreateBlock).toContain('targetCatalog.status === "ready"')
   expect(dialog).toMatch(/if \(!canCreate \|\| !selectedID \|\| !draft\?\.model\)/)
 })
+

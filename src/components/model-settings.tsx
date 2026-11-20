@@ -559,13 +559,7 @@ export function ModelSettingsInline({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           nativeButton={false}
-          render={
-            <button
-              type="button"
-              aria-label="Open model settings"
-              className="sr-only"
-            />
-          }
+          render={<span aria-hidden="true" className="sr-only" />}
         />
         <PopoverContent
           side="top"

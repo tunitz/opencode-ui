@@ -1,4 +1,8 @@
 import {
+  CONNECTIONS_BODY_LIMIT,
+  CONNECTIONS_ROUTE,
+} from "./engine-connections.ts"
+import {
   NOTES_ATTACHMENT_BODY_LIMIT,
   NOTES_BODY_LIMIT,
   NOTES_ROUTE,
@@ -15,9 +19,11 @@ type Handler = (request: Request, remote?: string) => Promise<Response> | Respon
 type DispatcherOptions = {
   security?: SecurityOptions
   auth?: Handler
+  connections?: Handler
   notes?: Handler
   plugins?: Handler
   sessionShortcuts?: Handler
+  environment?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler
@@ -67,6 +73,9 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     if (options.auth && (path === "/api/ui/auth" || path.startsWith("/api/ui/auth/"))) {
       handler = options.auth
       limit = 8 * 1024
+    } else if (options.connections && (path === CONNECTIONS_ROUTE || path.startsWith(`${CONNECTIONS_ROUTE}/`))) {
+      handler = options.connections
+      limit = CONNECTIONS_BODY_LIMIT
     } else if (options.notes && (path === NOTES_ROUTE || path.startsWith(`${NOTES_ROUTE}/`))) {
       handler = options.notes
       limit = path === `${NOTES_ROUTE}/createAttachment` && request.method === "POST"
@@ -78,6 +87,9 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     } else if (options.sessionShortcuts && path === SESSION_SHORTCUTS_ROUTE) {
       handler = options.sessionShortcuts
       limit = SESSION_SHORTCUTS_BODY_LIMIT
+    } else if (options.environment && path === "/api/ui/environment") {
+      handler = options.environment
+      limit = 8 * 1024
     } else if (path === "/api/ui/agents" || path === "/api/ui/agents/default") {
       handler = options.agents
       limit = 64 * 1024

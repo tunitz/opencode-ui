@@ -2,6 +2,7 @@ import { ArrowLeftIcon } from "lucide-react"
 import { useWorkspace } from "@/components/workspace-context"
 import { SessionInspector } from "@/components/session-inspector"
 import { SubagentNavigation } from "@/components/subagent-navigation"
+import { ToolVisibilityMenu } from "@/components/tool-visibility-menu"
 import { WorkingTreeShortcut } from "@/components/working-tree-shortcut"
 import { Button } from "@/components/ui/button"
 import {
@@ -39,7 +40,7 @@ export function AppHeader({
     : null
 
   return (
-    <header className="safe-horizontal flex h-14 shrink-0 items-center border-b border-border/70 px-2 md:px-6 lg:px-8">
+    <header className="safe-horizontal flex min-h-14 shrink-0 items-center border-b border-border/70 px-2 pt-[env(safe-area-inset-top)] md:px-6 lg:px-8">
       {workspaceOpen ? (
         <Button
           type="button"
@@ -58,8 +59,11 @@ export function AppHeader({
       )}
       {!workspaceOpen && nav.activeSession ? <SubagentNavigation key={nav.activeSession.id} nav={nav} title={title} projectLabel={projectLabel} /> : <h1 className="min-w-0 flex-1 truncate px-1 text-center text-[13px] font-medium text-foreground md:text-start" dir="auto" title={title}>{title}</h1>}
       {!workspaceOpen && nav.activeSession ? <div className="md:hidden"><WorkingTreeShortcut key={JSON.stringify([nav.activeSession.id, nav.activeSession.location?.directory])} sessionID={nav.activeSession.id} directory={nav.activeSession.location?.directory ?? null} onOpen={() => nav.openInspector("changes")} /></div> : null}
-      <div className="flex w-11 shrink-0 items-center justify-end">
-        {workspaceOpen ? null : <SessionInspector nav={nav} onOpenSettings={onOpenSettings} onOpenWorktrees={onOpenWorktrees} />}
+      <div className="flex shrink-0 items-center justify-end gap-0.5">
+        <div className="flex w-11 shrink-0 items-center justify-end">
+          {workspaceOpen ? null : <SessionInspector nav={nav} onOpenSettings={onOpenSettings} onOpenWorktrees={onOpenWorktrees} />}
+        </div>
+        {!workspaceOpen && nav.activeSession ? <ToolVisibilityMenu serverVersion={nav.serverVersion} /> : null}
       </div>
     </header>
   )

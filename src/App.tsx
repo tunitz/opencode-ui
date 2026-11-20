@@ -7,7 +7,7 @@ import {
   useMemo,
   useState,
 } from "react"
-import { XIcon } from "lucide-react"
+import { ServerIcon, XIcon } from "lucide-react"
 
 import { AppHeader } from "@/components/app-header"
 import { AuthGateProvider } from "@/components/auth-context"
@@ -26,13 +26,13 @@ import {
   useSettingsWorkspace,
 } from "@/components/settings-context"
 import { Button } from "@/components/ui/button"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty"
 import { WorkspaceProvider, useWorkspace } from "@/components/workspace-context"
 import { useUndoToast, UndoToastProvider } from "@/lib/undo-toast"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
+import { useEngineConnection, type EngineConnectionCheck } from "@/lib/use-engine-connection"
 import { useOpenCode, type OpenCodeController } from "@/lib/use-opencode"
 import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
-import { useKeybindings } from "@/lib/use-keybindings"
-import { matchesKeybinding } from "@/lib/keybindings"
 import { recordPerfRender } from "@/lib/perf-probe"
 
 // Settings is a rarely-opened workspace with a large module graph. Loading it
@@ -72,16 +72,17 @@ export function App() {
   )
 }
 
-/** Mounted only after the auth gate reports an authenticated session. */
+/** The home shell is available even before an engine is configured. */
 function EngineApp() {
-  const nav = useOpenCode()
+  const { check, retry } = useEngineConnection()
+  const nav = useOpenCode(check.kind === "configured")
 
   return (
     <UndoToastProvider>
       <WorkspaceProvider>
         <NotesProvider nav={nav}>
           <SettingsProvider>
-            <AppShell nav={nav} />
+            <AppShell nav={nav} engineCheck={check} retryEngineCheck={retry} />
           </SettingsProvider>
         </NotesProvider>
       </WorkspaceProvider>
@@ -89,12 +90,15 @@ function EngineApp() {
   )
 }
 
-function AppShell({ nav }: { nav: OpenCodeController }) {
+function AppShell({ nav, engineCheck, retryEngineCheck }: {
+  nav: OpenCodeController
+  engineCheck: EngineConnectionCheck
+  retryEngineCheck: () => void
+}) {
   const workspace = useWorkspace()
   const notes = useNotesWorkspace()
   const settings = useSettingsWorkspace()
   const undo = useUndoToast()
-  const { bindings } = useKeybindings()
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
   const chatActive = workspace.active === "chat"
@@ -104,6 +108,10 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
   const openSettingsAction = settings.openSettings
   const openSettings = useCallback(
     () => openSettingsAction(),
+    [openSettingsAction]
+  )
+  const openConnections = useCallback(
+    () => openSettingsAction("connection"),
     [openSettingsAction]
   )
   const openWorktrees = useCallback(() => setWorktreesOpen(true), [])
@@ -145,33 +153,6 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
     if (directory) prefetchTargetCatalog(directory)
   }, [nav.activeSession?.location.directory, nav.location?.directory])
 
-  // Command opens the inspector's Command tab. It is not a modal search dialog,
-  // and it respects custom bindings plus IME/composition. Another workspace is
-  // left through the same guarded transition as the header Back control.
-  useEffect(() => {
-    const commandBinding = bindings.find((binding) => binding.command === "command.open")
-    if (!commandBinding || !nav.activeSession) return
-    const binding = commandBinding
-    const openInspector = nav.openInspector
-    const requestWorkspace = workspace.requestWorkspace
-    const activeWorkspace = workspace.active
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]')) return
-      if (!matchesKeybinding(event, binding, navigator.platform.toLowerCase().includes("mac") ? "mac" : "other")) {
-        return
-      }
-      event.preventDefault()
-      if (activeWorkspace === "chat") {
-        openInspector("command")
-        return
-      }
-      requestWorkspace("chat", { run: () => openInspector("command") })
-    }
-    document.addEventListener("keydown", onKeyDown)
-    return () => document.removeEventListener("keydown", onKeyDown)
-  }, [bindings, nav.activeSession, nav.openInspector, workspace])
-
   return (
     <NotificationsProvider nav={nav}>
       <a
@@ -202,62 +183,119 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
               inert={!chatActive ? true : undefined}
               aria-hidden={!chatActive ? true : undefined}
             >
-              {nav.startupNotice ? (
-                <div
-                  role="status"
-                  className="mx-4 mt-2 flex items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
-                >
-                  <span className="min-w-0 break-words">{nav.startupNotice}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Dismiss startup notice"
-                    className="shrink-0"
-                    onClick={nav.dismissStartupNotice}
-                  >
-                    <XIcon aria-hidden="true" className="size-4" />
-                  </Button>
-                </div>
-              ) : null}
-              <MemoPendingInbox nav={nav} />
-              <MemoConversation
-                sessionKey={nav.activeSessionID}
-                hasSession={nav.activeSessionID !== null}
-                status={nav.historyStatus}
-                error={nav.historyError}
-                messages={nav.messages}
-                streamStatus={nav.streamStatus}
-                hasOlder={nav.hasOlder}
-                loadingOlder={nav.loadingOlder}
-                olderError={nav.olderError}
-                serverVersion={nav.serverVersion}
-                revert={nav.activeSession?.revert ?? null}
-                focusMessageID={nav.focusMessageID}
-                onFocusMessageHandled={nav.clearFocusMessage}
-                onRetry={nav.retryHistory}
-                onLoadOlder={nav.loadOlderMessages}
-                onOpenDiff={nav.openInspectorDiff}
-                onStageRevert={nav.stageRevert}
-                onClearRevert={nav.clearRevert}
-                onRestorePrompt={onRestorePrompt}
-              />
-              <MemoContextStrip
-                sessionID={nav.activeSessionID}
-                hasSession={nav.activeSessionID !== null}
-                session={nav.activeSession}
-                messages={nav.historyStatus === "ready" ? nav.messages : EMPTY_MESSAGES}
-                models={nav.models}
-                revert={nav.activeSession?.revert ?? null}
-              />
-              <MemoQueueStrip nav={nav} />
-              <MemoComposer
-                nav={nav}
-                notes={notesForComposer}
-                modelSettingsOpen={modelSettingsOpen}
-                onModelSettingsOpenChange={setModelSettingsOpen}
-                onOpenSettings={openSettings}
-              />
+              {engineCheck.kind !== "configured" ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ServerIcon aria-hidden="true" />
+                    </EmptyMedia>
+                    {engineCheck.kind === "loading" ? (
+                      <EmptyDescription role="status">Checking connections…</EmptyDescription>
+                    ) : engineCheck.kind === "error" ? (
+                      <EmptyDescription role="alert">{engineCheck.message}</EmptyDescription>
+                    ) : (
+                      <>
+                        <h2 className="text-sm font-medium">No available connections</h2>
+                        <EmptyDescription>Add an OpenCode engine in Settings to start chatting.</EmptyDescription>
+                      </>
+                    )}
+                  </EmptyHeader>
+                  {engineCheck.kind !== "loading" ? (
+                    <EmptyContent>
+                      <Button type="button" className="h-11" onClick={openConnections}>
+                        Open Connection Settings
+                      </Button>
+                      {engineCheck.kind === "error" ? (
+                        <Button type="button" variant="outline" className="h-11" onClick={retryEngineCheck}>
+                          Retry
+                        </Button>
+                      ) : null}
+                    </EmptyContent>
+                  ) : null}
+                </Empty>
+              ) : (
+                <>
+                  {nav.startupNotice ? (
+                    <div
+                      role="status"
+                      className="mx-4 mt-2 flex items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+                    >
+                      <span className="min-w-0 break-words">{nav.startupNotice}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label="Dismiss startup notice"
+                        className="size-11 shrink-0"
+                        onClick={nav.dismissStartupNotice}
+                      >
+                        <XIcon aria-hidden="true" className="size-4" />
+                      </Button>
+                    </div>
+                  ) : null}
+                  {nav.compactionNotice?.sessionID === activeSessionID ? (
+                    <div
+                      role={nav.compactionNotice.status === "failed" ? "alert" : "status"}
+                      className="mx-4 mt-2 flex items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+                    >
+                      <span className="min-w-0 break-words">
+                        {nav.compactionNotice.text}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label="Dismiss compaction status"
+                        className="size-11 shrink-0"
+                        onClick={nav.clearCompactionNotice}
+                      >
+                        <XIcon aria-hidden="true" />
+                      </Button>
+                    </div>
+                  ) : null}
+                  <MemoPendingInbox nav={nav} />
+                  <MemoConversation
+                    sessionKey={nav.activeSessionID}
+                    hasSession={nav.activeSessionID !== null}
+                    connection={nav.connection}
+                    connectionError={nav.connectionError}
+                    onRetryConnection={nav.retryConnection}
+                    status={nav.historyStatus}
+                    error={nav.historyError}
+                    messages={nav.messages}
+                    streamStatus={nav.streamStatus}
+                    hasOlder={nav.hasOlder}
+                    loadingOlder={nav.loadingOlder}
+                    olderError={nav.olderError}
+                    serverVersion={nav.serverVersion}
+                    revert={nav.activeSession?.revert ?? null}
+                    focusMessageID={nav.focusMessageID}
+                    onFocusMessageHandled={nav.clearFocusMessage}
+                    onRetry={nav.retryHistory}
+                    onLoadOlder={nav.loadOlderMessages}
+                    onOpenDiff={nav.openInspectorDiff}
+                    onStageRevert={nav.stageRevert}
+                    onClearRevert={nav.clearRevert}
+                    onRestorePrompt={onRestorePrompt}
+                  />
+                  <MemoContextStrip
+                    sessionID={nav.activeSessionID}
+                    hasSession={nav.activeSessionID !== null}
+                    session={nav.activeSession}
+                    messages={nav.historyStatus === "ready" ? nav.messages : EMPTY_MESSAGES}
+                    models={nav.models}
+                    revert={nav.activeSession?.revert ?? null}
+                  />
+                  <MemoQueueStrip nav={nav} />
+                  <MemoComposer
+                    nav={nav}
+                    notes={notesForComposer}
+                    modelSettingsOpen={modelSettingsOpen}
+                    onModelSettingsOpenChange={setModelSettingsOpen}
+                    onOpenSettings={openSettings}
+                  />
+                </>
+              )}
             </div>
             {notes.hasWorkspace && (
               <section
@@ -283,7 +321,13 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                 tabIndex={-1}
                 className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 focus:outline-none md:px-6 lg:px-8"
               >
-                <Suspense fallback={null}>
+                <Suspense
+                  fallback={
+                    <p role="status" className="py-6 text-sm text-muted-foreground">
+                      Loading settings…
+                    </p>
+                  }
+                >
                   <SettingsWorkspace nav={nav} />
                 </Suspense>
               </div>
@@ -292,6 +336,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
         </div>
         <MemoSessionInspectorPanel
           nav={nav}
+          hidden={!chatActive}
           onOpenSettings={openSettings}
           onOpenWorktrees={openWorktrees}
         />

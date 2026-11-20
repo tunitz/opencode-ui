@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -32,11 +32,34 @@ import { contextLimitForModel, formatTokenCount } from "@/lib/context-usage"
 import { INSPECTOR_TAB_LABELS, type InspectorTab } from "@/lib/inspector-tabs"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
-import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
+import { DESKTOP_SIDEBAR_RAIL_WIDTH } from "@/lib/sidebar-layout"
 import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
 
 const INSPECTOR_ID = "session-inspector"
+const INSPECTOR_WIDTH_KEY = "opencode-ui:desktop-inspector-width:v1"
+const INSPECTOR_MIN_WIDTH = 288
+const INSPECTOR_MAX_WIDTH = 640
+
+function defaultInspectorWidth(): number {
+  if (typeof window === "undefined") return 320
+  if (window.innerWidth >= 1280) return 352
+  if (window.innerWidth >= 1024) return 320
+  return 288
+}
+
+function readInspectorWidth(): number {
+  const fallback = defaultInspectorWidth()
+  try {
+    const raw = window.localStorage.getItem(INSPECTOR_WIDTH_KEY)
+    const parsed = raw === null ? Number.NaN : Number(raw)
+    return Number.isFinite(parsed)
+      ? Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, parsed))
+      : fallback
+  } catch {
+    return fallback
+  }
+}
 
 function focusInspectorTrigger() {
   requestAnimationFrame(() => {
@@ -238,7 +261,7 @@ function TabStrip({
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent",
+              "pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent rtl:bg-linear-to-l",
               mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
             )}
           />
@@ -260,7 +283,7 @@ function TabStrip({
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent",
+              "pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent rtl:bg-linear-to-r",
               mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
             )}
           />
@@ -609,9 +632,9 @@ function InspectorRail({
               />
             }
           >
-            <PanelRightOpenIcon aria-hidden="true" className="size-5" />
+            <PanelRightOpenIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
           </TooltipTrigger>
-          <TooltipContent side="left">Expand session inspector</TooltipContent>
+          <TooltipContent side="inline-start">Expand session inspector</TooltipContent>
         </Tooltip>
       </div>
       <div className="flex flex-col gap-1 p-2">
@@ -626,7 +649,11 @@ function InspectorRail({
                     type="button"
                     variant="ghost"
                     size="icon-lg"
-                    aria-label={`Show inspector ${INSPECTOR_TAB_LABELS[tab.id]}`}
+                    aria-label={
+                      badge > 0
+                        ? `Show inspector ${INSPECTOR_TAB_LABELS[tab.id]} (${badge})`
+                        : `Show inspector ${INSPECTOR_TAB_LABELS[tab.id]}`
+                    }
                     onClick={() => nav.openInspector(tab.id)}
                     className="relative size-11 rounded-lg text-muted-foreground"
                   />
@@ -634,10 +661,10 @@ function InspectorRail({
               >
                 <Icon aria-hidden="true" className="size-4" />
                 {badge > 0 ? (
-                  <span className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
+                  <span aria-hidden="true" className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
                 ) : null}
               </TooltipTrigger>
-              <TooltipContent side="left">{tab.label}</TooltipContent>
+              <TooltipContent side="inline-start">{tab.label}</TooltipContent>
             </Tooltip>
           )
         })}
@@ -664,6 +691,35 @@ export function SessionInspectorPanel({
   hidden?: boolean
 }) {
   const isDesktop = useIsDesktop()
+  const [width, setWidth] = useState(readInspectorWidth)
+
+  const persistWidth = (next: number) => {
+    const clamped = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, next))
+    setWidth(clamped)
+    try {
+      window.localStorage.setItem(INSPECTOR_WIDTH_KEY, String(clamped))
+    } catch {
+      // A blocked storage API must not break resizing.
+    }
+  }
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = width
+    const rtl = document.documentElement.getAttribute("dir") === "rtl"
+    const onMove = (move: PointerEvent) => {
+      const delta = move.clientX - startX
+      persistWidth(startWidth + (rtl ? -delta : delta))
+    }
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+  }
 
   if (!isDesktop || !nav.activeSession) return null
 
@@ -681,13 +737,31 @@ export function SessionInspectorPanel({
       hidden={hidden || undefined}
       inert={hidden || undefined}
       aria-hidden={hidden || undefined}
-      style={{ backgroundColor: "var(--sidebar)" }}
+      style={{ width, backgroundColor: "var(--sidebar)" }}
       className={cn(
-        "h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
-        hidden ? "hidden" : "flex",
-        DESKTOP_SIDEBAR_WIDTH
+        "relative h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
+        hidden ? "hidden" : "flex"
       )}
     >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize session inspector"
+        aria-valuemin={INSPECTOR_MIN_WIDTH}
+        aria-valuemax={INSPECTOR_MAX_WIDTH}
+        aria-valuenow={width}
+        tabIndex={0}
+        data-inspector-resize
+        onPointerDown={startResize}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+          event.preventDefault()
+          const rtl = document.documentElement.getAttribute("dir") === "rtl"
+          const delta = event.key === "ArrowRight" ? 16 : -16
+          persistWidth(width + (rtl ? -delta : delta))
+        }}
+        className="absolute inset-y-0 start-0 z-30 w-2 cursor-ew-resize touch-none bg-transparent outline-none before:absolute before:inset-y-0 before:start-1/2 before:w-0.5 before:-translate-x-1/2 before:bg-border/70 before:content-[''] hover:before:bg-primary/60 focus-visible:before:bg-primary/80"
+      />
       <InspectorBody
         nav={nav}
         mode="sidebar"

@@ -48,6 +48,8 @@ const PINNED_PREVIEW_LIMIT = 5
 // Matches the notes service LIMITS.list maximum, so "Show more" returns every
 // pinned note the service can list in a single page.
 const PINNED_EXPANDED_LIMIT = 1_000
+const EMPTY_PINNED_NOTES: NotesNote[] = []
+const EMPTY_PINNED_SPACES: NotesSpace[] = []
 
 export type NotesContextValue = {
   /** Notes surfaces are allowed: true while the plugin state is unknown. */
@@ -273,33 +275,68 @@ export function NotesProvider({
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [forceWorkspace, notesEnabled, workspaceActive])
 
-  const value: NotesContextValue = {
-    notesEnabled,
-    available,
-    open: showWorkspace,
-    hasWorkspace: notesEnabled && editingDirectory !== null,
-    workspaceKey: editingDirectory ?? "",
-    selectedNoteID,
-    selectionRequest,
-    setSelectedNoteID,
-    openNotes,
-    closeNotes,
-    adapter,
-    pinnedNotes: pinnedSnapshot?.notes ?? [],
-    pinnedSpaces: pinnedSnapshot?.spaces ?? [],
-    pinnedSpacesError: pinnedSnapshot?.spacesError ?? false,
-    pinnedTotal: pinnedSnapshot?.total ?? 0,
-    pinnedError: pinnedSnapshot?.error ?? false,
-    pinnedLoading: pinnedSnapshot === null,
-    directoryChanged: Boolean(
-      editingDirectory && editingDirectory !== directory
-    ),
-    connected: nav.connection === "connected",
-    refreshKey: "",
-    refreshPinned,
-    pinnedExpanded,
-    setPinnedExpanded,
-  }
+  const connected = nav.connection === "connected"
+  const pinnedNotes = pinnedSnapshot?.notes ?? EMPTY_PINNED_NOTES
+  const pinnedSpaces = pinnedSnapshot?.spaces ?? EMPTY_PINNED_SPACES
+  const pinnedSpacesError = pinnedSnapshot?.spacesError ?? false
+  const pinnedTotal = pinnedSnapshot?.total ?? 0
+  const pinnedError = pinnedSnapshot?.error ?? false
+  const pinnedLoading = pinnedSnapshot === null
+  const directoryChanged = Boolean(
+    editingDirectory && editingDirectory !== directory
+  )
+  const hasWorkspace = notesEnabled && editingDirectory !== null
+  const workspaceKey = editingDirectory ?? ""
+
+  const value = useMemo<NotesContextValue>(
+    () => ({
+      notesEnabled,
+      available,
+      open: showWorkspace,
+      hasWorkspace,
+      workspaceKey,
+      selectedNoteID,
+      selectionRequest,
+      setSelectedNoteID,
+      openNotes,
+      closeNotes,
+      adapter,
+      pinnedNotes,
+      pinnedSpaces,
+      pinnedSpacesError,
+      pinnedTotal,
+      pinnedError,
+      pinnedLoading,
+      directoryChanged,
+      connected,
+      refreshKey: "",
+      refreshPinned,
+      pinnedExpanded,
+      setPinnedExpanded,
+    }),
+    [
+      notesEnabled,
+      available,
+      showWorkspace,
+      hasWorkspace,
+      workspaceKey,
+      selectedNoteID,
+      selectionRequest,
+      openNotes,
+      closeNotes,
+      adapter,
+      pinnedNotes,
+      pinnedSpaces,
+      pinnedSpacesError,
+      pinnedTotal,
+      pinnedError,
+      pinnedLoading,
+      directoryChanged,
+      connected,
+      refreshPinned,
+      pinnedExpanded,
+    ]
+  )
   return (
     <NotesContext.Provider value={value}>
       <OptionalAuthBoundary>

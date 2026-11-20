@@ -28,6 +28,26 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
   request_failed: "The auth request failed.",
 }
 
+/** Engine-proxied `/api/*` failures are not UI password failures. */
+function isUiApiRequest(input: Parameters<typeof fetch>[0]): boolean {
+  const raw =
+    input instanceof Request
+      ? input.url
+      : input instanceof URL
+        ? input.href
+        : typeof input === "string"
+          ? input
+          : ""
+  if (!raw) return false
+  try {
+    const base =
+      typeof window === "undefined" ? "http://localhost" : window.location.href
+    return new URL(raw, base).pathname.startsWith("/api/ui/")
+  } catch {
+    return false
+  }
+}
+
 /** Expected auth failures carry the HTTP status and stable server error code. */
 export class AuthApiError extends Error {
   readonly status: number
@@ -47,6 +67,44 @@ export function isAuthErrorPayload(body: unknown): boolean {
   const error = (body as AuthErrorBody).error
   if (!error || typeof error !== "object") return false
   return error.code === "auth_required" || error.code === "setup_required"
+}
+
+type UnauthorizedHandler = (code?: string) => void
+let unauthorizedHandler: UnauthorizedHandler | null = null
+
+export function registerUnauthorizedHandler(
+  handler: UnauthorizedHandler | null
+): () => void {
+  unauthorizedHandler = handler
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null
+  }
+}
+
+export function notifyUnauthorized(code?: string): void {
+  unauthorizedHandler?.(code)
+}
+
+/**
+ * Fetch wrapper that forwards mid-session 401 auth/setup errors from any gated
+ * `/api/*` call straight to the active `AuthGateProvider` without polling.
+ */
+export async function authAwareFetch(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1]
+): Promise<Response> {
+  const response = await fetch(input, init)
+  if (response.status === 401 && unauthorizedHandler && isUiApiRequest(input)) {
+    const body = await response
+      .clone()
+      .json()
+      .catch(() => null)
+    if (isAuthErrorPayload(body)) {
+      const code = (body as AuthErrorBody).error?.code
+      unauthorizedHandler(typeof code === "string" ? code : undefined)
+    }
+  }
+  return response
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
