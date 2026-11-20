@@ -10,7 +10,7 @@ tools, providers, and history.
 - Files, working-tree diffs, permissions, forms, and session settings.
 - Structured tool output, artifacts, Markdown, tables, and images.
 - Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
-- A Settings workspace for appearance, agents, alerts, keys, plugins, engine connections, and access.
+- A Settings workspace for appearance, agents, alerts, plugins, engine connections, and access.
 - Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
 - Optional Web Push notifications.
 - First-run UI password setup; any saved engine credential stays on the UI server.
@@ -116,6 +116,8 @@ Common environment variables include:
 - `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: overrides the shared session pins/labels file, which
   defaults to `~/.local/share/opencode-ui/session-shortcuts.json`. Pins and labels are server-wide
   rather than browser-local.
+- `OPENCODE_UI_SESSION_HOME`: overrides the home directory prefilled by New Session; otherwise the
+  UI host's home directory is used. Remote engines currently keep their own engine-side location default.
 - `OPENCODE_UI_SESSION_COOKIE`: overrides the session cookie name (default `opencode_ui_session`).
   Set a distinct name for a second UI instance on the same host, since cookies are scoped to a host
   and ignore port numbers.

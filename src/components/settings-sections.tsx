@@ -2,7 +2,6 @@ import type { ComponentType } from "react"
 import {
   BellIcon,
   BotIcon,
-  KeyboardIcon,
   PaletteIcon,
   PlugIcon,
   ServerIcon,
@@ -11,7 +10,6 @@ import {
 } from "lucide-react"
 
 import { AgentConfigSettings } from "@/components/agent-config-settings"
-import { KeybindingsSettings } from "@/components/keybindings-settings"
 import { NotificationsSettings } from "@/components/notifications-settings"
 import { AppearancePanel } from "@/components/theme-select"
 import { SettingsAccessSection } from "@/components/settings-access-section"
@@ -73,12 +71,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
     label: "Alerts",
     Icon: BellIcon,
     Component: NotificationsSettings,
-  },
-  {
-    id: "keys",
-    label: "Keys",
-    Icon: KeyboardIcon,
-    Component: KeybindingsSettings,
   },
   {
     id: "plugins",

@@ -19,6 +19,8 @@ type GatewayOptions = {
   plugins?: Handler
   /** Shared session pins and labels mounted at /api/ui/session-shortcuts. */
   sessionShortcuts?: Handler
+  /** Read-only UI host environment mounted at /api/ui/environment. */
+  environment?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler

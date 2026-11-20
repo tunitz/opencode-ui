@@ -33,8 +33,6 @@ import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
 import { useEngineConnection, type EngineConnectionCheck } from "@/lib/use-engine-connection"
 import { useOpenCode, type OpenCodeController } from "@/lib/use-opencode"
 import { prefetchTargetCatalog } from "@/lib/use-target-catalog"
-import { useKeybindings } from "@/lib/use-keybindings"
-import { matchesKeybinding } from "@/lib/keybindings"
 import { recordPerfRender } from "@/lib/perf-probe"
 
 // Settings is a rarely-opened workspace with a large module graph. Loading it
@@ -101,7 +99,6 @@ function AppShell({ nav, engineCheck, retryEngineCheck }: {
   const notes = useNotesWorkspace()
   const settings = useSettingsWorkspace()
   const undo = useUndoToast()
-  const { bindings } = useKeybindings()
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
   const [worktreesOpen, setWorktreesOpen] = useState(false)
   const chatActive = workspace.active === "chat"
@@ -155,41 +152,6 @@ function AppShell({ nav, engineCheck, retryEngineCheck }: {
       nav.activeSession?.location.directory ?? nav.location?.directory
     if (directory) prefetchTargetCatalog(directory)
   }, [nav.activeSession?.location.directory, nav.location?.directory])
-
-  // Command opens the inspector's Command tab. It is not a modal search dialog,
-  // and it respects custom bindings plus IME/composition. Another workspace is
-  // left through the same guarded transition as the header Back control.
-  const hasActiveSession = nav.activeSessionID !== null
-  const openInspector = nav.openInspector
-  const activeWorkspace = workspace.active
-  useEffect(() => {
-    const commandBinding = bindings.find((binding) => binding.command === "command.open")
-    if (!commandBinding || !hasActiveSession) return
-    const binding = commandBinding
-    const platform =
-      typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac")
-        ? "mac"
-        : "other"
-    const hasModifier = binding.mod || binding.ctrl || binding.alt
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]')) return
-      if (!hasModifier && event.target instanceof HTMLElement) {
-        if (event.target.isContentEditable || event.target.closest("input, textarea, select, [contenteditable='true'], .xterm")) return
-      }
-      if (!matchesKeybinding(event, binding, platform)) {
-        return
-      }
-      event.preventDefault()
-      if (activeWorkspace === "chat") {
-        openInspector("command")
-        return
-      }
-      requestWorkspace("chat", { run: () => openInspector("command") })
-    }
-    document.addEventListener("keydown", onKeyDown)
-    return () => document.removeEventListener("keydown", onKeyDown)
-  }, [bindings, hasActiveSession, openInspector, activeWorkspace, requestWorkspace])
 
   return (
     <NotificationsProvider nav={nav}>
@@ -268,6 +230,26 @@ function AppShell({ nav, engineCheck, retryEngineCheck }: {
                         onClick={nav.dismissStartupNotice}
                       >
                         <XIcon aria-hidden="true" className="size-4" />
+                      </Button>
+                    </div>
+                  ) : null}
+                  {nav.compactionNotice?.sessionID === activeSessionID ? (
+                    <div
+                      role={nav.compactionNotice.status === "failed" ? "alert" : "status"}
+                      className="mx-4 mt-2 flex items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+                    >
+                      <span className="min-w-0 break-words">
+                        {nav.compactionNotice.text}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-lg"
+                        aria-label="Dismiss compaction status"
+                        className="size-11 shrink-0"
+                        onClick={nav.clearCompactionNotice}
+                      >
+                        <XIcon aria-hidden="true" />
                       </Button>
                     </div>
                   ) : null}

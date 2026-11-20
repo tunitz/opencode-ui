@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { EngineConnectionForm, TestFeedback } from "@/components/engine-connection-form"
+import { Switch } from "@/components/ui/switch"
 import {
   ConnectionApiError,
   activateConnection,
@@ -442,19 +443,23 @@ export function SettingsConnectionSection({ nav }: { nav: OpenCodeController }) 
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {!profile.isActive ? (
-                      <Button
-                        type="button"
-                        className="h-11"
-                        disabled={Boolean(busyId)}
-                        onClick={() => void handleActivate(profile)}
-                      >
-                        {switching ? (
-                          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-                        ) : null}
-                        Switch
-                      </Button>
-                    ) : null}
+                    <div className="flex h-11 items-center gap-1.5">
+                      {switching ? (
+                        <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
+                      ) : null}
+                      <Switch
+                        checked={profile.isActive}
+                        disabled={Boolean(busyId) || profile.isActive}
+                        label={
+                          profile.isActive
+                            ? `${profile.name} is the active engine`
+                            : `Switch active engine to ${profile.name}`
+                        }
+                        onCheckedChange={(next) => {
+                          if (next && !profile.isActive) void handleActivate(profile)
+                        }}
+                      />
+                    </div>
                     <Button
                       type="button"
                       variant="outline"

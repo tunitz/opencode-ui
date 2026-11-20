@@ -23,6 +23,7 @@ type DispatcherOptions = {
   notes?: Handler
   plugins?: Handler
   sessionShortcuts?: Handler
+  environment?: Handler
   agents: Handler
   notifications: Handler
   artifacts: Handler
@@ -86,6 +87,9 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
     } else if (options.sessionShortcuts && path === SESSION_SHORTCUTS_ROUTE) {
       handler = options.sessionShortcuts
       limit = SESSION_SHORTCUTS_BODY_LIMIT
+    } else if (options.environment && path === "/api/ui/environment") {
+      handler = options.environment
+      limit = 8 * 1024
     } else if (path === "/api/ui/agents" || path === "/api/ui/agents/default") {
       handler = options.agents
       limit = 64 * 1024

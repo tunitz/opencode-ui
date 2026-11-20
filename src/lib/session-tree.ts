@@ -136,8 +136,7 @@ export function groupSessionTreeRows<T extends SessionTreeTimed>(
 ): Record<SessionGroup, SessionTreeRow<T>[]> {
   const groups: Record<SessionGroup, SessionTreeRow<T>[]> = {
     Today: [],
-    Yesterday: [],
-    Older: [],
+    Previous: [],
   }
 
   for (const row of rows) {

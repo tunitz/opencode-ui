@@ -50,6 +50,7 @@
     "server/auth-api.ts",
     "server/cli-flags.ts",
     "server/engine-connections.ts",
+    "server/ui-environment.ts",
     "server/notes-api.ts",
     "server/plugins-api.ts",
     "server/session-shortcuts.ts",

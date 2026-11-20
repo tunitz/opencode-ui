@@ -36,6 +36,8 @@ export function TerminalDialog({
 
   return (
     <CommandDialogShell
+      contentClassName="w-[min(56rem,94vw)] overflow-hidden"
+      bodyClassName="overflow-hidden"
       title="Terminal"
       description={`Shell in ${directory}`}
       pending={status === "connecting"}
@@ -51,12 +53,12 @@ export function TerminalDialog({
         </Button>
       }
     >
-      <div className="relative min-h-64 overflow-hidden rounded-lg border border-border bg-[#0b0b0f]">
+      <div className="relative h-full min-h-64 overflow-hidden rounded-lg border border-border bg-[#0b0b0f] p-1.5">
         <div
           ref={containerRef}
           role="textbox"
           aria-label={label}
-          className="h-[min(58svh,30rem)] min-h-64 w-full overflow-hidden p-2 [&_.xterm]:h-full"
+          className="h-full w-full overflow-hidden [&_.xterm]:h-full"
         />
         {status === "connecting" ? (
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-background/80 text-xs text-muted-foreground">

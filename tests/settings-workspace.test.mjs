@@ -181,7 +181,6 @@ test("the tab bar renders every section in registry order with icon and label", 
       "settings-tab-appearance",
       "settings-tab-agents",
       "settings-tab-alerts",
-      "settings-tab-keys",
       "settings-tab-plugins",
       "settings-tab-connection",
       "settings-tab-access",
@@ -190,7 +189,6 @@ test("the tab bar renders every section in registry order with icon and label", 
       ["appearance", "Appearance"],
       ["agents", "Agents"],
       ["alerts", "Alerts"],
-      ["keys", "Keys"],
       ["plugins", "Plugins"],
       ["connection", "Connections"],
       ["access", "Access"],
@@ -232,7 +230,7 @@ test("clicking a tab switches content immediately with no back navigation", asyn
     expect(selectedTabs(root)).toEqual(["settings-tab-access"])
     expect(text(root.toJSON())).not.toContain("All settings")
     // Every tab stays reachable in one tap.
-    expect(tabs(root)).toHaveLength(7)
+    expect(tabs(root)).toHaveLength(6)
   } finally {
     await act(async () => root.unmount())
   }
@@ -258,7 +256,7 @@ test("unsaved agent edits guard tab switches until confirmed", async () => {
   const root = await mount()
   try {
     await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
-    await act(async () => button(root, "Keys").props.onClick())
+    await act(async () => button(root, "Plugins").props.onClick())
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "confirming",
     ])
@@ -271,13 +269,13 @@ test("unsaved agent edits guard tab switches until confirmed", async () => {
     ])
     expect(headings(root)).toEqual(["Appearance"])
 
-    await act(async () => button(root, "Keys").props.onClick())
+    await act(async () => button(root, "Plugins").props.onClick())
     await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "idle",
     ])
-    expect(headings(root)).toEqual(["Keys"])
-    expect(selectedTabs(root)).toEqual(["settings-tab-keys"])
+    expect(headings(root)).toEqual(["Plugins"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-plugins"])
   } finally {
     await act(async () => root.unmount())
   }
@@ -291,7 +289,7 @@ test("unsaved agent edits guard closing the workspace", async () => {
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "confirming",
     ])
-    expect(tabs(root)).toHaveLength(7)
+    expect(tabs(root)).toHaveLength(6)
 
     await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
     expect(button(root, "Open settings")).toBeDefined()

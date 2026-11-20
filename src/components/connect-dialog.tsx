@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import {
   ArrowLeftIcon,
   CheckCircle2Icon,
+  CopyIcon,
   EyeIcon,
   EyeOffIcon,
   ExternalLinkIcon,
@@ -40,10 +41,12 @@ import {
   connectMethodLabel,
   connectedSummary,
   isBrowserConnectMethod,
+  parseOAuthCallback,
   pollDeadline,
   redactSecret,
   safeOAuthUrl,
 } from "@/lib/provider-auth"
+import { copyText } from "@/lib/clipboard"
 import {
   errorMessage,
   openCode,
@@ -101,6 +104,8 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
   const [apiKey, setApiKey] = useState("")
   const [keyVisible, setKeyVisible] = useState(false)
   const [oauthCode, setOauthCode] = useState("")
+  const [oauthPasteError, setOauthPasteError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
   const [attempt, setAttempt] = useState<IntegrationAttempt | null>(null)
   const [commandAttempt, setCommandAttempt] = useState<IntegrationCommandAttempt | null>(null)
   const [authStatus, setAuthStatus] = useState<"idle" | "starting" | "waiting" | "success" | "error" | "unknown">("idle")
@@ -544,6 +549,8 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
       attemptContextRef.current = { integrationID: integration.id, directory }
       setAttempt(next)
       setOauthCode("")
+      setOauthPasteError(null)
+      setCopied(false)
       if (next.mode === "auto") {
         startPolling(integration, next)
       } else {
@@ -560,24 +567,42 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
 
   async function completeOAuth(integration: IntegrationInfo) {
     if (!attempt || busy) return
-    if (!oauthCode.trim()) {
-      setError("Enter the authorization code.")
+    const parsed = parseOAuthCallback(oauthCode, attempt.url)
+    if (!parsed.code) {
+      setOauthPasteError(parsed.error)
       return
     }
     setBusy(true)
     setError(null)
+    setOauthPasteError(null)
     try {
       await openCode.integration.oauth.complete({
         integrationID: integration.id,
         attemptID: attempt.attemptID,
         location: { directory },
-        code: oauthCode,
+        code: parsed.code,
       })
       await finishSuccess(integration)
     } catch (failure) {
-      setError(redactSecret(errorMessage(failure), oauthCode))
+      setError(redactSecret(errorMessage(failure), parsed.code))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function copyAuthorizationDetails() {
+    if (!attempt) return
+    const details = [
+      attempt.instructions,
+      attempt.url,
+      ...(oauthCode.trim() ? [`Authorization details: ${oauthCode.trim()}`] : []),
+    ].filter(Boolean).join("\n")
+    try {
+      await copyText(details)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setOauthPasteError("Could not copy the authorization details.")
     }
   }
 
@@ -809,43 +834,58 @@ export function ConnectDialog({ nav, onClose, onResult }: Props) {
               (only credential-free HTTPS links are allowed). Follow the instructions manually.
             </p>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-2 h-11 px-3 text-[12px]"
+            onClick={() => void copyAuthorizationDetails()}
+          >
+            <CopyIcon aria-hidden="true" className="size-4" />
+            {copied ? "Copied" : "Copy sign-in details"}
+          </Button>
           {attempt.mode === "auto" ? (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              Waiting for authorization. The status is checked with the native endpoint; if this
-              provider redirects to localhost, a remote/headless browser may not complete it.
+              On another device, finish sign-in there and paste the final redirect URL below. The
+              native endpoint also keeps polling in case the browser reaches its local callback.
             </p>
           ) : null}
         </div>
-        {attempt.mode === "code" ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="connect-oauth-code">Authorization code</Label>
-            <Input
-              id="connect-oauth-code"
-              aria-label="Authorization code"
-              value={oauthCode}
-              onChange={(event) => setOauthCode(event.target.value)}
-              autoComplete="one-time-code"
-              spellCheck={false}
-              className="h-11 font-mono text-[12px]"
-              disabled={busy}
-            />
-            <Button
-              type="button"
-              className="h-11 w-full px-4"
-              disabled={busy || !oauthCode.trim()}
-              aria-busy={busy}
-              onClick={() => void completeOAuth(selected)}
-            >
-              {busy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
-              Complete sign-in
-            </Button>
-          </div>
-        ) : authStatus === "waiting" ? (
-          <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-            <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-            Waiting for authorization…
-          </p>
-        ) : null}
+        <div className="space-y-1.5">
+          <Label htmlFor="connect-oauth-code">
+            {attempt.mode === "auto" ? "Redirect URL from the other device" : "Authorization code or redirect URL"}
+          </Label>
+          <Input
+            id="connect-oauth-code"
+            aria-label={attempt.mode === "auto" ? "Redirect URL" : "Authorization code"}
+            value={oauthCode}
+            onChange={(event) => {
+              setOauthCode(event.target.value)
+              setOauthPasteError(null)
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={attempt.mode === "auto" ? "http://localhost:1455/auth/callback?code=..." : "Paste code or full URL"}
+            className="h-11 font-mono text-[12px]"
+            disabled={busy}
+          />
+          {oauthPasteError ? <p role="alert" className="text-[11px] text-destructive">{oauthPasteError}</p> : null}
+          <Button
+            type="button"
+            className="h-11 w-full px-4"
+            disabled={busy || !oauthCode.trim()}
+            aria-busy={busy}
+            onClick={() => void completeOAuth(selected)}
+          >
+            {busy ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
+            {attempt.mode === "auto" ? "Submit redirect URL" : "Complete sign-in"}
+          </Button>
+          {attempt.mode === "auto" && authStatus === "waiting" ? (
+            <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+              <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+              Waiting for authorization…
+            </p>
+          ) : null}
+        </div>
         <ErrorNotice error={error} />
       </div>
     ) : view === "success" && selected ? (

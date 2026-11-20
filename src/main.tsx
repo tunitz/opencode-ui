@@ -1,6 +1,10 @@
 import { Component, StrictMode, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
 
+// xterm CSS is merged into the entry stylesheet by the build. Importing it
+// eagerly avoids a dynamic CSS chunk whose runtime reference is deleted by
+// the CSS merge (see scripts/build-bun.ts).
+import "@xterm/xterm/css/xterm.css"
 import "./index.css"
 import App from "./App.tsx"
 import { AppDirection } from "@/components/app-direction.tsx"

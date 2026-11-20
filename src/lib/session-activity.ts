@@ -1,6 +1,6 @@
 import type { SessionInfo } from "@/lib/opencode"
 
-export const SESSION_GROUPS = ["Today", "Yesterday", "Older"] as const
+export const SESSION_GROUPS = ["Today", "Previous"] as const
 
 export type SessionGroup = (typeof SESSION_GROUPS)[number]
 
@@ -24,12 +24,8 @@ export function sessionGroupForUpdated(
 ): SessionGroup {
   const today = new Date(now)
   today.setHours(0, 0, 0, 0)
-  const yesterday = new Date(today)
-  yesterday.setDate(yesterday.getDate() - 1)
-
   if (updated >= today.getTime()) return "Today"
-  if (updated >= yesterday.getTime()) return "Yesterday"
-  return "Older"
+  return "Previous"
 }
 
 /**
@@ -42,8 +38,7 @@ export function groupSessionsByUpdated<T extends ActivitySession>(
 ): Record<SessionGroup, T[]> {
   const groups: Record<SessionGroup, T[]> = {
     Today: [],
-    Yesterday: [],
-    Older: [],
+    Previous: [],
   }
 
   for (const session of [...sessions].sort(

@@ -60,10 +60,10 @@ export function AppHeader({
       {!workspaceOpen && nav.activeSession ? <SubagentNavigation key={nav.activeSession.id} nav={nav} title={title} projectLabel={projectLabel} /> : <h1 className="min-w-0 flex-1 truncate px-1 text-center text-[13px] font-medium text-foreground md:text-start" dir="auto" title={title}>{title}</h1>}
       {!workspaceOpen && nav.activeSession ? <div className="md:hidden"><WorkingTreeShortcut key={JSON.stringify([nav.activeSession.id, nav.activeSession.location?.directory])} sessionID={nav.activeSession.id} directory={nav.activeSession.location?.directory ?? null} onOpen={() => nav.openInspector("changes")} /></div> : null}
       <div className="flex shrink-0 items-center justify-end gap-0.5">
-        {!workspaceOpen && nav.activeSession ? <ToolVisibilityMenu serverVersion={nav.serverVersion} /> : null}
         <div className="flex w-11 shrink-0 items-center justify-end">
           {workspaceOpen ? null : <SessionInspector nav={nav} onOpenSettings={onOpenSettings} onOpenWorktrees={onOpenWorktrees} />}
         </div>
+        {!workspaceOpen && nav.activeSession ? <ToolVisibilityMenu serverVersion={nav.serverVersion} /> : null}
       </div>
     </header>
   )

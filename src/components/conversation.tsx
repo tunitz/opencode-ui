@@ -122,8 +122,6 @@ import {
   visibleConversationTools,
   type ToolVisibilityMode,
 } from "@/lib/tool-visibility"
-import { useKeybindings } from "@/lib/use-keybindings"
-import { matchesKeybinding } from "@/lib/keybindings"
 import {
   toCheckpointView,
   toReasoningLine,
@@ -266,6 +264,49 @@ function ConversationItem({
   )
 }
 
+/** Long user turns stay collapsed until the user asks to read the whole text. */
+const CollapsibleUserText = memo(function CollapsibleUserText({
+  text,
+}: {
+  text: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [overflowing, setOverflowing] = useState(false)
+  const textRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const element = textRef.current
+    setOverflowing(Boolean(element && element.scrollHeight > element.clientHeight + 1))
+  }, [text])
+
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-1">
+      <span
+        ref={textRef}
+        dir="auto"
+        className={cn(
+          "block min-w-0 max-w-full overflow-hidden break-words whitespace-pre-wrap",
+          !expanded && "max-h-48"
+        )}
+      >
+        {text}
+      </span>
+      {overflowing ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 min-h-8 px-2 text-xs"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </Button>
+      ) : null}
+    </span>
+  )
+})
+
 const UserMessage = memo(function UserMessage({
   message,
   onEditFromHere,
@@ -290,8 +331,8 @@ const UserMessage = memo(function UserMessage({
           <MessageFiles files={files} />
           {message.text.trim() ? (
             <Bubble variant="secondary" align="end" className="max-w-[85%]">
-              <BubbleContent dir="auto" className="rounded-2xl px-4 py-2.5 text-base leading-6 break-words whitespace-pre-wrap">
-                {message.text}
+              <BubbleContent className="rounded-2xl px-4 py-2.5 text-base leading-6 break-words whitespace-pre-wrap">
+                <CollapsibleUserText text={message.text} />
               </BubbleContent>
             </Bubble>
           ) : null}
@@ -848,8 +889,8 @@ function LiveUserItem({
           <MessageFiles files={item.files ?? []} />
           {item.text.trim() ? (
             <Bubble variant="secondary" align="end" className="max-w-[85%]">
-              <BubbleContent dir="auto" className="rounded-2xl px-4 py-2.5 text-base leading-6 break-words whitespace-pre-wrap">
-                {item.text}
+              <BubbleContent className="rounded-2xl px-4 py-2.5 text-base leading-6 break-words whitespace-pre-wrap">
+                <CollapsibleUserText text={item.text} />
               </BubbleContent>
             </Bubble>
           ) : null}
@@ -1235,7 +1276,6 @@ export function Conversation({
   // conversation only. Status-only consumers use a status subscription.
   const liveRun = useLiveRun(sessionKey)
   const { mode: toolMode } = useToolVisibility(serverVersion)
-  const { bindings } = useKeybindings()
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findIndex, setFindIndex] = useState(0)
@@ -1438,22 +1478,10 @@ export function Conversation({
     }
   }, [focusMessageID, onFocusMessageHandled])
 
-  // Cmd/Ctrl+F opens in-thread find only when the conversation owns focus.
+  // Escape closes the in-thread find bar when focus is elsewhere.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-      const findBinding = bindings.find((binding) => binding.command === "find.open")
-      const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
-      if (findBinding && matchesKeybinding(event, findBinding, platform)) {
-        const active = document.activeElement
-        const viewport = viewportRef.current
-        if (!viewport) return
-        if (active && (active === viewport || viewport.contains(active))) {
-          event.preventDefault()
-          setFindOpen(true)
-          requestAnimationFrame(() => findInputRef.current?.focus())
-        }
-      }
       if (event.key === "Escape" && findOpen && !citationOpen) {
         // The find input handles its own Escape; this covers focus elsewhere.
         const active = document.activeElement
@@ -1464,7 +1492,7 @@ export function Conversation({
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [bindings, citationOpen, findOpen])
+  }, [citationOpen, findOpen])
 
   function captureSelection() {
     const selection = window.getSelection()

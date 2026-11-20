@@ -103,7 +103,15 @@ pruned on each auth write.
 
 Auth bodies are JSON objects limited to 8 KiB; failures use `{ "error": { "code" } }`. The UI fetches
 status once at boot and re-fetches it after sign-in; it does not poll. Mid-session `auth_required` /
-`setup_required` responses from any gated `/api/*` route re-show the auth screen.
+`setup_required` responses from UI-owned `/api/ui/*` routes re-show the auth screen. A 401 from
+the generic engine proxy does not: engine credential failures stay in the calling surface instead
+of blinking the whole app into the password gate.
+
+## UI host environment [app layer]
+
+- `GET /api/ui/environment` → `200 { homeDirectory }`, read-only and `no-store`. It reports the
+  UI host's home directory (or `OPENCODE_UI_SESSION_HOME`) for the New Session folder default; it
+  contains no credentials or engine state.
 
 ## App-layer Engine Connections API [app layer]
 

@@ -26,6 +26,8 @@ import {
   totalTokens,
 } from "@/lib/context-usage"
 import { liveRunStore } from "@/lib/live-run-store"
+import { fullActivityTime, relativeActivityTime } from "@/lib/relative-time"
+import { structuredErrorMessage } from "@/lib/structured-error"
 import type {
   ModelInfo,
   SessionInfo,
@@ -173,6 +175,10 @@ export function ContextStrip({
     () => latestAssistantUsage(visibleMessages),
     [visibleMessages]
   )
+  const lastCompaction = useMemo(
+    () => visibleMessages.findLast((message) => message.type === "compaction") ?? null,
+    [visibleMessages]
+  )
   const totals = useMemo(() => sessionTotals(session), [session])
   const totalTokensForSession = totalTokens(totals.input, totals.output)
   const contextLimit = useMemo(
@@ -235,6 +241,13 @@ export function ContextStrip({
                 label="run"
                 name="Current run elapsed"
                 value={formatDurationMs(runElapsed)}
+              />
+            ) : null}
+            {lastCompaction ? (
+              <Metric
+                label="compact"
+                name="Last compaction"
+                value={lastCompaction.status === "completed" ? relativeActivityTime(lastCompaction.time.created) : lastCompaction.status}
               />
             ) : null}
           </span>
@@ -309,6 +322,21 @@ export function ContextStrip({
                 />
               </dl>
             </section>
+            {lastCompaction ? (
+              <section>
+                <h4 className="mb-1 font-medium text-foreground">Last compaction</h4>
+                <p className="text-muted-foreground">
+                  {lastCompaction.status} · {fullActivityTime(lastCompaction.time.created)}
+                </p>
+                <p className="mt-1 line-clamp-3 break-words text-muted-foreground">
+                  {lastCompaction.status === "failed"
+                    ? structuredErrorMessage(lastCompaction.error)
+                    : lastCompaction.status === "completed" || lastCompaction.status === "running"
+                      ? lastCompaction.summary
+                      : MISSING_VALUE}
+                </p>
+              </section>
+            ) : null}
             <section>
               <h4 className="mb-1 font-medium text-foreground">Session total</h4>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">

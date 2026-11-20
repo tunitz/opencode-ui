@@ -45,7 +45,6 @@ function loadXterm(): Promise<XtermModules> {
     modulesPromise = Promise.all([
       import("@xterm/xterm"),
       import("@xterm/addon-fit"),
-      import("@xterm/xterm/css/xterm.css"),
     ])
       .then(([xterm, fit]) => ({
         Terminal: xterm.Terminal,
@@ -80,8 +79,7 @@ export function usePty({
   useEffect(() => {
     if (!enabled) return
     let cancelled = false
-    const generation = ++generationRef.current
-    const isCurrent = () => !cancelled && generationRef.current === generation
+    generationRef.current += 1
     let observer: ResizeObserver | null = null
     let frame = 0
 
@@ -103,10 +101,12 @@ export function usePty({
       }
     }
 
-    const ensureTerminal = async (): Promise<Terminal> => {
+    const ensureTerminal = async (
+      isAttemptCurrent: () => boolean
+    ): Promise<Terminal> => {
       if (terminalRef.current) return terminalRef.current
       const { Terminal: Xterm, FitAddon: Fit } = await loadXterm()
-      if (!isCurrent()) throw new Error("Terminal closed during load")
+      if (!isAttemptCurrent()) throw new Error("Terminal closed during load")
       const container = containerRef.current
       if (!container) throw new Error("Terminal container is not mounted")
       const term = new Xterm({
@@ -114,8 +114,9 @@ export function usePty({
         convertEol: true,
         cursorBlink: true,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        fontSize: 12,
-        lineHeight: 1.25,
+        fontSize: 11,
+        lineHeight: 1.2,
+        letterSpacing: 0,
         scrollback: 2000,
         theme: {
           background: "#0b0b0f",
@@ -127,7 +128,7 @@ export function usePty({
       const fit = new Fit()
       term.loadAddon(fit)
       term.open(container)
-      if (!isCurrent()) {
+      if (!isAttemptCurrent()) {
         term.dispose()
         throw new Error("Terminal closed during load")
       }
@@ -174,7 +175,7 @@ export function usePty({
       setStatus("connecting")
       setMessage(null)
       try {
-        const term = await ensureTerminal()
+        const term = await ensureTerminal(isAttemptCurrent)
         if (!isAttemptCurrent()) return
 
         if (typeof ResizeObserver !== "undefined" && containerRef.current && !observer) {

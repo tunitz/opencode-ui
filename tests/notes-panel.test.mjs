@@ -484,7 +484,9 @@ test("status filters are one row of pills with colour dots and no category heade
     expect(group.props["data-notes-status-filters"]).toBe(true)
     expect(group.props.className).toContain("overflow-x-auto")
     expect(group.props.className).toContain("[scrollbar-width:none]")
-    expect(group.props.className).toContain("mask-image")
+    // The first pill must never be clipped; edge buttons replace the old
+    // always-on mask once the row actually overflows.
+    expect(group.props.className).not.toContain("mask-image")
 
     const statusGroup = () => root.root.findAllByProps({ role: "group", "aria-label": "Filter by status" })[0]
     const pill = (label) => statusGroup().findAllByType("button").find((button) => button.props["aria-label"] === label)

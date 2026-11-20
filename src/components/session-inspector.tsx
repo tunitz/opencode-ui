@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -32,11 +32,34 @@ import { contextLimitForModel, formatTokenCount } from "@/lib/context-usage"
 import { INSPECTOR_TAB_LABELS, type InspectorTab } from "@/lib/inspector-tabs"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
-import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar-layout"
+import { DESKTOP_SIDEBAR_RAIL_WIDTH } from "@/lib/sidebar-layout"
 import { cn } from "@/lib/utils"
 import { recordPerfRender } from "@/lib/perf-probe"
 
 const INSPECTOR_ID = "session-inspector"
+const INSPECTOR_WIDTH_KEY = "opencode-ui:desktop-inspector-width:v1"
+const INSPECTOR_MIN_WIDTH = 288
+const INSPECTOR_MAX_WIDTH = 640
+
+function defaultInspectorWidth(): number {
+  if (typeof window === "undefined") return 320
+  if (window.innerWidth >= 1280) return 352
+  if (window.innerWidth >= 1024) return 320
+  return 288
+}
+
+function readInspectorWidth(): number {
+  const fallback = defaultInspectorWidth()
+  try {
+    const raw = window.localStorage.getItem(INSPECTOR_WIDTH_KEY)
+    const parsed = raw === null ? Number.NaN : Number(raw)
+    return Number.isFinite(parsed)
+      ? Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, parsed))
+      : fallback
+  } catch {
+    return fallback
+  }
+}
 
 function focusInspectorTrigger() {
   requestAnimationFrame(() => {
@@ -668,6 +691,35 @@ export function SessionInspectorPanel({
   hidden?: boolean
 }) {
   const isDesktop = useIsDesktop()
+  const [width, setWidth] = useState(readInspectorWidth)
+
+  const persistWidth = (next: number) => {
+    const clamped = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, next))
+    setWidth(clamped)
+    try {
+      window.localStorage.setItem(INSPECTOR_WIDTH_KEY, String(clamped))
+    } catch {
+      // A blocked storage API must not break resizing.
+    }
+  }
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = width
+    const rtl = document.documentElement.getAttribute("dir") === "rtl"
+    const onMove = (move: PointerEvent) => {
+      const delta = move.clientX - startX
+      persistWidth(startWidth + (rtl ? -delta : delta))
+    }
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
+    }
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
+  }
 
   if (!isDesktop || !nav.activeSession) return null
 
@@ -685,13 +737,31 @@ export function SessionInspectorPanel({
       hidden={hidden || undefined}
       inert={hidden || undefined}
       aria-hidden={hidden || undefined}
-      style={{ backgroundColor: "var(--sidebar)" }}
+      style={{ width, backgroundColor: "var(--sidebar)" }}
       className={cn(
-        "h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
-        hidden ? "hidden" : "flex",
-        DESKTOP_SIDEBAR_WIDTH
+        "relative h-svh shrink-0 flex-col overflow-hidden border-s border-sidebar-border bg-sidebar",
+        hidden ? "hidden" : "flex"
       )}
     >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize session inspector"
+        aria-valuemin={INSPECTOR_MIN_WIDTH}
+        aria-valuemax={INSPECTOR_MAX_WIDTH}
+        aria-valuenow={width}
+        tabIndex={0}
+        data-inspector-resize
+        onPointerDown={startResize}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+          event.preventDefault()
+          const rtl = document.documentElement.getAttribute("dir") === "rtl"
+          const delta = event.key === "ArrowRight" ? 16 : -16
+          persistWidth(width + (rtl ? -delta : delta))
+        }}
+        className="absolute inset-y-0 start-0 z-30 w-2 cursor-ew-resize touch-none bg-transparent outline-none before:absolute before:inset-y-0 before:start-1/2 before:w-0.5 before:-translate-x-1/2 before:bg-border/70 before:content-[''] hover:before:bg-primary/60 focus-visible:before:bg-primary/80"
+      />
       <InspectorBody
         nav={nav}
         mode="sidebar"

@@ -110,9 +110,7 @@ import {
   stashPrompt,
   type StashEntry,
 } from "@/lib/prompt-recall"
-import { useKeybindings } from "@/lib/use-keybindings"
 import { copyableAssistantText } from "@/lib/session-commands"
-import { matchesKeybinding } from "@/lib/keybindings"
 import { useUndoToast } from "@/lib/undo-toast"
 import { copyText } from "@/lib/clipboard"
 import { Markdown } from "@/components/markdown"
@@ -356,6 +354,15 @@ export function Composer({
     tone: "status" | "error"
     text: string
   } | null>(null)
+  // FYI command feedback must never become a permanent status line.
+  useEffect(() => {
+    if (!commandFeedback) return
+    const timer = window.setTimeout(
+      () => setCommandFeedback(null),
+      commandFeedback.tone === "error" ? 9_000 : 6_000
+    )
+    return () => window.clearTimeout(timer)
+  }, [commandFeedback])
   const [executingCommand, setExecutingCommand] = useState<Record<string, string>>({})
   const [sessionDialog, setSessionDialog] =
     useState<SessionCommandDialogKind | null>(null)
@@ -414,7 +421,6 @@ export function Composer({
 
   const activeSession = nav.activeSession
   const draftKey = nav.activeSessionID ?? "__none__"
-  const { bindings } = useKeybindings()
   const undo = useUndoToast()
   const [recallIndex, setRecallIndex] = useState(-1)
   const [citationsBySession, setCitationsBySession] = useState<
@@ -1692,25 +1698,6 @@ export function Composer({
     }
   }
 
-  /**
-   * Single entry point for explicit submits. A leading-slash draft is always
-   * dispatched as a command; an unknown name stays an explicit error with a
-   * Send-as-literal action instead of becoming a prompt.
-   */
-  function submitActiveDraft(
-    delivery: "steer" | "queue" | null = responding ? "steer" : null
-  ) {
-    applySubmitDecision(
-      resolveSlashSubmit({
-        draft,
-        isComposing: composingRef.current.isComposing(draftKey),
-        isTouch: touchInputRef.current,
-        pickerOpen: pickerQuery !== null,
-      }),
-      delivery
-    )
-  }
-
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     applySubmitDecision(
@@ -1727,25 +1714,6 @@ export function Composer({
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const native = event.nativeEvent
     if (composingRef.current.isComposing(draftKey) || native.isComposing || native.keyCode === 229) {
-      return
-    }
-
-    const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
-    const stashBinding = bindings.find((binding) => binding.command === "composer.stash")
-    const backgroundBinding = bindings.find(
-      (binding) => binding.command === "composer.backgroundSend"
-    )
-    if (stashBinding && matchesKeybinding(native, stashBinding, platform)) {
-      event.preventDefault()
-      handleStash()
-      return
-    }
-    if (backgroundBinding && matchesKeybinding(native, backgroundBinding, platform)) {
-      event.preventDefault()
-      if (canSend) {
-        submitActiveDraft(responding ? "steer" : null)
-        focusComposer()
-      }
       return
     }
 

@@ -21,8 +21,15 @@ const CHILD_DIR = "/repo/alpha/src"
 const AGENTS = [
   { id: "build", name: "Build", mode: "primary", hidden: false },
   { id: "plan", name: "Plan", mode: "primary", hidden: false },
+  // Non-primary entries exist in the native catalog but must not be offered
+  // for a new top-level session.
+  { id: "research", name: "Research", mode: "subagent", hidden: false },
+  { id: "review", name: "Review", mode: "all", hidden: false },
+  { id: "secret", name: "Secret", mode: "primary", hidden: true },
 ]
-const AGENT_IDS = AGENTS.map((agent) => agent.id)
+const AGENT_IDS = AGENTS.filter(
+  (agent) => agent.mode === "primary" && !agent.hidden
+).map((agent) => agent.id)
 const MODELS = [
   {
     id: "deepseek-v4.1-flash-free",
@@ -126,6 +133,10 @@ function nav() {
   return {
     createSession: mock(async () => true),
     configEntries: [],
+    agents: AGENTS,
+    models: MODELS,
+    agentsStatus: "ready",
+    modelsStatus: "ready",
     connection: "connected",
     creating: false,
     createError: null,
@@ -201,28 +212,40 @@ test("agent picker stays populated while browsing deeper and up to parent folder
   try {
     expectAgentPickerReady(root, "initial project folder")
     await selectDifferentAgent(root, "initial project folder")
+    const assertBrowseKeepsPicker = async (directory, step) => {
+      const before = agentPicker(root).props["data-value"]
+      await browseTo(directory)
+      expectAgentPickerReady(root, step)
+      expect(agentPicker(root).props["data-value"], `${step}: browsing must not reset the agent`).toBe(before)
+    }
+
+    const directoryInput = () =>
+      root.root.findAll(
+        (node) => node.type === "input" && node.props.id === "new-session-directory"
+      )[0]
+    const browseTo = async (directory) => {
+      const input = directoryInput()
+      expect(input, "directory input must exist").toBeDefined()
+      await act(async () =>
+        input.props.onChange({
+          target: { value: directory },
+          currentTarget: { value: directory },
+        })
+      )
+      await settle()
+    }
 
     // Deeper: location.get still resolves the project, but agent/model.list
     // for this subfolder return an empty catalog.
-    const child = buttonByText(root, "src")
-    expect(child, "child folder row must exist").toBeDefined()
-    await act(async () => child.props.onClick())
-    await settle()
-    expectAgentPickerReady(root, "after drilling into subfolder")
+    await assertBrowseKeepsPicker(CHILD_DIR, "after drilling into subfolder")
     await selectDifferentAgent(root, "after drilling into subfolder")
 
     // Parent once: back to the project root.
-    let parent = buttonByText(root, "Parent folder")
-    await act(async () => parent.props.onClick())
-    await settle()
-    expectAgentPickerReady(root, "after one parent click")
+    await assertBrowseKeepsPicker(PROJECT_DIR, "after one parent click")
     await selectDifferentAgent(root, "after one parent click")
 
     // Parent twice: above the project root, where location.get rejects.
-    parent = buttonByText(root, "Parent folder")
-    await act(async () => parent.props.onClick())
-    await settle()
-    expectAgentPickerReady(root, "after two parent clicks")
+    await assertBrowseKeepsPicker("/repo", "after two parent clicks")
     await selectDifferentAgent(root, "after two parent clicks")
 
     // Creation stays gated on a resolvable folder even though the picker

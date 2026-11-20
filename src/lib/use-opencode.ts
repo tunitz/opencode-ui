@@ -60,6 +60,7 @@ import {
 import { liveRunStore } from "@/lib/live-run-store"
 import { removeDraft } from "@/lib/drafts"
 import { isAbsoluteDirectory } from "@/lib/session-commands"
+import { structuredErrorMessage } from "@/lib/structured-error"
 import { backoffDelay } from "@/lib/reconnect"
 import { mergeOlderMessages } from "@/lib/message-history"
 import {
@@ -115,9 +116,20 @@ export type SessionSearchResult =
   | { ok: true; sessions: SessionInfo[] }
   | { ok: false; error: string }
 
+export type SessionSearchPage =
+  | { ok: true; sessions: SessionInfo[]; nextCursor: string | null }
+  | { ok: false; error: string }
+
 export type SessionContextSnapshot = {
   messages: SessionMessageInfo[]
   tokens: TokenUsageInfo | null
+}
+
+export type CompactionNotice = {
+  sessionID: string
+  status: "queued" | "running" | "finished" | "failed" | "unknown"
+  text: string
+  at: number
 }
 
 type SessionQuery = {
@@ -126,6 +138,8 @@ type SessionQuery = {
 }
 
 const SESSION_LIMIT = 50
+/** Sidebar groups grow in small pages so a large engine stays responsive. */
+const SESSION_PAGE_SIZE = 10
 const MESSAGE_LIMIT = 50
 // Catalog caches are keyed by directory; this sentinel stands for the
 // all-projects (`location: undefined`) catalog read.
@@ -181,6 +195,8 @@ export type OpenCodeState = {
   sessions: SessionInfo[]
   sessionsStatus: LoadStatus
   sessionsError: string | null
+  sessionsHasMore: boolean
+  loadingMoreSessions: boolean
   runningSessionIDs: Record<string, true>
   unreadSessionIDs: Record<string, true>
   activeSessionID: string | null
@@ -226,12 +242,15 @@ export type OpenCodeState = {
   archivedSessions: SessionInfo[]
   archivedStatus: LoadStatus
   archivedError: string | null
+  archivedHasMore: boolean
+  loadingMoreArchived: boolean
   inbox: SessionInboxInfo[]
   inboxStatus: LoadStatus
   inboxError: string | null
   inboxBusy: Record<string, true>
   composerRestore: ComposerRestore | null
   focusMessageID: string | null
+  compactionNotice: CompactionNotice | null
 }
 
 export type SessionListChange = { sessionID: string | null; parentID?: string }
@@ -255,6 +274,12 @@ export type OpenCodeController = OpenCodeState & {
   resetForEngineSwitch: (reconnect?: boolean) => void
   retryProjects: () => void
   refreshSessions: () => void
+  loadMoreSessions: () => Promise<string | null>
+  loadSubsessionPage: (
+    parentID: string,
+    cursor?: string | null
+  ) => Promise<{ ok: true; sessions: SessionInfo[]; nextCursor: string | null } | { ok: false; error: string }>
+  loadPinnedSessions: (ids: readonly string[]) => Promise<SessionInfo[]>
   dismissStartupNotice: () => void
   createSession: (
     projectID: string,
@@ -277,16 +302,19 @@ export type OpenCodeController = OpenCodeState & {
   openInspectorDiff: (path?: string | null) => void
   setSessionArchived: (sessionID: string, archived: boolean) => Promise<string | null>
   loadArchivedSessions: () => Promise<string | null>
+  loadMoreArchivedSessions: () => Promise<string | null>
   unarchiveSession: (sessionID: string) => Promise<string | null>
   loadInbox: (sessionID?: string) => Promise<string | null>
   cancelInboxItem: (inboxID: string) => Promise<string | null>
   takeBackInboxItem: (inboxID: string) => Promise<string | null>
   steerInboxItem: (inboxID: string) => Promise<string | null>
   clearComposerRestore: () => void
+  clearCompactionNotice: () => void
   loadTurnDiff: (sessionID: string, from?: string, to?: string) => Promise<SessionDiffResult>
   loadSessionContext: (sessionID: string) => Promise<SessionContextSnapshot | null>
   loadSessionStats: (sessionID: string) => Promise<SessionStatsInfo | null>
   searchSessions: (query: string, archived?: boolean) => Promise<SessionSearchResult>
+  searchSessionPage: (query: string, cursor?: string | null) => Promise<SessionSearchPage>
   addAttachment: (
     attachment: ComposerAttachment,
     sessionID?: string
@@ -373,6 +401,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsStatus, setSessionsStatus] = useState<LoadStatus>("idle")
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [sessionsHasMore, setSessionsHasMore] = useState(false)
+  const [loadingMoreSessions, setLoadingMoreSessions] = useState(false)
+  const sessionsCursorRef = useRef<string | null>(null)
+  const loadingMoreSessionsRef = useRef(false)
   const [runningSessionIDs, setRunningSessionIDs] = useState<
     Record<string, true>
   >({})
@@ -454,12 +486,17 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   const [archivedSessions, setArchivedSessions] = useState<SessionInfo[]>([])
   const [archivedStatus, setArchivedStatus] = useState<LoadStatus>("idle")
   const [archivedError, setArchivedError] = useState<string | null>(null)
+  const [archivedHasMore, setArchivedHasMore] = useState(false)
+  const [loadingMoreArchived, setLoadingMoreArchived] = useState(false)
+  const archivedCursorRef = useRef<string | null>(null)
+  const loadingMoreArchivedRef = useRef(false)
   const [inbox, setInbox] = useState<SessionInboxInfo[]>([])
   const [inboxStatus, setInboxStatus] = useState<LoadStatus>("idle")
   const [inboxError, setInboxError] = useState<string | null>(null)
   const [inboxBusy, setInboxBusy] = useState<Record<string, true>>({})
   const [composerRestore, setComposerRestore] = useState<ComposerRestore | null>(null)
   const [focusMessageID, setFocusMessageID] = useState<string | null>(null)
+  const [compactionNotice, setCompactionNotice] = useState<CompactionNotice | null>(null)
   const archivedRequest = useRef(0)
   const inboxRequest = useRef(0)
   const restoreSequence = useRef(0)
@@ -965,25 +1002,26 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       const request = ++sessionsRequest.current
       setSessionsStatus("loading")
       setSessionsError(null)
+      sessionsCursorRef.current = null
+      setSessionsHasMore(false)
+      setLoadingMoreSessions(false)
+      loadingMoreSessionsRef.current = false
 
       try {
-        const data: SessionInfo[] = []
-        let cursor: string | undefined
-        const seenCursors = new Set<string>()
-        do {
-          const response = await openCode.session.list({
-            limit: SESSION_LIMIT,
-            order: "desc",
-            archived: false,
-            ...(cursor ? { cursor } : {}),
-            ...(nextProjectID ? { project: nextProjectID } : {}),
-            ...(nextDirectory ? { directory: nextDirectory } : {}),
-          })
-          data.push(...response.data)
-          cursor = response.cursor?.next ?? undefined
-          if (cursor && seenCursors.has(cursor)) throw new Error("Session pagination did not advance.")
-          if (cursor) seenCursors.add(cursor)
-        } while (cursor && request === sessionsRequest.current)
+        const response = await openCode.session.list({
+          limit: SESSION_PAGE_SIZE,
+          order: "desc",
+          archived: false,
+          ...(nextProjectID ? { project: nextProjectID } : {}),
+          ...(nextDirectory ? { directory: nextDirectory } : {}),
+        })
+        const data = response.data
+        const nextCursor = response.cursor?.next ?? null
+        if (nextCursor && nextCursor === sessionsCursorRef.current) {
+          throw new Error("Session pagination did not advance.")
+        }
+        sessionsCursorRef.current = nextCursor
+        setSessionsHasMore(nextCursor !== null)
 
         if (request !== sessionsRequest.current) {
           return
@@ -1074,10 +1112,91 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
 
         setSessionsStatus("error")
         setSessionsError(errorMessage(error))
+        sessionsCursorRef.current = null
+        setSessionsHasMore(false)
       }
     },
     [getSessionByID, selectSession]
   )
+
+  /** Append the next native page without replacing the already visible rows. */
+  const loadMoreSessions = useCallback(async (): Promise<string | null> => {
+    const cursor = sessionsCursorRef.current
+    if (!cursor || loadingMoreSessionsRef.current) return null
+    const request = sessionsRequest.current
+    loadingMoreSessionsRef.current = true
+    setLoadingMoreSessions(true)
+    try {
+      const projectID =
+        scopeRef.current === "project" ? locationRef.current?.project.id : undefined
+      const directory =
+        scopeRef.current === "project" ? directoryRef.current || undefined : undefined
+      const response = await openCode.session.list({
+        limit: SESSION_PAGE_SIZE,
+        order: "desc",
+        archived: false,
+        cursor,
+        ...(projectID ? { project: projectID } : {}),
+        ...(directory ? { directory } : {}),
+      })
+      if (request !== sessionsRequest.current) return null
+      if (response.cursor?.next === cursor) {
+        throw new Error("Session pagination did not advance.")
+      }
+      sessionsCursorRef.current = response.cursor?.next ?? null
+      setSessionsHasMore(sessionsCursorRef.current !== null)
+      const appended = response.data
+      setSessions((current) => {
+        const seen = new Set(current.map((session) => session.id))
+        return [...current, ...appended.filter((session) => !seen.has(session.id))]
+      })
+      return null
+    } catch (error) {
+      return errorMessage(error)
+    } finally {
+      loadingMoreSessionsRef.current = false
+      setLoadingMoreSessions(false)
+    }
+  }, [])
+
+  /** Resolve pinned sessions that are outside the current paged session list. */
+  const loadPinnedSessions = useCallback(async (ids: readonly string[]) => {
+    if (ids.length === 0) return []
+    const results = await Promise.allSettled(
+      ids.slice(0, 50).map((sessionID) => openCode.session.get({ sessionID }))
+    )
+    return results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    )
+  }, [])
+
+  /** Load a page of direct children and merge them into the sidebar tree. */
+  const loadSubsessionPage = useCallback(async (
+    parentID: string,
+    cursor: string | null = null
+  ) => {
+    try {
+      const response = await openCode.session.list({
+        parentID,
+        limit: SESSION_PAGE_SIZE,
+        order: "desc",
+        archived: false,
+        ...(cursor ? { cursor } : {}),
+      })
+      const rows = response.data.filter((session) => session.parentID === parentID)
+      setSessions((current) => {
+        const seen = new Set(current.map((session) => session.id))
+        return [...current, ...rows.filter((session) => !seen.has(session.id))]
+      })
+      return {
+        ok: true as const,
+        sessions: rows,
+        nextCursor: response.cursor?.next ?? null,
+      }
+    } catch (error) {
+      return { ok: false as const, error: errorMessage(error) }
+    }
+  }, [])
 
   const commitLocation = useCallback((next: LocationPublicInfo) => {
     locationRef.current = next
@@ -1460,6 +1579,36 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
             continue
           }
 
+          if (event.type === "session.compaction.started") {
+            setCompactionNotice({
+              sessionID: event.data.sessionID,
+              status: "running",
+              text: "Compacting this session…",
+              at: event.created,
+            })
+            continue
+          }
+          if (event.type === "session.compaction.ended") {
+            setCompactionNotice({
+              sessionID: event.data.sessionID,
+              status: "finished",
+              text: "Compaction finished. The summary is now in the conversation.",
+              at: event.created,
+            })
+            if (event.data.sessionID !== activeSessionRef.current) continue
+            setHistoryReloadKey((current) => current + 1)
+            continue
+          }
+          if (event.type === "session.compaction.failed") {
+            setCompactionNotice({
+              sessionID: event.data.sessionID,
+              status: "failed",
+              text: `Compaction failed: ${structuredErrorMessage(event.data.error)}`,
+              at: event.created,
+            })
+            continue
+          }
+
           if (event.type === "session.created") {
             notifySessionListChange({ sessionID: event.data.sessionID, parentID: event.data.parentID })
           } else if (
@@ -1813,6 +1962,23 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
         setOlderError(null)
         setMessages(ordered)
         setHistoryStatus("ready")
+        const completed = ordered.findLast(
+          (message) =>
+            message.type === "compaction" && message.status === "completed"
+        )
+        if (completed) {
+          setCompactionNotice((current) =>
+            current &&
+            current.sessionID === activeSessionID &&
+            current.at <= completed.time.created
+              ? {
+                  ...current,
+                  status: "finished",
+                  text: "Compaction finished. The summary is now in the conversation.",
+                }
+              : current
+          )
+        }
         updateLiveRuns((current) => {
           const run = current[activeSessionID]
 
@@ -2017,6 +2183,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     locationRef.current = null
     setActiveSessionID(null)
     setFocusMessageID(null)
+    setCompactionNotice(null)
     setLocation(null)
     setProjects([])
     setProjectsStatus(reconnect ? "loading" : "idle")
@@ -2026,6 +2193,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setSessions([])
     setSessionsStatus(reconnect ? "loading" : "idle")
     setSessionsError(null)
+    sessionsCursorRef.current = null
+    setSessionsHasMore(false)
+    setLoadingMoreSessions(false)
+    loadingMoreSessionsRef.current = false
     setMessages([])
     setHistoryStatus("idle")
     setHistoryError(null)
@@ -2035,6 +2206,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setPendingPermissions([])
     setPendingForms([])
     setArchivedSessions([])
+    archivedCursorRef.current = null
+    setArchivedHasMore(false)
+    setLoadingMoreArchived(false)
+    loadingMoreArchivedRef.current = false
     setInbox([])
     setInboxStatus("idle")
     setInboxError(null)
@@ -2111,6 +2286,8 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setSessions([])
     setSessionsStatus("loading")
     setSessionsError(null)
+    sessionsCursorRef.current = null
+    setSessionsHasMore(false)
 
     void loadSessions({})
     if (serverVersion) rememberLastOpened({ kind: "all" }, serverVersion)
@@ -2149,6 +2326,8 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       setSessions([])
       setSessionsStatus("loading")
       setSessionsError(null)
+      sessionsCursorRef.current = null
+      setSessionsHasMore(false)
 
       try {
         const resolvedPromise = openCode.location.get({
@@ -2336,38 +2515,73 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     const request = ++archivedRequest.current
     setArchivedStatus("loading")
     setArchivedError(null)
+    archivedCursorRef.current = null
+    setArchivedHasMore(false)
+    setLoadingMoreArchived(false)
+    loadingMoreArchivedRef.current = false
     try {
       const projectID =
         scopeRef.current === "project" ? locationRef.current?.project.id : undefined
       const directory =
         scopeRef.current === "project" ? directoryRef.current || undefined : undefined
-      const data: SessionInfo[] = []
-      let cursor: string | undefined
-      const seen = new Set<string>()
-      do {
-        const response = await openCode.session.list({
-          limit: SESSION_LIMIT,
-          order: "desc",
-          archived: true,
-          ...(cursor ? { cursor } : {}),
-          ...(projectID ? { project: projectID } : {}),
-          ...(directory ? { directory } : {}),
-        })
-        data.push(...response.data)
-        cursor = response.cursor?.next ?? undefined
-        if (cursor && seen.has(cursor)) throw new Error("Archive pagination did not advance.")
-        if (cursor) seen.add(cursor)
-      } while (cursor && request === archivedRequest.current)
+      const response = await openCode.session.list({
+        limit: SESSION_PAGE_SIZE,
+        order: "desc",
+        archived: true,
+        ...(projectID ? { project: projectID } : {}),
+        ...(directory ? { directory } : {}),
+      })
 
       if (request !== archivedRequest.current) return null
-      setArchivedSessions(data)
+      archivedCursorRef.current = response.cursor?.next ?? null
+      setArchivedHasMore(archivedCursorRef.current !== null)
+      setArchivedSessions(response.data)
       setArchivedStatus("ready")
       return null
     } catch (error) {
       if (request !== archivedRequest.current) return null
       setArchivedStatus("error")
       setArchivedError(errorMessage(error))
+      archivedCursorRef.current = null
+      setArchivedHasMore(false)
       return errorMessage(error)
+    }
+  }, [])
+
+  const loadMoreArchivedSessions = useCallback(async (): Promise<string | null> => {
+    const cursor = archivedCursorRef.current
+    if (!cursor || loadingMoreArchivedRef.current) return null
+    const request = archivedRequest.current
+    loadingMoreArchivedRef.current = true
+    setLoadingMoreArchived(true)
+    try {
+      const projectID =
+        scopeRef.current === "project" ? locationRef.current?.project.id : undefined
+      const directory =
+        scopeRef.current === "project" ? directoryRef.current || undefined : undefined
+      const response = await openCode.session.list({
+        limit: SESSION_PAGE_SIZE,
+        order: "desc",
+        archived: true,
+        cursor,
+        ...(projectID ? { project: projectID } : {}),
+        ...(directory ? { directory } : {}),
+      })
+      if (request !== archivedRequest.current) return null
+      if (response.cursor?.next === cursor) throw new Error("Archive pagination did not advance.")
+      archivedCursorRef.current = response.cursor?.next ?? null
+      setArchivedHasMore(archivedCursorRef.current !== null)
+      const appended = response.data
+      setArchivedSessions((current) => {
+        const seen = new Set(current.map((session) => session.id))
+        return [...current, ...appended.filter((session) => !seen.has(session.id))]
+      })
+      return null
+    } catch (error) {
+      return errorMessage(error)
+    } finally {
+      loadingMoreArchivedRef.current = false
+      setLoadingMoreArchived(false)
     }
   }, [])
 
@@ -2494,6 +2708,37 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   }, [cancelInboxItem])
 
   const clearComposerRestore = useCallback(() => setComposerRestore(null), [])
+  const clearCompactionNotice = useCallback(() => setCompactionNotice(null), [])
+
+  // A queued compaction may never emit a terminal event (older engines, a
+  // dropped stream, or compaction deferred behind a long run). Keep the
+  // status honest instead of leaving “queued” on screen forever.
+  useEffect(() => {
+    if (!compactionNotice) return
+    if (compactionNotice.status === "queued" || compactionNotice.status === "running") {
+      const at = compactionNotice.at
+      const timer = window.setTimeout(() => {
+        setCompactionNotice((current) =>
+          current && current.at === at &&
+          (current.status === "queued" || current.status === "running")
+            ? {
+                ...current,
+                status: "unknown",
+                text: "Compaction is still pending. Check the conversation for its summary.",
+              }
+            : current
+        )
+      }, 60_000)
+      return () => window.clearTimeout(timer)
+    }
+    const at = compactionNotice.at
+    const timer = window.setTimeout(() => {
+      setCompactionNotice((current) =>
+        current && current.at === at ? null : current
+      )
+    }, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [compactionNotice])
 
   const loadTurnDiff = useCallback(
     async (sessionID: string, from?: string, to?: string): Promise<SessionDiffResult> => {
@@ -2564,6 +2809,37 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     []
   )
 
+  /** Cursor-paged native search for the sidebar's parent-row result list. */
+  const searchSessionPage = useCallback(
+    async (query: string, cursor: string | null = null): Promise<SessionSearchPage> => {
+      const text = query.trim()
+      if (!text) return { ok: true, sessions: [], nextCursor: null }
+      try {
+        const projectID =
+          scopeRef.current === "project" ? locationRef.current?.project.id : undefined
+        const directory =
+          scopeRef.current === "project" ? directoryRef.current || undefined : undefined
+        const response = await openCode.session.list({
+          search: text,
+          archived: false,
+          limit: SESSION_PAGE_SIZE,
+          order: "desc",
+          ...(cursor ? { cursor } : {}),
+          ...(projectID ? { project: projectID } : {}),
+          ...(directory ? { directory } : {}),
+        })
+        return {
+          ok: true,
+          sessions: response.data.filter((session) => !session.parentID),
+          nextCursor: response.cursor?.next ?? null,
+        }
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) }
+      }
+    },
+    []
+  )
+
   const forkSession = useCallback(
     async (before?: string) => {
       const sessionID = activeSessionRef.current
@@ -2594,9 +2870,12 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       const compaction: SessionInboxCompaction = await openCode.session.compact({
         sessionID,
       })
-      return compaction.delivery === "queue"
-        ? "Compaction queued at the next prompt boundary."
-        : "Compaction queued at the next step boundary."
+      const text =
+        compaction.delivery === "queue"
+          ? "Compaction queued at the next prompt boundary."
+          : "Compaction queued at the next step boundary."
+      setCompactionNotice({ sessionID, status: "queued", text, at: Date.now() })
+      return text
     } catch (error) {
       return errorMessage(error)
     }
@@ -2740,6 +3019,9 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
         removed.has(activeSessionRef.current)
 
       setSessions(rows)
+      setArchivedSessions((current) =>
+        current.filter((session) => !removed.has(session.id))
+      )
       setSessionsStatus((current) => current === "loading" ? "ready" : current)
 
       // Tell the composer to drop these sessions' in-memory drafts too, so a
@@ -3456,6 +3738,8 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     sessions,
     sessionsStatus,
     sessionsError,
+    sessionsHasMore,
+    loadingMoreSessions,
     runningSessionIDs,
     unreadSessionIDs: sessionActivity.unread,
     activeSessionID,
@@ -3500,12 +3784,15 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     archivedSessions,
     archivedStatus,
     archivedError,
+    archivedHasMore,
+    loadingMoreArchived,
     inbox,
     inboxStatus,
     inboxError,
     inboxBusy,
     composerRestore,
     focusMessageID,
+    compactionNotice,
   })
 
   const controller = useShallowMemo<OpenCodeController>({
@@ -3519,6 +3806,9 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     resetForEngineSwitch,
     retryProjects,
     refreshSessions,
+    loadMoreSessions,
+    loadSubsessionPage,
+    loadPinnedSessions,
     dismissStartupNotice,
     createSession,
     checkProjectDirectory,
@@ -3542,16 +3832,19 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     openInspectorDiff,
     setSessionArchived,
     loadArchivedSessions,
+    loadMoreArchivedSessions,
     unarchiveSession,
     loadInbox,
     cancelInboxItem,
     takeBackInboxItem,
     steerInboxItem,
     clearComposerRestore,
+    clearCompactionNotice,
     loadTurnDiff,
     loadSessionContext,
     loadSessionStats,
     searchSessions,
+    searchSessionPage,
     addAttachment,
     removeAttachment,
     attachProjectFile,

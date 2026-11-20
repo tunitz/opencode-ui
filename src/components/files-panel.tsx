@@ -42,8 +42,6 @@ import {
 } from "@/lib/files"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { insertProjectReference, isSafeReferencePath } from "@/lib/file-references"
-import { readCurrentKeybindings } from "@/lib/use-keybindings"
-import { matchesKeybinding } from "@/lib/keybindings"
 import { cn } from "@/lib/utils"
 
 type LoadStatus = "idle" | "loading" | "ready" | "error"
@@ -1016,17 +1014,6 @@ export function ChangesPanel({
     <div
       className="flex flex-col gap-3"
       data-diff-scope
-      onKeyDown={(event) => {
-        if (event.nativeEvent.isComposing) return
-        const binding = readCurrentKeybindings().find(
-          (candidate) => candidate.command === "find.open"
-        )
-        const platform = navigator.platform.toLowerCase().includes("mac") ? "mac" : "other"
-        if (binding && matchesKeybinding(event.nativeEvent, binding, platform)) {
-          event.preventDefault()
-          findRef.current?.focus()
-        }
-      }}
     >
       <div
         role="group"

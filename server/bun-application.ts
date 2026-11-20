@@ -2,6 +2,7 @@ import { createAuthApiHandler } from "./auth-api.ts"
 import { createAuthGate, type AuthService } from "./auth.ts"
 import { createPtyWebSocketBridge } from "./pty-websocket-bridge.ts"
 import type { SecurityOptions } from "./request-security.ts"
+import { createUiEnvironmentHandler } from "./ui-environment.ts"
 import { createWebGateway } from "./web-gateway.ts"
 import { proxyEngineRequest } from "./web-proxy.ts"
 import { createStaticHandler } from "./web-static.ts"
@@ -27,6 +28,8 @@ export function createBunApplication(options: {
   plugins?: Service
   /** Optional shared session pins/labels API. */
   sessionShortcuts?: Service & { dispose?: () => void }
+  /** Override the home directory used for New Session defaults. */
+  sessionHome?: string
 }) {
   const resolveTarget = () =>
     options.getTarget
@@ -57,6 +60,7 @@ export function createBunApplication(options: {
     notes: options.notes?.handleRequest,
     plugins: options.plugins && withEngine(options.plugins),
     sessionShortcuts: options.sessionShortcuts?.handleRequest,
+    environment: createUiEnvironmentHandler(options.sessionHome),
     agents: withEngine(options.agents), artifacts: withEngine(options.artifacts),
     notifications: options.notifications.handleRequest,
     engine: (request) => {
