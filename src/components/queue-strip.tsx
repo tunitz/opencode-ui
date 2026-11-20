@@ -19,7 +19,7 @@ export function QueueStrip({ nav }: { nav: OpenCodeController }) {
   ].filter(Boolean)
 
   return (
-    <div className="mx-auto flex w-full max-w-[42.5rem] shrink-0 px-4 pb-1 md:max-w-none md:px-6 lg:px-8">
+    <div className="mx-auto flex w-full max-w-[42.5rem] shrink-0 px-4 pb-1 md:max-w-none md:px-0">
       <Button
         type="button"
         variant="outline"

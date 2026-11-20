@@ -34,12 +34,16 @@ export const modelCatalogCache = createAsyncCache<ModelInfo[]>()
 export function prefetchTargetCatalog(directory: string | null): void {
   if (!directory) return
   const location = { location: { directory } }
-  void agentCatalogCache.get(directory, () =>
-    openCode.agent.list(location).then((response) => response.data)
-  )
-  void modelCatalogCache.get(directory, () =>
-    openCode.model.list(location).then((response) => response.data)
-  )
+  void agentCatalogCache
+    .get(directory, () =>
+      openCode.agent.list(location).then((response) => response.data)
+    )
+    .catch(() => {})
+  void modelCatalogCache
+    .get(directory, () =>
+      openCode.model.list(location).then((response) => response.data)
+    )
+    .catch(() => {})
 }
 
 /**
@@ -73,7 +77,6 @@ export function useTargetCatalog(directory: string | null): TargetCatalog {
         status: "loading",
         error: null,
       })
-      prefetchTargetCatalog(directory)
       const [agentResult, modelResult] = await Promise.allSettled([
         agentCatalogCache.get(directory, () =>
           openCode
@@ -113,6 +116,9 @@ export function useTargetCatalog(directory: string | null): TargetCatalog {
         error,
       })
     })
+    return () => {
+      request.current += 1
+    }
   }, [directory])
 
   // The render after a directory change still sees the previous state until

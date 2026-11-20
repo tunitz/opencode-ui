@@ -61,8 +61,8 @@ describe("subagent header navigation", () => {
     const nav = { activeSession: session("child", "parent"), sessions: [], runningSessionIDs: {} } as unknown as OpenCodeController
     const html = renderToStaticMarkup(createElement(SubagentNavigation, { nav, title: "A task" }))
     expect(html).toContain('aria-label="Return to parent session"')
-    expect(html).toContain('aria-label="Subagents"')
-    expect(html).toMatch(/<h1[^>]*>.*<button[^>]*aria-label="Subagents"[^>]*>.*A task/)
+    expect(html).toContain('aria-label="A task. Show subagents"')
+    expect(html).toMatch(/<h1[^>]*>.*<button[^>]*aria-label="A task\. Show subagents"[^>]*>.*A task/)
     expect(html).toContain("rtl:rotate-180")
     expect(html).toContain("size-11")
     const root = renderToStaticMarkup(createElement(SubagentNavigation, { nav: { ...nav, activeSession: session("root") }, title: "Root" }))

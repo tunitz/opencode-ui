@@ -238,7 +238,7 @@ function TabStrip({
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent",
+              "pointer-events-none absolute inset-y-0 start-0 w-12 bg-linear-to-r to-transparent rtl:bg-linear-to-l",
               mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
             )}
           />
@@ -260,7 +260,7 @@ function TabStrip({
           <span
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent",
+              "pointer-events-none absolute inset-y-0 end-0 w-12 bg-linear-to-l to-transparent rtl:bg-linear-to-r",
               mode === "sheet" ? "from-card via-card/90" : "from-sidebar via-sidebar/90"
             )}
           />
@@ -609,9 +609,9 @@ function InspectorRail({
               />
             }
           >
-            <PanelRightOpenIcon aria-hidden="true" className="size-5" />
+            <PanelRightOpenIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
           </TooltipTrigger>
-          <TooltipContent side="left">Expand session inspector</TooltipContent>
+          <TooltipContent side="inline-start">Expand session inspector</TooltipContent>
         </Tooltip>
       </div>
       <div className="flex flex-col gap-1 p-2">
@@ -626,7 +626,11 @@ function InspectorRail({
                     type="button"
                     variant="ghost"
                     size="icon-lg"
-                    aria-label={`Show inspector ${INSPECTOR_TAB_LABELS[tab.id]}`}
+                    aria-label={
+                      badge > 0
+                        ? `Show inspector ${INSPECTOR_TAB_LABELS[tab.id]} (${badge})`
+                        : `Show inspector ${INSPECTOR_TAB_LABELS[tab.id]}`
+                    }
                     onClick={() => nav.openInspector(tab.id)}
                     className="relative size-11 rounded-lg text-muted-foreground"
                   />
@@ -634,10 +638,10 @@ function InspectorRail({
               >
                 <Icon aria-hidden="true" className="size-4" />
                 {badge > 0 ? (
-                  <span className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
+                  <span aria-hidden="true" className="absolute end-1 top-1 size-1.5 rounded-full bg-primary" />
                 ) : null}
               </TooltipTrigger>
-              <TooltipContent side="left">{tab.label}</TooltipContent>
+              <TooltipContent side="inline-start">{tab.label}</TooltipContent>
             </Tooltip>
           )
         })}

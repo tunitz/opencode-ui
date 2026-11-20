@@ -183,6 +183,7 @@ test("the tab bar renders every section in registry order with icon and label", 
       "settings-tab-alerts",
       "settings-tab-keys",
       "settings-tab-plugins",
+      "settings-tab-connection",
       "settings-tab-access",
     ])
     for (const [id, label] of [
@@ -191,6 +192,7 @@ test("the tab bar renders every section in registry order with icon and label", 
       ["alerts", "Alerts"],
       ["keys", "Keys"],
       ["plugins", "Plugins"],
+      ["connection", "Connection"],
       ["access", "Access"],
     ]) {
       const tab = tabByID(root, id)
@@ -230,7 +232,7 @@ test("clicking a tab switches content immediately with no back navigation", asyn
     expect(selectedTabs(root)).toEqual(["settings-tab-access"])
     expect(text(root.toJSON())).not.toContain("All settings")
     // Every tab stays reachable in one tap.
-    expect(tabs(root)).toHaveLength(6)
+    expect(tabs(root)).toHaveLength(7)
   } finally {
     await act(async () => root.unmount())
   }
@@ -289,7 +291,7 @@ test("unsaved agent edits guard closing the workspace", async () => {
     expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
       "confirming",
     ])
-    expect(tabs(root)).toHaveLength(6)
+    expect(tabs(root)).toHaveLength(7)
 
     await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
     expect(button(root, "Open settings")).toBeDefined()
@@ -372,7 +374,7 @@ test("both Settings entry points left-align their footer", async () => {
 
   expect(navigation).toContain('"justify-start gap-1 p-3"')
   expect(navigation).toContain(
-    'SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4"'
+    'SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"'
   )
   expect(navigation).not.toContain('"justify-end gap-1 p-3"')
 })

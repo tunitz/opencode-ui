@@ -81,6 +81,7 @@ type ArtifactDeliveryOptions = {
   roots?: readonly string[]
   opencodeBaseUrl?: string
   authorization?: string
+  getTarget?: () => { opencodeBaseUrl: string; authorization?: string }
   fetch?: typeof fetch
   fetchSessionMessages?: (sessionID: string) => Promise<NativeMessage[]>
   ttlMs?: number
@@ -247,7 +248,7 @@ function insideRoot(path: string, roots: string[]): boolean {
 function sniffBytes(path: string): Uint8Array {
   const fd = openSync(path, "r")
   try {
-    const buffer = Buffer.alloc(32)
+    const buffer = Buffer.alloc(512)
     const read = readSync(fd, buffer, 0, buffer.length, 0)
     return new Uint8Array(buffer.subarray(0, read))
   } finally {
@@ -263,7 +264,12 @@ function startsAscii(bytes: Uint8Array, value: string): boolean {
 function activeText(bytes: Uint8Array, path: string): boolean {
   if (ACTIVE_EXTENSIONS.has(extname(path).toLowerCase())) return true
   const head = Buffer.from(bytes.subarray(0, 512)).toString("utf8").trimStart().toLowerCase()
-  return head.startsWith("<!doctype html") || head.startsWith("<html") || head.startsWith("<svg")
+  return (
+    head.startsWith("<!doctype html") ||
+    head.startsWith("<html") ||
+    head.startsWith("<svg") ||
+    (head.startsWith("<?xml") && (head.includes("<svg") || head.includes("<html")))
+  )
 }
 
 function sniffMime(path: string, bytes: Uint8Array): { mime: string; kind: ArtifactKind; width?: number; height?: number } | null {
@@ -382,8 +388,9 @@ function safeDownloadName(value: string): string {
 function contentDisposition(name: string, inline: boolean, download: boolean): string {
   const disposition = inline && !download ? "inline" : "attachment"
   const safe = safeDownloadName(name)
-  const encoded = encodeURIComponent(safe)
-  return `${disposition}; filename="${safe.replace(/["\\]/g, "_")}"; filename*=UTF-8''${encoded}`
+  const ascii = safe.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_") || "artifact"
+  const encoded = encodeURIComponent(safe).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`
 }
 
 function parseRange(value: string | null, size: number): { start: number; end: number } | "invalid" | null {
@@ -439,22 +446,32 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
   const canonicalIds = new Map<string, string>()
   const sessionMessages = new Map<string, { at: number; promise: Promise<NativeMessage[]> }>()
 
+  const resolveTarget = () => {
+    if (options.getTarget) return options.getTarget()
+    return { opencodeBaseUrl: options.opencodeBaseUrl ?? "", authorization: options.authorization }
+  }
+
   const fetchSessionMessages = options.fetchSessionMessages ?? (async (sessionID: string) => {
-    if (!options.opencodeBaseUrl || !options.authorization) {
+    const { opencodeBaseUrl, authorization } = resolveTarget()
+    if (!opencodeBaseUrl || !authorization) {
       throw fileError(503, "upstream", "Artifact source is unavailable.")
     }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 5000)
     try {
-      const response = await fetch(
-        `${options.opencodeBaseUrl.replace(/\/$/, "")}/api/session/${encodeURIComponent(sessionID)}/message?limit=200&order=desc`,
+      const response = await (options.fetch ?? fetch)(
+        `${opencodeBaseUrl.replace(/\/$/, "")}/api/session/${encodeURIComponent(sessionID)}/message?limit=200&order=desc`,
         {
-          headers: { authorization: options.authorization, accept: "application/json" },
+          headers: { authorization, accept: "application/json" },
           redirect: "manual",
+          proxy: false,
           signal: controller.signal,
-        }
+        } as RequestInit
       )
-      if (!response.ok) throw fileError(404, "session", "Session artifact source is unavailable.")
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {})
+        throw fileError(404, "session", "Session artifact source is unavailable.")
+      }
       const text = await response.text()
       if (text.length > MAX_ARTIFACT_SESSION_BYTES) throw fileError(502, "upstream", "Session artifact source is too large.")
       const body = JSON.parse(text) as unknown
@@ -473,16 +490,17 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
 
   function loadSessionMessages(sessionID: string): Promise<NativeMessage[]> {
     const time = now()
-    const cached = sessionMessages.get(sessionID)
+    const cacheKey = `${resolveTarget().opencodeBaseUrl}\0${sessionID}`
+    const cached = sessionMessages.get(cacheKey)
     if (cached && time - cached.at < 10_000) return cached.promise
     const promise = fetchSessionMessages(sessionID)
     if (sessionMessages.size >= 64) {
       const oldest = [...sessionMessages.entries()].sort((a, b) => a[1].at - b[1].at)[0]
       if (oldest) sessionMessages.delete(oldest[0])
     }
-    sessionMessages.set(sessionID, { at: time, promise })
+    sessionMessages.set(cacheKey, { at: time, promise })
     void promise.catch(() => {
-      if (sessionMessages.get(sessionID)?.promise === promise) sessionMessages.delete(sessionID)
+      if (sessionMessages.get(cacheKey)?.promise === promise) sessionMessages.delete(cacheKey)
     })
     return promise
   }

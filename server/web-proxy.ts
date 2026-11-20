@@ -22,6 +22,12 @@ export async function proxyEngineRequest(
   const headers = new Headers(request.headers)
   stripHopByHop(headers)
   headers.delete("authorization")
+  // Never leak the browser UI session cookie or cross-origin browser metadata upstream.
+  headers.delete("cookie")
+  headers.delete("origin")
+  for (const name of [...headers.keys()]) {
+    if (name.toLowerCase().startsWith("sec-fetch-")) headers.delete(name)
+  }
   if (options.authorization) headers.set("authorization", options.authorization)
   try {
     const upstream = await (options.fetch ?? fetch)(target, {
@@ -38,6 +44,8 @@ export async function proxyEngineRequest(
     } as RequestInit)
     const responseHeaders = new Headers(upstream.headers)
     stripHopByHop(responseHeaders)
+    responseHeaders.delete("set-cookie")
+    responseHeaders.delete("content-security-policy")
     for (const name of [...responseHeaders.keys()]) {
       if (name.toLowerCase().startsWith("access-control-")) responseHeaders.delete(name)
     }

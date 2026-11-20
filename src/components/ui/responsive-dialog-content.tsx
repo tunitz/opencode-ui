@@ -24,9 +24,8 @@ export function ResponsiveDialogContent({
       side="bottom"
       forceRenderBackdrop={forceRenderBackdrop}
       className={cn(
-        "p-4",
-        className,
-        "w-full max-w-none overflow-y-auto rounded-t-xl sm:max-w-none"
+        "w-full max-w-none overflow-y-auto rounded-t-xl p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-w-none",
+        className
       )}
       style={{ ...style, ...fixedMobileDrawerStyle() }}
       {...props}

@@ -10,7 +10,6 @@
  * /tmp/opencode.
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import {
   chromium,
@@ -20,6 +19,7 @@ import {
 } from "playwright-core"
 
 import { buildFixture } from "./build"
+import { findChromiumExecutable } from "./chromium"
 import { parseSessionShortcuts, updateSessionShortcut } from "@/lib/session-shortcuts"
 
 const repoRoot = resolve(import.meta.dir, "../..")
@@ -699,32 +699,13 @@ const server = Bun.serve({
 const base = `http://127.0.0.1:${server.port}`
 await mkdir(shotDir, { recursive: true })
 
-function findExecutable() {
-  const candidates = [
-    process.env.OPENCODE_UI_CHROMIUM,
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"
-    ),
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1247/chrome-linux64/chrome"
-    ),
-    join(
-      process.env.HOME ?? "",
-      ".cache/ms-playwright/chromium-1248/chrome-linux/chrome"
-    ),
-  ].filter((entry): entry is string => Boolean(entry))
-  return candidates.find((entry) => existsSync(entry)) ?? null
-}
-
-const executablePath = findExecutable()
+const executablePath = findChromiumExecutable()
 let browser: Browser | null = null
 let blocker: string | null = null
 
 if (!executablePath) {
   blocker =
-    "No installed Chromium executable was found under ~/.cache/ms-playwright; no browser tests ran."
+    "No installed Chromium executable was found under ~/.cache/ms-playwright (set OPENCODE_UI_CHROMIUM to override); no browser tests ran."
 } else {
   browser = await chromium.launch({
     headless: true,
@@ -4512,7 +4493,12 @@ for (const result of results) {
   if (result.consoleErrors.length)
     console.log(`  consoleErrors: ${result.consoleErrors.join(" | ")}`)
 }
+if (blocker) {
+  console.error(`\nBLOCKED: ${blocker}`)
+}
 console.log(
   `\n${passed} passed, ${failed} failed, ${blocked} blocked. Results: ${resultPath}`
 )
-if (failed > 0 || blocked > 0) process.exitCode = 1
+if (failed > 0 || blocked > 0 || Boolean(blocker) || results.length === 0) {
+  process.exitCode = 1
+}

@@ -10,7 +10,7 @@ tools, providers, and history.
 - Files, working-tree diffs, permissions, forms, and session settings.
 - Structured tool output, artifacts, Markdown, tables, and images.
 - Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
-- A Settings workspace for appearance, agents, alerts, keys, plugins, and access.
+- A Settings workspace for appearance, agents, alerts, keys, plugins, engine connections, and access.
 - Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
 - Optional Web Push notifications.
 - UI password gate: optional on loopback, required on non-loopback; the engine credential always stays on the UI server.
@@ -69,9 +69,9 @@ Replace `ui.example.test` with your real reachable hostname and use secure trans
 a trusted reverse proxy or tunnel). Set the UI password privately before exposing the service; a
 non-loopback bind requires one. The first visit opens the setup screen when no password is set, or
 the sign-in screen when one is already configured. The setup endpoint works without a session.
-The direct server's built-in allowed origins are fixed to port 5174, so if
-you also change `--port`, you must pass an explicit `--allowed-origin` for the new port. Use
-`bun run start --help` for the complete flag reference.
+The direct server derives its built-in loopback allowed origins from the resolved `--port`, so
+changing `--port` on loopback works automatically; pass an explicit `--allowed-origin` for any
+non-loopback origin. Use `bun run start --help` for the complete flag reference.
 
 ## Published package
 
@@ -108,6 +108,8 @@ Common environment variables include:
 - `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
 - `OPENCODE_UI_AUTH_STATE`: overrides the password/session state file, which defaults to
   `~/.local/share/opencode-ui/auth/state.json`.
+- `OPENCODE_UI_CONNECTIONS_STATE`: overrides saved local/remote OpenCode engine profiles, which
+  default to `~/.local/share/opencode-ui/connections.json` (mode `0600`).
 - `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: overrides the shared session pins/labels file, which
   defaults to `~/.local/share/opencode-ui/session-shortcuts.json`. Pins and labels are server-wide
   rather than browser-local.
@@ -141,10 +143,10 @@ JSON-mutation, artifact-provenance, or `no-store` protections.
 
 ## Notes
 
-Notes are built in and do not depend on an engine plugin. The
-[notes package](plugins/notes/README.md) (`@tunitz/opencode-notes`) is a standalone TypeScript core
-with a plaintext file store. The UI server imports it in-process for the notes workspace and
-`/api/ui/notes/*`; agents use it through an optional MCP stdio server.
+Notes are built in and do not depend on an engine plugin. The internal
+[notes module](plugins/notes/README.md) (`plugins/notes/`) is a standalone TypeScript core
+with a plaintext file store shipped inside this repository. The UI server imports it in-process for
+the notes workspace and `/api/ui/notes/*`; agents use it through an optional MCP stdio server.
 
 The browser Notes workspace and the note reference picker are hidden when the plugin registry
 definitively reports the Notes MCP entry as disabled. A transient or unknown registry state leaves
@@ -195,7 +197,7 @@ multi-user isolated. Do not store secrets in notes.
 ## Status and limitations
 
 - The project is pre-1.0; interfaces and behavior may change.
-- The terminal surface is not shipped. `/terminal` is reported as unsupported rather than faked.
+- `/terminal` opens a lazy xterm browser terminal backed by native PTY APIs and the same-origin WebSocket bridge; reconnects require explicit Reattach.
 - Notifications are best-effort and depend on browser and OS push delivery.
 - The UI password is one shared access password; it is not multi-tenant isolation.
 - Package publication and registry installation are not verified; packaging checks are pending.

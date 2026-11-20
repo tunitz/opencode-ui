@@ -19,7 +19,6 @@ import {
   CircleAlertIcon,
   ChevronRightIcon,
   CopyIcon,
-  EyeIcon,
   LoaderCircleIcon,
   PencilLineIcon,
   QuoteIcon,
@@ -32,7 +31,6 @@ import { prefersReducedMotion } from "@/lib/accessibility"
 import { copyText } from "@/lib/clipboard"
 import { Markdown } from "@/components/markdown"
 import { MessageFiles } from "@/components/message-files"
-import { HealthvaultToolDetails } from "@/components/healthvault-tool-details"
 import { ToolArtifacts } from "@/components/tool-artifacts"
 import { ProjectArtifacts } from "@/components/project-artifacts"
 import { finalProjectArtifactMessages } from "@/lib/project-artifacts"
@@ -48,12 +46,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyContent,
@@ -108,7 +100,7 @@ import {
   type LiveRun,
   type LiveTool,
 } from "@/lib/session-events"
-import type { LoadStatus, StreamStatus } from "@/lib/use-opencode"
+import type { ConnectionStatus, LoadStatus, StreamStatus } from "@/lib/use-opencode"
 import {
   artifactSignature,
   toolArtifactsFromContent,
@@ -122,18 +114,14 @@ import { structuredErrorMessage } from "@/lib/structured-error"
 import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import { toolCallSummary, toolInputDetail, toolTextOutput } from "@/lib/tool-details"
-import { isHealthvaultTool } from "@/lib/healthvault-tool-view"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { messageText } from "@/lib/command-search"
 import { useToolVisibility } from "@/lib/use-tool-visibility"
 import {
   shouldHideIntermediateText,
-  TOOL_VISIBILITY_MODES,
-  toolVisibilityLabel,
   visibleConversationTools,
   type ToolVisibilityMode,
 } from "@/lib/tool-visibility"
-import { useUndoToast } from "@/lib/undo-toast"
 import { useKeybindings } from "@/lib/use-keybindings"
 import { matchesKeybinding } from "@/lib/keybindings"
 import {
@@ -404,7 +392,7 @@ export function ToolTrace({
   const failed = tools.some((tool) => tool.status === "error")
   const status = failed ? "error" : running ? "running" : "completed"
   const name = tools[0] ? toolLabel(tools[0]) : "tool unknown"
-  const summary = tools.length === 1 ? toolCallSummary(tools[0].name, tools[0].input, tools[0].output, tools[0].status) : undefined
+  const summary = tools.length === 1 ? toolCallSummary(tools[0].name, tools[0].input) : undefined
   const title =
     tools.length === 1
       ? `1 tool call: ${name}${summary ? ` · ${summary}` : ""}`
@@ -437,12 +425,7 @@ export function ToolTrace({
         <TraceCollapsibleContent>
           <ul className="flex min-w-0 flex-col gap-1.5">
             {tools.map((tool) => {
-              const summary = toolCallSummary(
-                tool.name,
-                tool.input,
-                tool.output,
-                tool.status
-              )
+              const summary = toolCallSummary(tool.name, tool.input)
               // The mapper maps SDK statuses to "running" | "error" | undefined.
               const line = toTraceLine(tool, tool.status === "running")
               return (
@@ -493,16 +476,7 @@ function ToolCallDetails({ tool }: { tool: ToolLike }) {
   return <>
     {input !== undefined ? <ToolDetail label="Input" text={input} /> : null}
     {tool.output !== undefined ? (
-      isHealthvaultTool(tool.name) ? (
-        <HealthvaultToolDetails
-          name={tool.name}
-          output={tool.output}
-          status={tool.status}
-          fallback={<ToolDetail label="Output" text={tool.output} />}
-        />
-      ) : (
-        <ToolDetail label="Output" text={tool.output} />
-      )
+      <ToolDetail label="Output" text={tool.output} />
     ) : null}
     {tool.status === "completed" && changedFiles.length > 0 ? (
       <Button
@@ -1212,6 +1186,9 @@ function ScrollerBridge({
 export function Conversation({
   sessionKey,
   hasSession,
+  connection = "connected",
+  connectionError = null,
+  onRetryConnection,
   status,
   error,
   messages,
@@ -1232,6 +1209,9 @@ export function Conversation({
 }: {
   sessionKey: string | null
   hasSession: boolean
+  connection?: ConnectionStatus
+  connectionError?: string | null
+  onRetryConnection?: () => void
   status: LoadStatus
   error: string | null
   messages: SessionMessageInfo[]
@@ -1254,10 +1234,8 @@ export function Conversation({
   // Subscribed here, not in the app shell: streaming tokens re-render the
   // conversation only. Status-only consumers use a status subscription.
   const liveRun = useLiveRun(sessionKey)
-  const { mode: toolMode, setMode: setToolMode, error: toolModeError } =
-    useToolVisibility(serverVersion)
+  const { mode: toolMode } = useToolVisibility(serverVersion)
   const { bindings } = useKeybindings()
-  const undo = useUndoToast()
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findIndex, setFindIndex] = useState(0)
@@ -1404,8 +1382,9 @@ export function Conversation({
     let cancelled = false
     const restore = () => {
       if (cancelled || viewportRef.current !== viewport) return
+      const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(anchor.id) : anchor.id.replace(/["\\]/g, "\\$&")
       const element = viewport.querySelector<HTMLElement>(
-        `[data-message-id="${anchor.id}"]`
+        `[data-message-id="${escaped}"]`
       )
       if (element) {
         const delta =
@@ -1446,8 +1425,9 @@ export function Conversation({
     let frame = 0
     const timer = window.setTimeout(() => {
       frame = requestAnimationFrame(() => {
+        const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(focusMessageID) : focusMessageID.replace(/["\\]/g, "\\$&")
         viewportRef.current
-          ?.querySelector<HTMLElement>(`[data-message-id="${focusMessageID}"]`)
+          ?.querySelector<HTMLElement>(`[data-message-id="${escaped}"]`)
           ?.focus({ preventScroll: true })
         onFocusMessageHandled()
       })
@@ -1517,8 +1497,9 @@ export function Conversation({
     // find jumps no longer need virtual-index arithmetic.
     scrollerApiRef.current?.scrollToMessage(target, { align: "center" })
     window.setTimeout(() => {
+      const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(target) : target.replace(/["\\]/g, "\\$&")
       viewportRef.current
-        ?.querySelector<HTMLElement>(`[data-message-id="${target}"]`)
+        ?.querySelector<HTMLElement>(`[data-message-id="${escaped}"]`)
         ?.focus({ preventScroll: true })
     }, 120)
   }
@@ -1596,6 +1577,25 @@ export function Conversation({
   }, [findOpen, findMatches.length, findQuery])
 
   if (!hasSession) {
+    if (connection === "offline") {
+      return (
+        <ConversationNotice tone="error">
+          <AlertTitle>OpenCode engine is unreachable</AlertTitle>
+          <AlertDescription className="flex flex-col gap-3">
+            <p className="break-words">
+              {connectionError
+                ? `Could not connect to the OpenCode engine (${connectionError}). Check that the engine is running and try again.`
+                : "Could not connect to the OpenCode engine. Check that the engine is running and try again."}
+            </p>
+            {onRetryConnection ? (
+              <Button variant="outline" onClick={onRetryConnection} className="h-11 px-4">
+                Retry connection
+              </Button>
+            ) : null}
+          </AlertDescription>
+        </ConversationNotice>
+      )
+    }
     return (
       <ConversationNotice>
         <EmptyTitle>No session selected</EmptyTitle>
@@ -1755,8 +1755,9 @@ export function Conversation({
                         className="h-11 self-start px-3"
                         onClick={() => {
                           scrollerApiRef.current?.scrollToMessage(revert.messageID, { align: "center" })
+                          const escaped = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(revert.messageID) : revert.messageID.replace(/["\\]/g, "\\$&")
                           viewportRef.current
-                            ?.querySelector<HTMLElement>(`[data-message-id="${revert.messageID}"]`)
+                            ?.querySelector<HTMLElement>(`[data-message-id="${escaped}"]`)
                             ?.focus({ preventScroll: true })
                         }}
                       >
@@ -1889,56 +1890,11 @@ export function Conversation({
             </div>
           ) : null}
         </MessageScroller>
-        <div className="absolute top-2 end-2 z-20">
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-lg"
-                  aria-label={`Tool visibility: ${toolVisibilityLabel(toolMode)}`}
-                  className="size-11 rounded-full bg-background/80 text-muted-foreground backdrop-blur"
-                />
-              }
-            >
-              <EyeIcon aria-hidden="true" className="size-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" side="bottom" className="min-w-52">
-              {TOOL_VISIBILITY_MODES.map((mode) => (
-                <DropdownMenuItem
-                  key={mode}
-                  className="min-h-11"
-                  aria-checked={mode === toolMode}
-                  onClick={() => {
-                    const previous = toolMode
-                    if (setToolMode(mode)) {
-                      undo.showUndo(
-                        `Tool visibility: ${toolVisibilityLabel(mode)}`,
-                        () => setToolMode(previous)
-                      )
-                    }
-                  }}
-                >
-                  <span className="w-4 text-center" aria-hidden="true">
-                    {mode === toolMode ? "✓" : ""}
-                  </span>
-                  {toolVisibilityLabel(mode)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        {toolModeError ? (
-          <p role="alert" className="absolute top-14 end-2 z-20 max-w-56 rounded-lg bg-background px-2 py-1 text-[10px] text-destructive shadow">
-            {toolModeError}
-          </p>
-        ) : null}
         {selectionQuote && !citationOpen ? (
           <Button
             type="button"
             variant="secondary"
-            className="absolute bottom-16 start-1/2 z-30 h-11 -translate-x-1/2 gap-1.5 rounded-full px-3 text-xs shadow-lg"
+            className="absolute bottom-16 start-1/2 z-30 h-11 -translate-x-1/2 gap-1.5 rounded-full px-3 text-xs shadow-lg rtl:translate-x-1/2"
             onClick={() => {
               setCitationComment("")
               setCitationOpen(true)

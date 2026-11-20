@@ -5,6 +5,7 @@ import {
   KeyboardIcon,
   PaletteIcon,
   PlugIcon,
+  ServerIcon,
   ShieldCheckIcon,
   type LucideIcon,
 } from "lucide-react"
@@ -14,6 +15,7 @@ import { KeybindingsSettings } from "@/components/keybindings-settings"
 import { NotificationsSettings } from "@/components/notifications-settings"
 import { AppearancePanel } from "@/components/theme-select"
 import { SettingsAccessSection } from "@/components/settings-access-section"
+import { SettingsConnectionSection } from "@/components/settings-connection-section"
 import { SettingsPluginsSection } from "@/components/settings-plugins-section"
 import {
   useSettingsWorkspace,
@@ -83,6 +85,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
     label: "Plugins",
     Icon: PlugIcon,
     Component: SettingsPluginsSection,
+  },
+  {
+    id: "connection",
+    label: "Connection",
+    Icon: ServerIcon,
+    Component: SettingsConnectionSection,
   },
   {
     id: "access",

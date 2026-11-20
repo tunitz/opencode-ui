@@ -28,6 +28,7 @@ export const SETTINGS_SECTION_IDS = [
   "alerts",
   "keys",
   "plugins",
+  "connection",
   "access",
 ] as const
 

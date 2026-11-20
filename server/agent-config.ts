@@ -69,6 +69,7 @@ const FIELD_SET = new Set<string>(AGENT_CONFIG_FIELDS)
 type AgentConfigServiceOptions = {
   opencodeBaseUrl?: string
   authorization?: string
+  getTarget?: () => { opencodeBaseUrl: string; authorization?: string }
   env?: NodeJS.ProcessEnv
   home?: string
   fetch?: typeof fetch
@@ -1144,11 +1145,21 @@ async function withLock<T>(key: string, run: () => Promise<T>): Promise<T> {
 export function createAgentConfigService(
   options: AgentConfigServiceOptions = {}
 ) {
-  const baseUrl = (options.opencodeBaseUrl ?? "http://127.0.0.1:8090").replace(
+  const staticBaseUrl = (options.opencodeBaseUrl ?? "http://127.0.0.1:8090").replace(
     /\/+$/,
     ""
   )
-  const authorization = options.authorization
+  const staticAuthorization = options.authorization
+  const resolveTarget = () => {
+    if (!options.getTarget) {
+      return { baseUrl: staticBaseUrl, authorization: staticAuthorization }
+    }
+    const current = options.getTarget()
+    return {
+      baseUrl: current.opencodeBaseUrl.replace(/\/+$/, ""),
+      authorization: current.authorization,
+    }
+  }
   const fetchImpl = options.fetch ?? globalThis.fetch
   const env = options.env ?? process.env
   const home = options.home ?? homedir()
@@ -1163,14 +1174,16 @@ export function createAgentConfigService(
         "The native OpenCode catalog is unavailable."
       )
     }
+    const { baseUrl, authorization } = resolveTarget()
     let response: Response
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         headers: authorization ? { authorization } : {},
-        // Never forward the selected engine's credential to a redirect target.
+        // Never forward the selected engine's credential to a redirect target or proxy.
         redirect: "manual",
+        proxy: false,
         signal: AbortSignal.timeout(10_000),
-      })
+      } as RequestInit)
     } catch {
       throw new AgentConfigError(
         503,

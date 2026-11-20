@@ -496,9 +496,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
     source.addEventListener("error", onError)
     source.addEventListener("message", onMessage)
     const heartbeat = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || !eventSourceReady.current) {
-        void sendNotificationHeartbeat(deviceID, false)
-      } else {
+      if (document.visibilityState === "visible" && eventSourceReady.current) {
         void sendNotificationHeartbeat(deviceID, true)
       }
     }, 3000)
@@ -550,7 +548,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
     <NotificationsContext.Provider value={value}>
       {children}
       {notice && (notice.test || !notice.sessionID || notice.sessionID !== nav.activeSessionID) ? (
-        <Alert className="fixed inset-x-3 top-16 z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
+        <Alert className="fixed inset-x-3 top-[calc(4rem+env(safe-area-inset-top))] z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
           <BellIcon aria-hidden="true" />
           <AlertTitle>
             {notice.kind === "needs-attention" ? "Needs attention" : notice.kind === "failure" ? "Response failed" : "Response finished"}
@@ -570,7 +568,7 @@ export function NotificationsProvider({ nav, children }: { nav: OpenCodeControll
           </AlertDescription>
         </Alert>
       ) : navigationError ? (
-        <Alert className="fixed inset-x-3 top-16 z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
+        <Alert className="fixed inset-x-3 top-[calc(4rem+env(safe-area-inset-top))] z-[60] mx-auto max-w-md shadow-lg md:inset-x-auto md:end-6 md:top-20">
           <BellIcon aria-hidden="true" />
           <AlertTitle>Session unavailable</AlertTitle>
           <AlertDescription>

@@ -88,9 +88,11 @@ export type SecurityDecision =
 
 function normalizedOrigin(value: string | undefined): string | null {
   if (!value || value === "null" || value === "*") return null
+  if (/[\s\\@]/.test(value)) return null
   try {
     const url = new URL(value)
     if (url.protocol !== "http:" && url.protocol !== "https:") return null
+    if (url.username || url.password || url.origin !== value) return null
     return url.origin
   } catch {
     return null
@@ -99,11 +101,33 @@ function normalizedOrigin(value: string | undefined): string | null {
 
 function normalizedHost(value: string | undefined): string | null {
   if (!value) return null
+  if (/[\s/@\\?#]/.test(value)) return null
   try {
-    return new URL(`http://${value}`).hostname.toLowerCase()
+    const url = new URL(`http://${value}`)
+    if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      return null
+    }
+    return url.hostname.toLowerCase()
   } catch {
     return null
   }
+}
+
+function hasUnsafeEncodedPath(pathname: string): boolean {
+  if (pathname.includes("\\") || pathname.includes("\0")) return true
+  if (/%00|%2f|%5c/i.test(pathname)) return true
+  for (const segment of pathname.split("/")) {
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(segment)
+    } catch {
+      return true
+    }
+    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\") || decoded.includes("\0")) {
+      return true
+    }
+  }
+  return false
 }
 
 export function isProtectedPath(pathname: string): boolean {
@@ -175,6 +199,9 @@ export function evaluateRequest(
   const allowedApiPrefixes = options.allowedApiPrefixes ?? DEFAULT_API_PREFIXES
 
   if (!isProtectedPath(pathname)) return { allowed: true }
+  if (hasUnsafeEncodedPath(pathname)) {
+    return { allowed: false, status: 403, reason: "API path not allowed" }
+  }
   // Heap dumps can contain credentials and private transcript data. They are
   // never exposed through the browser gateway, even if a future prefix change
   // were to allowlist /api/debug. Keep this explicit deny as defense in depth.
@@ -221,6 +248,9 @@ export function evaluateWebSocketUpgrade(
   options: SecurityOptions = {}
 ): SecurityDecision {
   if (!isProtectedPath(input.pathname)) return { allowed: true }
+  if (hasUnsafeEncodedPath(input.pathname)) {
+    return { allowed: false, status: 403, reason: "API path not allowed" }
+  }
   if (!isAllowedHost(input.host, options.allowedHosts)) {
     return { allowed: false, status: 403, reason: "host not allowed" }
   }

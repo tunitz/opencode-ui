@@ -87,7 +87,9 @@ roots unless `--artifact-root` or the environment list is supplied. Use the CLI 
 defaults and explicit service-file and engine selection.
 
 Password/session state defaults to `~/.local/share/opencode-ui/auth/state.json` and can be moved with
-`OPENCODE_UI_AUTH_STATE`. Notes data defaults to `$XDG_DATA_HOME/opencode-notes/v1` (or
+`OPENCODE_UI_AUTH_STATE`. Saved engine connection profiles default to
+`~/.local/share/opencode-ui/connections.json` (mode `0600`) and can be moved with
+`OPENCODE_UI_CONNECTIONS_STATE`. Notes data defaults to `$XDG_DATA_HOME/opencode-notes/v1` (or
 `~/.local/share/opencode-notes/v1`) and can be moved with `OPENCODE_NOTES_DATA_DIR`; legacy engine
 data is read from `$XDG_DATA_HOME/opencode/opencode.db` unless `OPENCODE_ENGINE_DB_PATH` is set.
 
@@ -135,8 +137,7 @@ bun pm pack
 The package name is `@tunitz/opencode-ui`; the unscoped `opencode-ui` package is unrelated. Confirm
 package-name ownership and credentials privately, and get explicit authorization before publishing.
 Do not publish from a dirty tree or include private files, credentials, or local state. The package
-ships the UI server modules plus the `plugins/notes` sources and declares
-`@tunitz/opencode-notes` as a workspace dependency.
+ships the UI server modules together with the internal `plugins/notes` sources directly.
 
 ## Code and UX conventions
 
@@ -146,10 +147,11 @@ ships the UI server modules plus the `plugins/notes` sources and declares
   actual component capabilities and restrictions in [docs/components.md](docs/components.md).
 - Preserve mobile and desktop accessibility: Light, Dark, and System themes, 44px targets,
   keyboard and focus behavior, RTL, reduced motion, and accessible names.
-- Settings is a full workspace, not a dialog: section list plus detail at container width ≥40rem,
-  one pane below it, and the Back-to-conversation control on the left of the app header. Notes and
-  Settings are mutually exclusive main panes. Appearance controls live only in Settings →
-  Appearance; do not reintroduce sidebar theme triggers or appearance dialogs.
+- Settings is a full workspace, not a dialog: sticky horizontal section tabs above the active
+  section pane, with the Back-to-conversation control on the left of the app header. Notes and
+  Settings are mutually exclusive main panes, and the desktop Session Inspector hides while either
+  is active. Appearance controls live only in Settings → Appearance; do not reintroduce sidebar
+  theme triggers or appearance dialogs.
 - Never use `window.confirm`, `window.alert`, or `window.prompt`. Confirm destructive or
   draft-losing actions with the app `AlertDialog` pattern, and keep focus return explicit.
 - Preserve composer behavior: on touch, Enter inserts a newline and only Send submits; on a
@@ -157,8 +159,9 @@ ships the UI server modules plus the `plugins/notes` sources and declares
   composition. Preserve browser-local drafts and preferences.
 - Notes run on the local UI server (`/api/ui/notes/*` plus the change SSE), not an engine plugin.
   Keep drafts in the per-directory adapter cache so they survive project switches.
-- Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal`, for
-  example, is reported as unsupported because no terminal UI is mounted.
+- Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal` is shipped
+  as a lazy xterm dialog backed by native PTY APIs and the same-origin `/api/pty/{id}/connect`
+  WebSocket bridge.
 
 ## Notes workflow
 

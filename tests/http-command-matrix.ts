@@ -12,12 +12,12 @@
  * No real engine, credential, model call, or live session is touched. The only
  * network mutation is a same-origin POST to the synthetic `/api/command` route.
  */
-import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { chromium, type Browser, type Page } from "playwright-core"
 
 import { buildFixture } from "./browser/build"
+import { findChromiumExecutable } from "./browser/chromium"
 
 const repoRoot = resolve(import.meta.dir, "..")
 const resultsPath = "/tmp/opencode/http-command-matrix-results.json"
@@ -210,17 +210,7 @@ try {
 // ---------------------------------------------------------------------------
 // Browser
 // ---------------------------------------------------------------------------
-function findExecutable(): string | null {
-  const candidates = [
-    process.env.OPENCODE_UI_CHROMIUM,
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1247/chrome-linux64/chrome"),
-    join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1248/chrome-linux/chrome"),
-  ].filter((entry): entry is string => Boolean(entry))
-  return candidates.find((entry) => existsSync(entry)) ?? null
-}
-
-const executablePath = findExecutable()
+const executablePath = findChromiumExecutable()
 if (!executablePath) {
   console.error("[http-matrix] No installed Playwright Chromium executable was found.")
   await writeFile(resultsPath, JSON.stringify({ error: "chromium_unavailable", base }, null, 2))

@@ -130,6 +130,7 @@ const MESSAGE_LIMIT = 50
 // Catalog caches are keyed by directory; this sentinel stands for the
 // all-projects (`location: undefined`) catalog read.
 const ALL_PROJECTS_CATALOG_KEY = "__all_projects__"
+const EMPTY_ATTACHMENTS: ComposerAttachment[] = []
 const DESKTOP_VIEWPORT_QUERY = "(min-width: 768px)"
 const DESKTOP_INSPECTOR_COLLAPSED_KEY =
   "opencode-ui:desktop-inspector-collapsed:v2"
@@ -251,6 +252,7 @@ export type OpenCodeController = OpenCodeState & {
   selectSession: (sessionID: string) => void
   openSessionByID: (sessionID: string) => Promise<string | null>
   retryConnection: () => void
+  resetForEngineSwitch: () => void
   retryProjects: () => void
   refreshSessions: () => void
   dismissStartupNotice: () => void
@@ -1143,7 +1145,7 @@ export function useOpenCode(): OpenCodeController {
     // Agent/model reads share the caches used by the new-session/worktree
     // pickers, so a wake/refetch cycle does not issue duplicate native catalog
     // reads. Config stays direct: it is advisory and not cached.
-    const cacheKey = directory ?? ALL_PROJECTS_CATALOG_KEY
+    const cacheKey = directory || ALL_PROJECTS_CATALOG_KEY
     const [agentsResult, modelsResult, configResult] = await Promise.allSettled([
       agentCatalogCache.get(cacheKey, () =>
         openCode.agent.list(location).then((response) => response.data)
@@ -1394,7 +1396,6 @@ export function useOpenCode(): OpenCodeController {
       if (cancelled) return
       setStream("lost", "Event stream stalled.")
       bumpWakeKey()
-      scheduleReconnect(true)
       controller.abort()
     })
 
@@ -1403,6 +1404,7 @@ export function useOpenCode(): OpenCodeController {
         watchdog.arm()
         for await (const event of openCode.event.subscribe({
           signal: controller.signal,
+          onActivity: () => watchdog.arm(),
         })) {
           if (cancelled) {
             return
@@ -1782,17 +1784,18 @@ export function useOpenCode(): OpenCodeController {
         }
 
         // The first page is newest-first; render it oldest-first.
+        const ordered = response.data.toReversed()
         const nextCursor = response.cursor.next ?? null
         olderCursorRef.current = nextCursor
         setOlderCursor(nextCursor)
         setHasOlder(nextCursor !== null)
         setOlderError(null)
-        setMessages(response.data.toReversed())
+        setMessages(ordered)
         setHistoryStatus("ready")
         updateLiveRuns((current) => {
           const run = current[activeSessionID]
 
-          if (!run || !runCoveredByMessages(run, response.data)) {
+          if (!run || !runCoveredByMessages(run, ordered)) {
             return current
           }
 
@@ -1971,6 +1974,57 @@ export function useOpenCode(): OpenCodeController {
     setConnectionError(null)
     void connect(directoryRef.current || undefined)
   }, [connect])
+
+  const resetForEngineSwitch = useCallback(() => {
+    openSessionRequest.current += 1
+    historyRequest.current += 1
+    sessionsRequest.current += 1
+    pendingRequest.current += 1
+    catalogRequest.current += 1
+    commandRequest.current += 1
+    archivedRequest.current += 1
+    inboxRequest.current += 1
+    activeSessionsRequest.current += 1
+    olderAbortRef.current?.abort()
+    liveRunStore.reset()
+    agentCatalogCache.invalidate()
+    modelCatalogCache.invalidate()
+    activeSessionRef.current = null
+    directoryRef.current = ""
+    locationRef.current = null
+    setActiveSessionID(null)
+    setFocusMessageID(null)
+    setLocation(null)
+    setProjects([])
+    setProjectsStatus("loading")
+    setProjectError(null)
+    setDirectoryError(null)
+    setSessions([])
+    setSessionsStatus("loading")
+    setSessionsError(null)
+    setMessages([])
+    setHistoryStatus("idle")
+    setHistoryError(null)
+    setAgents([])
+    setModels([])
+    setCommands([])
+    setPendingPermissions([])
+    setPendingForms([])
+    setArchivedSessions([])
+    setInbox([])
+    setInboxStatus("idle")
+    setInboxError(null)
+    setRunningSessionIDs({})
+    setSessionActivity(EMPTY_SESSION_ACTIVITY)
+    setStartupNotice(null)
+    setServerVersion(null)
+    setCatalogEpoch((current) => current + 1)
+    setCommandsReloadKey((current) => current + 1)
+    setConnection("connecting")
+    setConnectionError(null)
+    scheduleReconnect(true)
+    void connect()
+  }, [connect, scheduleReconnect])
 
   const retryProjects = useCallback(() => {
     void loadProjects()
@@ -2625,9 +2679,11 @@ export function useOpenCode(): OpenCodeController {
       for (const id of removed) deletedSessionsRef.current.add(id)
       sessionsRequest.current += 1
 
-      // Clear the deleted sessions' persisted drafts so no stale draft survives.
+      // Clear the deleted sessions' persisted drafts and live-run entries so no
+      // stale draft or run state survives.
       for (const id of removed) {
         removeDraft(id)
+        liveRunStore.delete(id)
       }
 
       setAttachmentsBySession((current) => {
@@ -2839,7 +2895,10 @@ export function useOpenCode(): OpenCodeController {
                     }
                   : user
               ),
-              status: running ? run.status : "running",
+              status:
+                running || run.status !== "submitting"
+                  ? run.status
+                  : "running",
               notices: mismatchNotice
                 ? [...run.notices.filter((notice) => !notice.startsWith("Steer requested") && !notice.startsWith("Queue requested")), mismatchNotice]
                 : run.notices,
@@ -3347,8 +3406,8 @@ export function useOpenCode(): OpenCodeController {
     ? Boolean(sendingSessions[activeSessionID])
     : false
   const attachments = activeSessionID
-    ? (attachmentsBySession[activeSessionID] ?? [])
-    : []
+    ? (attachmentsBySession[activeSessionID] ?? EMPTY_ATTACHMENTS)
+    : EMPTY_ATTACHMENTS
 
   const state = useShallowMemo<OpenCodeState>({
     connection,
@@ -3428,6 +3487,7 @@ export function useOpenCode(): OpenCodeController {
     openSessionByID,
     subscribeSessionListChanges,
     retryConnection,
+    resetForEngineSwitch,
     retryProjects,
     refreshSessions,
     dismissStartupNotice,

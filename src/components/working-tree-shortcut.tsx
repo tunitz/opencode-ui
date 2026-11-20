@@ -7,12 +7,33 @@ import type { FileDiffInfo } from "@/lib/opencode"
 type Snapshot = { key: string; files: FileDiffInfo[] } | null
 type BranchSnapshot = { key: string; branch: string | null } | null
 
+const SHORTCUT_BAND_QUERY = "(min-width: 640px) and (max-width: 767px)"
+
+function useShortcutVisible(): boolean {
+  const [visible, setVisible] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return true
+    }
+    return window.matchMedia(SHORTCUT_BAND_QUERY).matches
+  })
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return
+    const media = window.matchMedia(SHORTCUT_BAND_QUERY)
+    const sync = () => setVisible(media.matches)
+    sync()
+    media.addEventListener("change", sync)
+    return () => media.removeEventListener("change", sync)
+  }, [])
+  return visible
+}
+
 /** A point-in-time VCS HEAD-to-working-copy summary, not session attribution. */
 export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
   sessionID: string
   directory: string | null
   onOpen: () => void
 }) {
+  const visible = useShortcutVisible()
   const key = JSON.stringify([sessionID, directory])
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
   const [branchSnapshot, setBranchSnapshot] = useState<BranchSnapshot>(null)
@@ -20,7 +41,7 @@ export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
 
   useEffect(() => {
     const controller = new AbortController()
-    if (!directory) return () => controller.abort()
+    if (!directory || !visible) return () => controller.abort()
 
     const branchQuery = new URLSearchParams({ "location[directory]": directory })
     void fetch(`/api/vcs?${branchQuery.toString()}`, { signal: controller.signal })
@@ -51,7 +72,7 @@ export function WorkingTreeShortcut({ sessionID, directory, onOpen }: {
         if (!controller.signal.aborted) setState({ key, status: "unavailable" })
       })
     return () => controller.abort()
-  }, [directory, key])
+  }, [directory, key, visible])
 
   const status = !directory ? "unavailable" : state.key === key ? state.status : "loading"
   const files = snapshot?.key === key ? snapshot.files : null

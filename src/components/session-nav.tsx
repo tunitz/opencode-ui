@@ -60,7 +60,7 @@ import { IntegrationCommandDialogs } from "@/components/integration-command-dial
 import {
   SettingsButton,
   SettingsTriggerButton,
-} from "@/components/settings-workspace"
+} from "@/components/settings-trigger"
 import { useOptionalSettingsWorkspace } from "@/components/settings-context"
 import { useOptionalWorkspace } from "@/components/workspace-context"
 import { projectName } from "@/components/project-select"
@@ -1247,6 +1247,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
   return (
     <aside
       data-sidebar="sessions"
+      aria-label="Sessions sidebar"
       style={{ backgroundColor: "var(--sidebar)" }}
       className={cn(
         "hidden h-svh shrink-0 flex-col border-e border-sidebar-border bg-sidebar transition-[width] duration-200 motion-reduce:transition-none md:flex",
@@ -1269,9 +1270,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                 />
               }
             >
-              <PanelLeftOpenIcon aria-hidden="true" className="size-5" />
+              <PanelLeftOpenIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
             </TooltipTrigger>
-            <TooltipContent side="right">Expand sidebar</TooltipContent>
+            <TooltipContent side="inline-end">Expand sidebar</TooltipContent>
           </Tooltip>
         ) : (
           <>
@@ -1283,7 +1284,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                 <path d="M12 10l6 6-6 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
-            <span className="text-sm font-semibold tracking-tight">OpenUI</span>
+            <span className="text-sm font-semibold tracking-tight">opencode-ui</span>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1298,9 +1299,9 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
                   />
                 }
               >
-                <PanelLeftCloseIcon aria-hidden="true" className="size-5" />
+                <PanelLeftCloseIcon aria-hidden="true" className="size-5 rtl:rotate-180" />
               </TooltipTrigger>
-              <TooltipContent side="right">Collapse sidebar</TooltipContent>
+              <TooltipContent side="inline-end">Collapse sidebar</TooltipContent>
             </Tooltip>
           </>
         )}
@@ -1324,7 +1325,7 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
             >
               <GitBranchIcon aria-hidden="true" className="size-4" />
             </TooltipTrigger>
-            <TooltipContent side="right">Project worktrees</TooltipContent>
+            <TooltipContent side="inline-end">Project worktrees</TooltipContent>
           </Tooltip>
         ) : (
           <Button type="button" variant="ghost" className="min-h-11 w-full justify-start text-[13px]" disabled={!projectID || nav.projectBusy || nav.connection !== "connected"} onClick={() => { if (projectID) setWorktreeProjectID(projectID) }}>Project worktrees</Button>
@@ -1403,7 +1404,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         showCloseButton={false}
         className="w-[350px]! max-w-[92vw] gap-0 border-e-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
       >
-        <SheetHeader className="flex-row items-start justify-between px-5 pt-5 pb-3">
+        <SheetHeader className="flex-row items-start justify-between px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-3">
           <div className="space-y-1">
             <SheetTitle className="text-[22px] font-semibold tracking-tight">
               Sessions
@@ -1440,7 +1441,7 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
             }}
           />
         </ScrollArea>
-        <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4">
+        <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <SettingsTriggerButton
             onClick={() => {
               pendingSettings.current = true

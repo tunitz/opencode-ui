@@ -107,7 +107,29 @@ pruned on each auth write.
 
 Auth bodies are JSON objects limited to 8 KiB; failures use `{ "error": { "code" } }`. The UI fetches
 status once at boot and re-fetches it after sign-in; it does not poll. Mid-session `auth_required` /
-`setup_required` responses from the notes or plugins APIs re-show the auth screen.
+`setup_required` responses from any gated `/api/*` route re-show the auth screen.
+
+## App-layer Engine Connections API [app layer]
+
+Mounted under `/api/ui/connections` before the generic engine proxy; body limit 16 KiB. Saved
+profiles live in `~/.local/share/opencode-ui/connections.json` (or `OPENCODE_UI_CONNECTIONS_STATE`)
+with directory mode `0700` and file mode `0600` (atomic temp-file + rename). The startup CLI/env
+engine (`--engine-url` + `--service-file`) is always available as the immutable `default` profile.
+
+- `GET /api/ui/connections` → `{ activeId, active, profiles }` where each summary contains
+  `{ id, name, engineUrl, authMode, serviceFile?, username, hasPassword, isDefault, isRemote, unencryptedRemote, isActive, createdAt, updatedAt }`. Passwords and Basic auth headers are never returned.
+- `POST /api/ui/connections` → creates a custom profile (`authMode: "password" | "service-file"`, max
+  32 profiles, optionally `activate: true`) → 201 `{ profile, activeId, active, profiles }`.
+- `PUT /api/ui/connections/:id` → updates a custom profile. Changing `engineUrl` on a password
+  profile without providing a new `password` is rejected with 400 `credential_required_for_url_change`
+  so saved credentials cannot be redirected to another host.
+- `DELETE /api/ui/connections/:id` → deletes an inactive custom profile (400 `default_immutable` for
+  `default`; 409 `cannot_delete_active` for the active profile).
+- `POST /api/ui/connections/:id/activate` → resolves credentials, switches the live proxy, PTY
+  WebSocket bridge, notifications watcher, artifact delivery, plugins API, and agent-config target,
+  and persists `activeId`.
+- `POST /api/ui/connections/test` → probes `GET <engineUrl>/api/info` (`redirect: "manual"`,
+  `proxy: false`, 5 s timeout) and returns `{ ok, reachable, authenticated, status, version, latencyMs, unencryptedRemote, error }`. Reusing a saved password via `profileId` is allowed only when `engineUrl` matches that profile's saved origin.
 
 ## App-layer Notes API [app layer]
 
@@ -128,8 +150,8 @@ One `NotesService` instance per UI-server process, backed by the shared file sto
   `mime_rejected` → 415, anything else → 500. Body `{ "error": { "code", "message" } }`.
 - `GET /api/ui/notes/events` is an SSE stream (`text/event-stream`, `no-cache, no-transform`). It
   sends `event: changed` with `data: {"at":<epochMs>}` for in-process mutations and for filesystem
-  changes under `notes/`, `spaces/`, and `attachments/` (250 ms debounce), plus a 30-second comment
-  heartbeat. There is no replay; clients refetch.
+  changes under `notes/`, `spaces/`, and `attachments/` (250 ms debounce), plus a 30-second
+  `event: heartbeat` keep-alive. There is no replay; clients refetch.
 - `/api/ui` remains an allowed API prefix in request security. `NOTES_RPC_PATHS` and its POST/JSON
   special cases are removed.
 
@@ -450,15 +472,14 @@ and a sanitized filename; temporary object URLs are revoked, and previews never 
 | Package | Pin | Notes |
 |---|---|---|
 | `@opencode/client` | 2.1.4 | MIT; matches target. Browser promise entry exports 8 reachable files with no node builtins. Do **not** import `@opencode/client/service` in the browser (node imports). |
-| `@openuidev/react-ui` | 0.18.1 | MIT. Installed for selective subpaths only: `CodeBlock` (+scoped code CSS), `Card`, `CardHeader`, `Table` primitives, `Image`, and lazy `Charts/BarChart` (+scoped chart CSS). The root entry imports chat/Lang surfaces; **do not import the root**. Card/Table/Image have no provider/Lang dependency. The stats chart uses a local `ThemeProvider` with `cssSelector=".openui-chart-scope"` (scoped vars + portal class, no body/global reset) and actual `BarChart`, lazy only in `/stats`. The CodeBlock subpath imports IconButton, `react-syntax-highlighter` Prism, lucide, and clsx, not AgentInterface/chat/Lang/zustand/d3. |
-| `react-syntax-highlighter` | 16.1.2 | Transitive `react-ui` dependency used by the actual CodeBlock. |
+| `@openuidev/react-ui` | 0.18.1 | MIT. Installed for selective subpaths only: `Callout`, `Card`, `CardHeader`, `Table` primitives, `Image`, `MetricIndicator`, `Tag`, and lazy `Charts/BarChart` (+scoped chart CSS). The root entry imports chat/Lang surfaces; **do not import the root**. Card/Table/Image/Callout/MetricIndicator/Tag have no provider/Lang dependency. Code blocks are composed from shadcn `CodeBlock` parts in `src/components/openui-code-block.tsx`. The stats chart uses a local `ThemeProvider` with `cssSelector=".openui-chart-scope"` (scoped vars + portal class, no body/global reset) and actual `BarChart`, lazy only in `/stats`. |
 | `web-push` | 3.6.7 | MPL-2.0. App-layer Web Push/VAPID sender only; used by `server/notifications.ts`, never imported into the browser bundle. Private VAPID key/state lives outside the repository with mode 600. `@types/web-push` 3.6.4 is dev-only. |
-| `@openuidev/react-headless` | 0.18.1 | MIT; installed as declared peer resolution only. Not imported by the CodeBlock path. |
-| `@openuidev/react-lang` | 1.0.1 | Installed as declared peer resolution only. Not imported by the CodeBlock path; no generated Lang UI/model/service or extra LLM is used. |
-| `zustand` | 4.5.7 | Installed peer resolution; unused by the CodeBlock path. |
-| `zod` | 4.6.7 | Installed peer resolution; unused by the CodeBlock path. |
-| `@openuidev/lang-core` | 1.0.1 | Transitive peer support package. Its postinstall telemetry is **blocked** by Bun (`bun pm untrusted`) and not run; not imported by the CodeBlock path. |
-| `react` / `react-dom` | 19.3.1 | Satisfy OpenUI CodeBlock peers (`^18.3.1 || ^19.0.0`). |
+| `@openuidev/react-headless` | 0.18.1 | MIT; installed as declared peer resolution only. |
+| `@openuidev/react-lang` | 1.0.1 | Installed as declared peer resolution only; no generated Lang UI/model/service or extra LLM is used. |
+| `zustand` | 4.5.7 | Installed peer resolution; unused by app code. |
+| `zod` | 4.6.7 | Installed peer resolution; unused by app code. |
+| `@openuidev/lang-core` | 1.0.1 | Transitive peer support package. Its postinstall telemetry is **blocked** by Bun (`bun pm untrusted`) and not run. |
+| `react` / `react-dom` | 19.3.1 | Satisfy UI peers (`^18.3.1 || ^19.0.0`). |
 | Bun | 1.4.4 | Runtime and package manager. Runtime setup must ensure it is on `PATH` or referenced explicitly. |
 
 ## Known limits

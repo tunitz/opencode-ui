@@ -49,6 +49,44 @@ export function isAuthErrorPayload(body: unknown): boolean {
   return error.code === "auth_required" || error.code === "setup_required"
 }
 
+type UnauthorizedHandler = (code?: string) => void
+let unauthorizedHandler: UnauthorizedHandler | null = null
+
+export function registerUnauthorizedHandler(
+  handler: UnauthorizedHandler | null
+): () => void {
+  unauthorizedHandler = handler
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null
+  }
+}
+
+export function notifyUnauthorized(code?: string): void {
+  unauthorizedHandler?.(code)
+}
+
+/**
+ * Fetch wrapper that forwards mid-session 401 auth/setup errors from any gated
+ * `/api/*` call straight to the active `AuthGateProvider` without polling.
+ */
+export async function authAwareFetch(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1]
+): Promise<Response> {
+  const response = await fetch(input, init)
+  if (response.status === 401 && unauthorizedHandler) {
+    const body = await response
+      .clone()
+      .json()
+      .catch(() => null)
+    if (isAuthErrorPayload(body)) {
+      const code = (body as AuthErrorBody).error?.code
+      unauthorizedHandler(typeof code === "string" ? code : undefined)
+    }
+  }
+  return response
+}
+
 async function request(path: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(path, {

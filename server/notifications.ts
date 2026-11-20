@@ -188,13 +188,15 @@ export function createNotificationService(options: ServiceOptions = {}) {
     options.stateFile ??
     process.env.OPENCODE_UI_NOTIFICATION_STATE ??
     join(homedir(), ".local", "state", "opencode-ui", "notifications", "state.json")
-  const opencodeBaseUrl = options.opencodeBaseUrl ?? "http://127.0.0.1:8090"
-  const authorization = options.authorization
+  let opencodeBaseUrl = options.opencodeBaseUrl ?? "http://127.0.0.1:8090"
+  let authorization = options.authorization
   const now = options.now ?? Date.now
   const startWatcher = options.startWatcher ?? true
   let state: StoredState | null = null
   let loadPromise: Promise<void> | null = null
   let watcher: AbortController | null = null
+  let watcherEpoch = 0
+  let started = false
   let stopped = false
   let watcherStatus: "idle" | "connecting" | "connected" | "reconnecting" | "disabled" | "stopped" = "idle"
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -211,15 +213,28 @@ export function createNotificationService(options: ServiceOptions = {}) {
   }
   const sendPush = options.sendPush ?? defaultSend
 
-  async function persist() {
-    if (!state) return
-    const directory = dirname(stateFile)
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    const temp = `${stateFile}.${randomBytes(8).toString("hex")}.tmp`
-    await writeFile(temp, JSON.stringify(state), { mode: 0o600 })
-    await chmod(temp, 0o600)
-    await rename(temp, stateFile)
-    await chmod(stateFile, 0o600)
+  let persistQueue: Promise<void> = Promise.resolve()
+
+  function persist(): Promise<void> {
+    if (!state) return Promise.resolve()
+    const snapshot = JSON.stringify(state)
+    const run = persistQueue.then(async () => {
+      const directory = dirname(stateFile)
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await chmod(directory, 0o700)
+      const temp = `${stateFile}.${randomBytes(8).toString("hex")}.tmp`
+      try {
+        await writeFile(temp, snapshot, { mode: 0o600 })
+        await chmod(temp, 0o600)
+        await rename(temp, stateFile)
+        await chmod(stateFile, 0o600)
+      } catch (error) {
+        await import("node:fs/promises").then(({ unlink }) => unlink(temp).catch(() => {}))
+        throw error
+      }
+    })
+    persistQueue = run.catch(() => {})
+    return run
   }
 
   async function load() {
@@ -246,7 +261,10 @@ export function createNotificationService(options: ServiceOptions = {}) {
         }
         await chmod(stateFile, 0o600)
       } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          loadPromise = null
+          throw error
+        }
         const keys = webPush.generateVAPIDKeys()
         state = { version: 1, vapid: keys, devices: {}, seen: {} }
         await persist()
@@ -340,7 +358,10 @@ export function createNotificationService(options: ServiceOptions = {}) {
   async function deliver(kind: NotificationKind, sessionID: string) {
     if (!state) return
     const time = now()
+    let mutated = false
+    const tasks: Array<Promise<void>> = []
     for (const [deviceID, device] of Object.entries(state.devices)) {
+      if (!Object.hasOwn(device.sessions, sessionID)) continue
       const watchedSession = device.sessions[sessionID]
       if (!watchedSession || watchedSession.updatedAt <= time - SESSION_TTL) continue
       if (kind === "completion" && !device.preferences.completion) continue
@@ -350,28 +371,34 @@ export function createNotificationService(options: ServiceOptions = {}) {
       if (device.preferences.inApp && (visibleUntil.get(deviceID) ?? 0) > time) continue
       const payload = payloadFor(kind, sessionID, device)
       const subscription = device.subscription
-      try {
-        await sendPush(subscription, payload)
-      } catch (error) {
-        const status = (error as { statusCode?: number }).statusCode
-        if (status === 429 || (typeof status === "number" && status >= 500 && status <= 599)) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+      tasks.push(
+        (async () => {
           try {
             await sendPush(subscription, payload)
-          } catch (retryError) {
-            if ((retryError as { statusCode?: number }).statusCode === 404 || (retryError as { statusCode?: number }).statusCode === 410) {
+          } catch (error) {
+            const status = (error as { statusCode?: number }).statusCode
+            if (status === 429 || (typeof status === "number" && status >= 500 && status <= 599)) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 1000))
+              try {
+                await sendPush(subscription, payload)
+              } catch (retryError) {
+                if ((retryError as { statusCode?: number }).statusCode === 404 || (retryError as { statusCode?: number }).statusCode === 410) {
+                  device.subscription = null
+                  device.updatedAt = time
+                  mutated = true
+                }
+              }
+            } else if (status === 404 || status === 410) {
               device.subscription = null
               device.updatedAt = time
-              await persist()
+              mutated = true
             }
           }
-        } else if (status === 404 || status === 410) {
-          device.subscription = null
-          device.updatedAt = time
-          await persist()
-        }
-      }
+        })()
+      )
     }
+    if (tasks.length > 0) await Promise.allSettled(tasks)
+    if (mutated) await persist()
   }
 
   async function snapshotPending() {
@@ -380,11 +407,11 @@ export function createNotificationService(options: ServiceOptions = {}) {
     try {
       const headers = { authorization, accept: "application/json" }
       const [permissions, forms] = await Promise.all([
-        fetch(`${opencodeBaseUrl}/api/permission/request`, { headers, redirect: "manual", signal: AbortSignal.timeout(10_000) })
-          .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : null))
+        fetch(`${opencodeBaseUrl}/api/permission/request`, { headers, redirect: "manual", proxy: false, signal: AbortSignal.timeout(10_000) } as RequestInit)
+          .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : (void r.body?.cancel(), null)))
           .catch(() => null),
-        fetch(`${opencodeBaseUrl}/api/form`, { headers, redirect: "manual", signal: AbortSignal.timeout(10_000) })
-          .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : null))
+        fetch(`${opencodeBaseUrl}/api/form`, { headers, redirect: "manual", proxy: false, signal: AbortSignal.timeout(10_000) } as RequestInit)
+          .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : (void r.body?.cancel(), null)))
           .catch(() => null),
       ])
       const permissionRows = Array.isArray(permissions?.data) ? permissions.data : []
@@ -392,19 +419,25 @@ export function createNotificationService(options: ServiceOptions = {}) {
       const pending = [
         ...permissionRows.map((item) => ({
           sessionID: String((item as Record<string, unknown>).sessionID ?? ""),
-          key: `permission:${String((item as Record<string, unknown>).id ?? "")}`,
+          id: String((item as Record<string, unknown>).id ?? ""),
+          kind: "permission" as const,
         })),
         ...formRows.map((item) => ({
           sessionID: String((item as Record<string, unknown>).sessionID ?? ""),
-          key: `form:${String((item as Record<string, unknown>).id ?? "")}`,
+          id: String((item as Record<string, unknown>).id ?? ""),
+          kind: "form" as const,
         })),
       ]
+      let changed = false
       for (const item of pending) {
-        if (!item.sessionID || item.key.length > 200) continue
-        if (!remember(item.key)) continue
+        if (!item.sessionID || !item.id) continue
+        const key = `${item.kind}:${item.id}`
+        if (key.length > 200) continue
+        if (!remember(key)) continue
+        changed = true
         await deliver("needs-attention", item.sessionID)
       }
-      if (pending.length > 0) await persist()
+      if (changed) await persist()
     } finally {
       snapshotRunning = false
     }
@@ -412,6 +445,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
 
   function parseFrame(frame: string) {
     const data = frame
+      .replaceAll("\r\n", "\n")
       .split("\n")
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trim())
@@ -425,30 +459,41 @@ export function createNotificationService(options: ServiceOptions = {}) {
     }
   }
 
-  async function watcherLoop() {
-    if (!authorization || stopped) return
+  async function watcherLoop(epoch: number) {
+    if (!authorization || stopped || epoch !== watcherEpoch) return
     let attempt = 0
-    while (!stopped) {
+    while (!stopped && epoch === watcherEpoch) {
       const controller = new AbortController()
       watcher = controller
+      let reader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | null = null
       try {
         const response = await fetch(`${opencodeBaseUrl}/api/event`, {
           headers: { authorization, accept: "text/event-stream" },
           redirect: "manual",
+          proxy: false,
           signal: controller.signal,
           cache: "no-store",
-        })
-        if (!response.ok || !response.body) throw new Error("SSE unavailable")
+        } as RequestInit)
+        if (!response.ok || !response.body) {
+          await response.body?.cancel().catch(() => {})
+          throw new Error("SSE unavailable")
+        }
+        if (epoch !== watcherEpoch) break
         attempt = 0
         watcherStatus = "connected"
         await snapshotPending()
-        const reader = response.body.getReader()
+        const streamReader = response.body.getReader()
+        reader = streamReader
         const decoder = new TextDecoder()
         let buffer = ""
-        while (!stopped) {
-          const { done, value } = await reader.read()
+        while (!stopped && epoch === watcherEpoch) {
+          const { done, value } = await streamReader.read()
           if (done) break
-          buffer += decoder.decode(value, { stream: true })
+          buffer += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n")
+          if (buffer.length > 2 * 1024 * 1024) {
+            buffer = ""
+            break
+          }
           let split = buffer.indexOf("\n\n")
           while (split >= 0) {
             parseFrame(buffer.slice(0, split))
@@ -456,13 +501,21 @@ export function createNotificationService(options: ServiceOptions = {}) {
             split = buffer.indexOf("\n\n")
           }
         }
+        if (!stopped && epoch === watcherEpoch && !controller.signal.aborted) watcherStatus = "reconnecting"
       } catch {
+        if (epoch !== watcherEpoch) break
         if (!controller.signal.aborted) watcherStatus = "reconnecting"
         if (controller.signal.aborted) break
       } finally {
+        try {
+          await reader?.cancel()
+        } catch {
+          // Ignore cancel errors on closed stream.
+        }
+        reader?.releaseLock()
         if (watcher === controller) watcher = null
       }
-      if (stopped) break
+      if (stopped || epoch !== watcherEpoch) break
       const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5))
       attempt += 1
       await new Promise<void>((resolve) => {
@@ -473,10 +526,31 @@ export function createNotificationService(options: ServiceOptions = {}) {
   }
 
   async function start() {
+    started = true
     await load()
     if (startWatcher && authorization) {
+      watcherEpoch += 1
       watcherStatus = "connecting"
-      void watcherLoop()
+      void watcherLoop(watcherEpoch)
+    } else {
+      watcherStatus = "disabled"
+    }
+  }
+
+  function reconfigure(next: { opencodeBaseUrl: string; authorization?: string }) {
+    opencodeBaseUrl = next.opencodeBaseUrl
+    authorization = next.authorization
+    watcherEpoch += 1
+    watcher?.abort()
+    watcher = null
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    if (stopped || !started) return
+    if (startWatcher && authorization) {
+      watcherStatus = "connecting"
+      void watcherLoop(watcherEpoch)
     } else {
       watcherStatus = "disabled"
     }
@@ -484,6 +558,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
 
   function stop() {
     stopped = true
+    watcherEpoch += 1
     watcherStatus = "stopped"
     watcher?.abort()
     if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -624,6 +699,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
 
   return {
     start,
+    reconfigure,
     stop,
     handleRequest,
     handleNativeEvent,

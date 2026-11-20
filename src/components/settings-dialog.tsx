@@ -8,7 +8,7 @@ import type { OpenCodeController } from "@/lib/use-opencode"
 export {
   SettingsButton,
   SettingsTriggerButton,
-} from "@/components/settings-workspace"
+} from "@/components/settings-trigger"
 
 /**
  * Compatibility shim for the retired Settings dialog. The Command Center

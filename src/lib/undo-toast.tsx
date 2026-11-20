@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -65,8 +66,10 @@ export function UndoToastProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => clearTimer, [clearTimer])
 
+  const value = useMemo(() => ({ showUndo }), [showUndo])
+
   return (
-    <UndoToastContext.Provider value={{ showUndo }}>
+    <UndoToastContext.Provider value={value}>
       {children}
       {toast ? (
         <div

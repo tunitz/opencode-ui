@@ -1,5 +1,6 @@
 import { OpenCode } from "@opencode/client"
 
+import { authAwareFetch } from "@/lib/auth"
 import {
   structuredErrorMessage,
   type StructuredErrorLike,
@@ -53,8 +54,11 @@ import type {
   WorktreeDirectory,
 } from "@opencode/client"
 
-// Same-origin only: the Vite dev/preview proxy injects the Basic credential.
-export const openCode = OpenCode.make({ baseUrl: window.location.origin })
+// Same-origin only: the UI server injects the Basic credential.
+export const openCode = OpenCode.make({
+  baseUrl: window.location.origin,
+  fetch: authAwareFetch as typeof globalThis.fetch,
+})
 
 export type {
   AgentInfo,

@@ -109,6 +109,10 @@ export async function listResources(
 export function noteIDFromURI(uri: string): string | undefined {
   const prefix = "notes://note/"
   if (!uri.startsWith(prefix)) return undefined
-  const id = decodeURIComponent(uri.slice(prefix.length))
-  return id || undefined
+  try {
+    const id = decodeURIComponent(uri.slice(prefix.length))
+    return id || undefined
+  } catch {
+    return undefined
+  }
 }

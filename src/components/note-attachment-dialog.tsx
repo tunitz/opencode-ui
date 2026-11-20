@@ -28,18 +28,36 @@ export type NoteAttachmentReference = {
 
 const ACTIVE_MIME_TYPES = new Set([
   "image/svg+xml",
+  "image/svg",
   "text/html",
   "application/xhtml+xml",
   "application/javascript",
   "application/x-javascript",
   "text/javascript",
+  "text/x-javascript",
   "application/ecmascript",
+  "application/x-ecmascript",
   "text/ecmascript",
+  "text/x-ecmascript",
+  "application/xslt+xml",
 ])
+
+const SAFE_MIME_RE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/
+
+function normalizedMime(mime: string): string {
+  return mime.split(";", 1)[0]?.trim().toLowerCase() ?? ""
+}
 
 /** SVG, HTML, and script payloads are refused before they reach a preview surface. */
 export function isRejectedAttachmentMime(mime: string): boolean {
-  return ACTIVE_MIME_TYPES.has(mime.toLowerCase())
+  const base = normalizedMime(mime)
+  return (
+    !base ||
+    ACTIVE_MIME_TYPES.has(base) ||
+    base.endsWith("/javascript") ||
+    base.endsWith("/x-javascript")
+  )
 }
 
 export function attachmentDataURL(
@@ -47,12 +65,15 @@ export function attachmentDataURL(
   data: string
 ): string | null {
   if (!mime || !data || isRejectedAttachmentMime(mime)) return null
-  return `data:${mime};base64,${data}`
+  const base = normalizedMime(mime)
+  if (!SAFE_MIME_RE.test(base)) return null
+  if (data.length % 4 !== 0 || !BASE64_RE.test(data)) return null
+  return `data:${base};base64,${data}`
 }
 
 function isTextPreview(mime: string | undefined): boolean {
   if (!mime) return false
-  const normalized = mime.toLowerCase()
+  const normalized = normalizedMime(mime)
   return (
     normalized.startsWith("text/") ||
     normalized === "application/json" ||

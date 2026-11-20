@@ -205,12 +205,15 @@ async function mergeCss(outputs: BuildOutput[]): Promise<BuildOutput> {
   )
     .join("\n")
     .replaceAll(assetOrigin, "")
-  await writeFile(entryCss.path, optimize(merged, { minify: true }).code)
+  const minified = optimize(merged, { minify: true }).code
+  const hash = createHash("sha256").update(minified).digest("base64url").slice(0, 8)
+  const finalCssPath = join(dirname(entryCss.path), `${entryName}${hash}.css`)
+  await writeFile(finalCssPath, minified)
 
   for (const output of ordered) {
-    if (output.path !== entryCss.path) await rm(output.path, { force: true })
+    if (output.path !== finalCssPath) await rm(output.path, { force: true })
   }
-  return entryCss
+  return { ...entryCss, path: finalCssPath, size: minified.length }
 }
 
 async function writeHtml(

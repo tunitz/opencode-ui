@@ -191,6 +191,7 @@ export function createAuthService(options: AuthServiceOptions = {}) {
         if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
           state = freshState()
         } else {
+          loadPromise = null
           throw error
         }
       }
@@ -213,10 +214,15 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await chmod(directory, 0o700)
     const temp = `${stateFile}.${randomBytes(8).toString("hex")}.tmp`
-    await writeFile(temp, JSON.stringify(target), { mode: 0o600 })
-    await chmod(temp, 0o600)
-    await rename(temp, stateFile)
-    await chmod(stateFile, 0o600)
+    try {
+      await writeFile(temp, JSON.stringify(target), { mode: 0o600 })
+      await chmod(temp, 0o600)
+      await rename(temp, stateFile)
+      await chmod(stateFile, 0o600)
+    } catch (error) {
+      await import("node:fs/promises").then(({ unlink }) => unlink(temp).catch(() => {}))
+      throw error
+    }
   }
 
   function mutate<T>(change: (target: AuthState) => Promise<T> | T): Promise<T> {
@@ -318,17 +324,49 @@ export function createAuthService(options: AuthServiceOptions = {}) {
     })
   }
 
+  function recordFailure(remote: string): void {
+    const attempts = recentFailures(remote)
+    attempts.push(now())
+    failures.set(remote, attempts)
+    // Bound map growth when failed logins arrive from many distinct remotes.
+    if (failures.size > 1000) {
+      const cutoff = now() - AUTH_ATTEMPT_WINDOW_MS
+      for (const [key, times] of failures) {
+        if (times.every((time) => time <= cutoff)) failures.delete(key)
+        if (failures.size <= 1000) break
+      }
+    }
+  }
+
   async function login(password: unknown, remote: string): Promise<string> {
-    if (typeof password !== "string") throw new AuthError(400, "invalid")
+    if (typeof password !== "string" || password.length > AUTH_PASSWORD_MAX_LENGTH) {
+      throw new AuthError(400, "invalid")
+    }
+    if (recentFailures(remote).length >= AUTH_MAX_FAILED_ATTEMPTS) {
+      throw new AuthError(429, "too_many_attempts")
+    }
+    const snapshot = await load()
+    if (snapshot.passwordHash === null) throw new AuthError(409, "not_configured")
+    // Verify argon2id + failure delay outside the global mutation queue so
+    // concurrent failed logins cannot stall other authenticated operations.
+    const matched = await passwordHasher().verify(password, snapshot.passwordHash)
+    if (!matched) {
+      recordFailure(remote)
+      if (failureDelayMs > 0) await delay(failureDelayMs)
+      throw new AuthError(401, "invalid_credentials")
+    }
     return mutate(async (target) => {
-      if (recentFailures(remote).length >= AUTH_MAX_FAILED_ATTEMPTS) throw new AuthError(429, "too_many_attempts")
+      if (recentFailures(remote).length >= AUTH_MAX_FAILED_ATTEMPTS) {
+        throw new AuthError(429, "too_many_attempts")
+      }
       if (target.passwordHash === null) throw new AuthError(409, "not_configured")
-      if (!(await passwordHasher().verify(password, target.passwordHash))) {
-        const attempts = recentFailures(remote)
-        attempts.push(now())
-        failures.set(remote, attempts)
-        if (failureDelayMs > 0) await delay(failureDelayMs)
-        throw new AuthError(401, "invalid_credentials")
+      // Re-verify if password changed while verification was in flight.
+      if (target.passwordHash !== snapshot.passwordHash) {
+        if (!(await passwordHasher().verify(password, target.passwordHash))) {
+          recordFailure(remote)
+          if (failureDelayMs > 0) await delay(failureDelayMs)
+          throw new AuthError(401, "invalid_credentials")
+        }
       }
       failures.delete(remote)
       return addSession(target)

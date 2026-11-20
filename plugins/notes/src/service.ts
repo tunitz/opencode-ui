@@ -146,12 +146,18 @@ const BASE64_SHAPE =
 /** Inline-active types are refused; attachments are downloadable data, not a document surface. */
 const ACTIVE_MIME_TYPES = new Set([
   "image/svg+xml",
+  "image/svg",
   "text/html",
   "application/xhtml+xml",
   "application/javascript",
+  "application/x-javascript",
   "text/javascript",
+  "text/x-javascript",
   "application/ecmascript",
+  "application/x-ecmascript",
   "text/ecmascript",
+  "text/x-ecmascript",
+  "application/xslt+xml",
 ])
 
 function hasControlCharacters(value: string): boolean {
@@ -220,18 +226,12 @@ function attachmentData(
 }
 
 function base64ToBytes(data: string): Uint8Array {
-  const binary = atob(data)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index++) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return bytes
+  const buf = Buffer.from(data, "base64")
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ""
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64")
 }
 
 function checkRevision(
@@ -948,6 +948,11 @@ export class NotesService {
           revision,
         })
       }
+      const restoredSpaceID =
+        snapshot.note.spaceID !== null &&
+        (await this.store.getSpace(snapshot.note.spaceID))
+          ? snapshot.note.spaceID
+          : null
       const now = this.store.now()
       const statusChanged = snapshot.note.status !== existing.status
       const next: Note = {
@@ -955,7 +960,7 @@ export class NotesService {
         title: snapshot.note.title,
         body: snapshot.note.body,
         status: snapshot.note.status,
-        spaceID: snapshot.note.spaceID,
+        spaceID: restoredSpaceID,
         pinned: snapshot.note.pinned,
         revision: existing.revision + 1,
         updatedAt: now,

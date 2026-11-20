@@ -5,10 +5,8 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react"
-import { SettingsIcon } from "lucide-react"
 
 import {
-  useOptionalSettingsWorkspace,
   useSettingsWorkspace,
   type SettingsSectionID,
 } from "@/components/settings-context"
@@ -16,31 +14,9 @@ import {
   SETTINGS_SECTIONS,
   settingsSection,
 } from "@/components/settings-sections"
-import { Button } from "@/components/ui/button"
 import { recordPerfRender } from "@/lib/perf-probe"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
-
-export function SettingsTriggerButton({ onClick }: { onClick: () => void }) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-lg"
-      aria-label="Settings"
-      className="size-11 shrink-0 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent"
-      onClick={onClick}
-    >
-      <SettingsIcon aria-hidden="true" className="size-[18px] text-muted-foreground" />
-    </Button>
-  )
-}
-
-/** Sidebar entry point. The workspace itself is rendered by the app shell. */
-export function SettingsButton() {
-  const settings = useOptionalSettingsWorkspace()
-  return <SettingsTriggerButton onClick={() => settings?.openSettings()} />
-}
 
 const tabID = (id: SettingsSectionID) => `settings-tab-${id}`
 const panelID = (id: SettingsSectionID) => `settings-panel-${id}`
@@ -181,7 +157,6 @@ export function SettingsWorkspace({ nav }: { nav: OpenCodeController }) {
     <section
       ref={rootRef}
       tabIndex={-1}
-      data-workspace-focus="settings"
       aria-label="Settings"
       className="@container flex min-h-0 flex-1 flex-col focus:outline-none"
     >

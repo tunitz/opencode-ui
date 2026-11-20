@@ -467,6 +467,7 @@ export function ArtifactDialog({
             className="openui-rich-card min-w-0"
           >
             <CardHeader
+              className="pe-12"
               icon={
                 artifact.kind === "image" ? (
                   <FileIcon aria-hidden="true" className="size-4" />

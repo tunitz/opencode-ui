@@ -148,17 +148,25 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
   // Command opens the inspector's Command tab. It is not a modal search dialog,
   // and it respects custom bindings plus IME/composition. Another workspace is
   // left through the same guarded transition as the header Back control.
+  const hasActiveSession = nav.activeSessionID !== null
+  const openInspector = nav.openInspector
+  const activeWorkspace = workspace.active
   useEffect(() => {
     const commandBinding = bindings.find((binding) => binding.command === "command.open")
-    if (!commandBinding || !nav.activeSession) return
+    if (!commandBinding || !hasActiveSession) return
     const binding = commandBinding
-    const openInspector = nav.openInspector
-    const requestWorkspace = workspace.requestWorkspace
-    const activeWorkspace = workspace.active
+    const platform =
+      typeof navigator !== "undefined" && navigator.platform.toLowerCase().includes("mac")
+        ? "mac"
+        : "other"
+    const hasModifier = binding.mod || binding.ctrl || binding.alt
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]')) return
-      if (!matchesKeybinding(event, binding, navigator.platform.toLowerCase().includes("mac") ? "mac" : "other")) {
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]')) return
+      if (!hasModifier && event.target instanceof HTMLElement) {
+        if (event.target.isContentEditable || event.target.closest("input, textarea, select, [contenteditable='true'], .xterm")) return
+      }
+      if (!matchesKeybinding(event, binding, platform)) {
         return
       }
       event.preventDefault()
@@ -170,7 +178,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
     }
     document.addEventListener("keydown", onKeyDown)
     return () => document.removeEventListener("keydown", onKeyDown)
-  }, [bindings, nav.activeSession, nav.openInspector, workspace])
+  }, [bindings, hasActiveSession, openInspector, activeWorkspace, requestWorkspace])
 
   return (
     <NotificationsProvider nav={nav}>
@@ -211,9 +219,9 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon-lg"
                     aria-label="Dismiss startup notice"
-                    className="shrink-0"
+                    className="size-11 shrink-0"
                     onClick={nav.dismissStartupNotice}
                   >
                     <XIcon aria-hidden="true" className="size-4" />
@@ -224,6 +232,9 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
               <MemoConversation
                 sessionKey={nav.activeSessionID}
                 hasSession={nav.activeSessionID !== null}
+                connection={nav.connection}
+                connectionError={nav.connectionError}
+                onRetryConnection={nav.retryConnection}
                 status={nav.historyStatus}
                 error={nav.historyError}
                 messages={nav.messages}
@@ -283,7 +294,13 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
                 tabIndex={-1}
                 className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 focus:outline-none md:px-6 lg:px-8"
               >
-                <Suspense fallback={null}>
+                <Suspense
+                  fallback={
+                    <p role="status" className="py-6 text-sm text-muted-foreground">
+                      Loading settings…
+                    </p>
+                  }
+                >
                   <SettingsWorkspace nav={nav} />
                 </Suspense>
               </div>
@@ -292,6 +309,7 @@ function AppShell({ nav }: { nav: OpenCodeController }) {
         </div>
         <MemoSessionInspectorPanel
           nav={nav}
+          hidden={!chatActive}
           onOpenSettings={openSettings}
           onOpenWorktrees={openWorktrees}
         />

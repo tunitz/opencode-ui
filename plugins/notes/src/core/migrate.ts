@@ -109,6 +109,7 @@ export async function migrateEngineData(
   let spaces = 0
   let attachments = 0
 
+  let dbReadSucceeded = true
   if (existsSync(engineDbPath)) {
     let database: Database | undefined
     try {
@@ -117,38 +118,43 @@ export async function migrateEngineData(
         .query(`SELECT key, value FROM kv WHERE key LIKE ?`)
         .all(LEGACY_SCAN) as KvRow[]
       for (const row of rows) {
-        const match = LEGACY_KEY.exec(row.key)
-        if (!match) continue
-        const kind = match[1]
-        const id = match[2]
-        if (!id) continue
-        const value = decodeValue(row.value)
-        if (value === undefined) continue
-        if (kind === "space") {
-          const space: Space | undefined = parseSpace(value)
-          if (!space || space.id !== id) continue
-          if (await options.store.getSpace(id)) continue
-          await options.store.putSpace(space)
-          spaces++
-          continue
+        try {
+          const match = LEGACY_KEY.exec(row.key)
+          if (!match) continue
+          const kind = match[1]
+          const id = match[2]
+          if (!id) continue
+          const value = decodeValue(row.value)
+          if (value === undefined) continue
+          if (kind === "space") {
+            const space: Space | undefined = parseSpace(value)
+            if (!space || space.id !== id) continue
+            if (await options.store.getSpace(id)) continue
+            await options.store.putSpace(space)
+            spaces++
+            continue
+          }
+          if (kind === "note") {
+            const note: Note | undefined = parseNote(value)
+            if (!note || note.id !== id) continue
+            if (await options.store.getNote(id)) continue
+            await options.store.putNote(note)
+            notes++
+            continue
+          }
+          if (!isRecord(value) || typeof value.data !== "string") continue
+          const bytes = decodeBase64(value.data)
+          if (!bytes) continue
+          if (await options.store.getAttachment(id)) continue
+          await options.store.putAttachment(id, bytes)
+          attachments++
+        } catch {
+          // Skip a single malformed legacy row without aborting valid rows.
         }
-        if (kind === "note") {
-          const note: Note | undefined = parseNote(value)
-          if (!note || note.id !== id) continue
-          if (await options.store.getNote(id)) continue
-          await options.store.putNote(note)
-          notes++
-          continue
-        }
-        if (!isRecord(value) || typeof value.data !== "string") continue
-        const bytes = decodeBase64(value.data)
-        if (!bytes) continue
-        if (await options.store.getAttachment(id)) continue
-        await options.store.putAttachment(id, bytes)
-        attachments++
       }
     } catch {
-      // A corrupt or locked engine database must never block local notes.
+      // A transiently locked or unreadable database must not permanently mark migration done.
+      dbReadSucceeded = false
     } finally {
       try {
         database?.close()
@@ -158,6 +164,7 @@ export async function migrateEngineData(
     }
   }
 
+  if (!dbReadSucceeded) return undefined
   const marker: MigrationMarker = { at: now(), notes, spaces, attachments }
   await writeMarker(dataDir, marker)
   return marker
