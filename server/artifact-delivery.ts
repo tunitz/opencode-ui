@@ -453,7 +453,7 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
 
   const fetchSessionMessages = options.fetchSessionMessages ?? (async (sessionID: string) => {
     const { opencodeBaseUrl, authorization } = resolveTarget()
-    if (!opencodeBaseUrl || !authorization) {
+    if (!opencodeBaseUrl) {
       throw fileError(503, "upstream", "Artifact source is unavailable.")
     }
     const controller = new AbortController()
@@ -462,7 +462,7 @@ export function createArtifactDelivery(options: ArtifactDeliveryOptions = {}) {
       const response = await (options.fetch ?? fetch)(
         `${opencodeBaseUrl.replace(/\/$/, "")}/api/session/${encodeURIComponent(sessionID)}/message?limit=200&order=desc`,
         {
-          headers: { authorization, accept: "application/json" },
+          headers: { ...(authorization ? { authorization } : {}), accept: "application/json" },
           redirect: "manual",
           proxy: false,
           signal: controller.signal,

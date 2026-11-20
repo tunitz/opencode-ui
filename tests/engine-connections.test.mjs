@@ -1,22 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { createBunApplication } from "../server/bun-application.ts"
-import {
-  CONNECTIONS_ROUTE,
-  DEFAULT_ENGINE_PROFILE_ID,
-  createEngineConnectionsService,
-} from "../server/engine-connections.ts"
+import { CONNECTIONS_ROUTE, createEngineConnectionsService } from "../server/engine-connections.ts"
 
 const cleanup = []
-
 afterEach(async () => {
-  while (cleanup.length > 0) {
-    const fn = cleanup.pop()
-    if (fn) await fn()
-  }
+  while (cleanup.length > 0) await cleanup.pop()()
 })
 
 async function makeTempDir() {
@@ -25,8 +17,8 @@ async function makeTempDir() {
   return dir
 }
 
-function makeMockEngine(version, expectedPassword) {
-  const expectedAuth = `Basic ${Buffer.from(`opencode:${expectedPassword}`).toString("base64")}`
+function makeMockEngine(version, password) {
+  const expectedAuth = password ? `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` : null
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -34,26 +26,21 @@ function makeMockEngine(version, expectedPassword) {
       if (request.headers.get("authorization") !== expectedAuth) {
         return new Response("Unauthorized", { status: 401 })
       }
-      const path = new URL(request.url).pathname
-      if (path === "/api/info") {
-        return Response.json({ version, pid: process.pid })
-      }
-      return Response.json({ ok: true, version })
+      return Response.json({ version })
     },
   })
   cleanup.push(() => server.stop(true))
-  return {
-    url: `http://127.0.0.1:${server.port}`,
-    authorization: expectedAuth,
-  }
+  return `http://127.0.0.1:${server.port}`
 }
 
+const origin = "http://127.0.0.1:5174"
+const endpoint = (id) => `${CONNECTIONS_ROUTE}/${id}`
 function jsonRequest(path, method = "GET", body) {
-  return new Request(`http://127.0.0.1:5174${path}`, {
+  return new Request(`${origin}${path}`, {
     method,
     headers: {
       host: "127.0.0.1:5174",
-      origin: "http://127.0.0.1:5174",
+      origin,
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -61,232 +48,150 @@ function jsonRequest(path, method = "GET", body) {
 }
 
 describe("engine connections service", () => {
-  test("lists startup default without leaking credentials and persists custom profiles with 0600 mode", async () => {
-    const dir = await makeTempDir()
-    const stateFile = join(dir, "connections.json")
-    const engineA = makeMockEngine("2.1.4-a", "secret-a")
-    const engineB = makeMockEngine("2.1.4-b", "secret-b")
+  test("starts empty and persists the first saved profile privately", async () => {
+    const stateFile = join(await makeTempDir(), "connections.json")
+    const engineUrl = makeMockEngine("2.1.4-protected", "secret")
+    const service = createEngineConnectionsService({ stateFile, suggestedEngineUrl: engineUrl })
+    const request = (...args) => service.handleRequest(jsonRequest(...args))
 
-    const service = createEngineConnectionsService({
-      defaultEngineUrl: engineA.url,
-      defaultAuthorization: engineA.authorization,
-      stateFile,
+    expect(await (await request(CONNECTIONS_ROUTE)).json()).toEqual({
+      activeId: null, active: null, profiles: [], suggestedEngineUrl: engineUrl,
     })
-    await service.init()
+    expect(service.getActiveTarget()).toBeNull()
+    const created = await request(CONNECTIONS_ROUTE, "POST", { name: "Local", engineUrl, password: "secret" })
+    expect(created.status).toBe(201)
+    const state = await created.json()
+    expect(state.activeId).toBe(state.profile.id)
+    expect(state.active.hasPassword).toBe(true)
+    expect(JSON.stringify(state)).not.toContain("secret")
+    expect((await stat(stateFile)).mode & 0o777).toBe(0o600)
 
-    const listRes = await service.handleRequest(jsonRequest(CONNECTIONS_ROUTE))
-    expect(listRes.status).toBe(200)
-    const listBody = await listRes.json()
-    expect(listBody.activeId).toBe(DEFAULT_ENGINE_PROFILE_ID)
-    expect(listBody.profiles).toHaveLength(1)
-    expect(JSON.stringify(listBody)).not.toContain("secret-a")
-
-    // Create a new profile with password auth and activate immediately
-    const createRes = await service.handleRequest(
-      jsonRequest(CONNECTIONS_ROUTE, "POST", {
-        name: "Remote Devbox",
-        engineUrl: engineB.url,
-        authMode: "password",
-        password: "secret-b",
-        activate: true,
-      })
-    )
-    expect(createRes.status).toBe(201)
-    const created = await createRes.json()
-    expect(created.activeId).toBe(created.profile.id)
-    expect(created.profile.hasPassword).toBe(true)
-    expect(JSON.stringify(created)).not.toContain("secret-b")
-    expect(service.getActiveTarget().engineUrl).toBe(engineB.url)
-
-    // File permissions are private 0600
-    const info = await stat(stateFile)
-    expect(info.mode & 0o777).toBe(0o600)
-
-    // Restarting a fresh service instance restores the saved active profile
-    const reloaded = createEngineConnectionsService({
-      defaultEngineUrl: engineA.url,
-      defaultAuthorization: engineA.authorization,
-      stateFile,
-    })
+    const reloaded = createEngineConnectionsService({ stateFile })
     await reloaded.init()
-    expect(reloaded.getActiveTarget().engineUrl).toBe(engineB.url)
-    expect(reloaded.getActiveTarget().id).toBe(created.profile.id)
+    expect(reloaded.getActiveTarget().id).toBe(state.activeId)
+    expect(reloaded.getActiveTarget().engineUrl).toBe(engineUrl)
+    const tested = await reloaded.handleRequest(jsonRequest(endpoint("test"), "POST", { profileId: state.activeId }))
+    expect((await tested.json()).ok).toBe(true)
   })
 
-  test("refuses credential redirection when URL changes without a new password", async () => {
-    const dir = await makeTempDir()
-    const stateFile = join(dir, "connections.json")
+  test("loads legacy profiles without reading their service registration", async () => {
+    const stateFile = join(await makeTempDir(), "connections.json")
+    await writeFile(stateFile, JSON.stringify({
+      version: 1,
+      activeId: "default",
+      profiles: [{ id: "legacy", name: "Legacy", engineUrl: "http://localhost:4096", authMode: "service-file", serviceFile: "/missing/registration.json" }],
+    }))
+    const service = createEngineConnectionsService({ stateFile })
+    const state = await (await service.handleRequest(jsonRequest(CONNECTIONS_ROUTE))).json()
+    expect(state.activeId).toBe("legacy")
+    expect(state.active.hasPassword).toBe(false)
+    expect(state.active).not.toHaveProperty("serviceFile")
+    expect(state.profiles).toHaveLength(1)
+  })
+
+  test("requires a password and never reuses a stored password at a different origin", async () => {
+    const stateFile = join(await makeTempDir(), "connections.json")
+    const engineUrl = makeMockEngine("2.1.4-protected", "secret")
+    const otherEngine = makeMockEngine("2.1.4-other", "other-secret")
+    const service = createEngineConnectionsService({ stateFile })
+    const request = (...args) => service.handleRequest(jsonRequest(...args))
+    const { activeId } = await (await request(CONNECTIONS_ROUTE, "POST", { name: "Local", engineUrl, password: "secret" })).json()
+
+    for (const missing of [
+      await request(endpoint("test"), "POST", { engineUrl }),
+      await request(CONNECTIONS_ROUTE, "POST", { name: "Missing", engineUrl, password: "" }),
+      await request(endpoint(activeId), "PUT", { password: "" }),
+    ]) {
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error.code).toBe("invalid_password")
+    }
+    const wrong = await request(endpoint("test"), "POST", { profileId: activeId, password: "wrong" })
+    expect(await wrong.json()).toMatchObject({ ok: false, reachable: true, authenticated: false, status: 401 })
+    for (const response of [
+      await request(endpoint(activeId), "PUT", { engineUrl: otherEngine }),
+      await request(endpoint("test"), "POST", { profileId: activeId, engineUrl: otherEngine }),
+    ]) {
+      expect(response.status).toBe(400)
+      expect((await response.json()).error.code).toBe("credential_required_for_url_change")
+    }
+    const renamed = await request(endpoint(activeId), "PUT", { name: "Renamed" })
+    expect((await renamed.json()).active).toMatchObject({ name: "Renamed", hasPassword: true })
+
+    const updated = await request(endpoint(activeId), "PUT", { engineUrl: otherEngine, password: "other-secret" })
+    expect(updated.status).toBe(200)
+    expect((await updated.json()).active).toMatchObject({ hasPassword: true, engineUrl: otherEngine })
+    const tested = await request(endpoint("test"), "POST", { profileId: activeId })
+    expect((await tested.json()).ok).toBe(true)
+  })
+
+  test("keeps the saved connection on failure and handles whitespace copied with a password", async () => {
+    const stateFile = join(await makeTempDir(), "connections.json")
+    const engineUrl = makeMockEngine("2.1.4-protected", "secret")
+    const service = createEngineConnectionsService({ stateFile })
+    const request = (...args) => service.handleRequest(jsonRequest(...args))
+
+    const rejected = await request(CONNECTIONS_ROUTE, "POST", { name: "Local", engineUrl, password: "wrong" })
+    expect(rejected.status).toBe(422)
+    expect((await rejected.json()).error.message).toContain("HTTP 401")
+    expect(service.getActiveTarget()).toBeNull()
+
+    const draft = { name: "Local", engineUrl, password: " secret " }
+    expect((await (await request(endpoint("test"), "POST", draft)).json()).ok).toBe(true)
+    const accepted = await request(CONNECTIONS_ROUTE, "POST", draft)
+    expect(accepted.status).toBe(201)
+    const { activeId } = await accepted.json()
+    const failedUpdate = await request(endpoint(activeId), "PUT", { password: "wrong" })
+    expect(failedUpdate.status).toBe(422)
+    expect((await (await request(endpoint("test"), "POST", { profileId: activeId })).json()).ok).toBe(true)
+
+    const intentionalSpaces = makeMockEngine("2.1.4-spaces", " secret ")
+    const exact = await request(CONNECTIONS_ROUTE, "POST", { ...draft, engineUrl: intentionalSpaces })
+    expect(exact.status).toBe(201)
+    expect((await (await request(endpoint("test"), "POST", { profileId: (await exact.json()).profile.id })).json()).ok).toBe(true)
+  })
+
+  test("tests and proxies authenticated engines, switches live, and returns to no connection after deletion", async () => {
+    const directory = await makeTempDir()
     const engineA = makeMockEngine("2.1.4-a", "secret-a")
     const engineB = makeMockEngine("2.1.4-b", "secret-b")
-
-    const service = createEngineConnectionsService({
-      defaultEngineUrl: engineA.url,
-      defaultAuthorization: engineA.authorization,
-      stateFile,
-    })
-    await service.init()
-
-    const created = await (
-      await service.handleRequest(
-        jsonRequest(CONNECTIONS_ROUTE, "POST", {
-          name: "Staging",
-          engineUrl: engineB.url,
-          authMode: "password",
-          password: "secret-b",
-        })
-      )
-    ).json()
-
-    // Attempt to point the existing profile at a new URL without supplying a password
-    const badUpdate = await service.handleRequest(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${created.profile.id}`, "PUT", {
-        engineUrl: "https://other.example.test:4096",
-      })
-    )
-    expect(badUpdate.status).toBe(400)
-    expect((await badUpdate.json()).error.code).toBe("credential_required_for_url_change")
-
-    // Attempt to test a different URL reusing profileId's stored password
-    const badTest = await service.handleRequest(
-      jsonRequest(`${CONNECTIONS_ROUTE}/test`, "POST", {
-        profileId: created.profile.id,
-        engineUrl: "https://other.example.test:4096",
-        authMode: "password",
-      })
-    )
-    expect(badTest.status).toBe(400)
-    expect((await badTest.json()).error.code).toBe("credential_required_for_url_change")
-
-    // Updating just the name without changing URL keeps the saved password
-    const okRename = await service.handleRequest(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${created.profile.id}`, "PUT", {
-        name: "Staging Renamed",
-      })
-    )
-    expect(okRename.status).toBe(200)
-    expect((await okRename.json()).profile.name).toBe("Staging Renamed")
-  })
-
-  test("probes engine reachability and authentication via /test and switches proxy live", async () => {
-    const dir = await makeTempDir()
-    const stateFile = join(dir, "connections.json")
-    const serviceFileB = join(dir, "engine-b-service.json")
-    await writeFile(serviceFileB, JSON.stringify({ password: "secret-file-b" }), "utf8")
-
-    const engineA = makeMockEngine("2.1.4-a", "secret-a")
-    const engineB = makeMockEngine("2.1.4-b", "secret-file-b")
-
-    const connections = createEngineConnectionsService({
-      defaultEngineUrl: engineA.url,
-      defaultAuthorization: engineA.authorization,
-      stateFile,
-    })
-    await connections.init()
-
-    let changeCount = 0
-    connections.onChange(() => {
-      changeCount += 1
-    })
-
-    // Test with wrong password -> reachable=true, authenticated=false
-    const wrongAuth = await (
-      await connections.handleRequest(
-        jsonRequest(`${CONNECTIONS_ROUTE}/test`, "POST", {
-          engineUrl: engineB.url,
-          authMode: "password",
-          password: "wrong-password",
-        })
-      )
-    ).json()
-    expect(wrongAuth.ok).toBe(false)
-    expect(wrongAuth.reachable).toBe(true)
-    expect(wrongAuth.authenticated).toBe(false)
-    expect(wrongAuth.status).toBe(401)
-
-    // Test with service-file auth -> ok=true, version reported
-    const goodTest = await (
-      await connections.handleRequest(
-        jsonRequest(`${CONNECTIONS_ROUTE}/test`, "POST", {
-          engineUrl: engineB.url,
-          authMode: "service-file",
-          serviceFile: serviceFileB,
-        })
-      )
-    ).json()
-    expect(goodTest.ok).toBe(true)
-    expect(goodTest.version).toBe("2.1.4-b")
-
-    // Mount in Bun application and verify live proxy switching
+    const connections = createEngineConnectionsService({ stateFile: join(directory, "connections.json") })
+    const changes = []
+    connections.onChange((target) => changes.push(target?.id ?? null))
     const noopService = { handleRequest: async () => new Response("ok") }
     const app = createBunApplication({
-      target: connections.getActiveTarget().engineUrl,
-      authorization: connections.getActiveTarget().authorization,
       getTarget: () => {
         const current = connections.getActiveTarget()
-        return { target: current.engineUrl, authorization: current.authorization }
+        return current ? { target: current.engineUrl, authorization: current.authorization } : null
       },
-      directory: dir,
-      security: {
-        allowedHosts: ["127.0.0.1"],
-        allowedOrigins: ["http://127.0.0.1:5174"],
-      },
+      directory,
+      security: { allowedHosts: ["127.0.0.1"], allowedOrigins: [origin] },
       agents: noopService,
       artifacts: noopService,
       notifications: noopService,
       connections,
     })
     cleanup.push(() => app.dispose())
-
     const fakeServer = { upgrade: () => false, timeout: () => {} }
-    const infoBefore = await (await app.fetch(jsonRequest("/api/info"), fakeServer)).json()
-    expect(infoBefore.version).toBe("2.1.4-a")
+    const request = (...args) => app.fetch(jsonRequest(...args), fakeServer)
 
-    // Create & activate engine B via gateway route
-    const created = await (
-      await app.fetch(
-        jsonRequest(CONNECTIONS_ROUTE, "POST", {
-          name: "Local Engine B",
-          engineUrl: engineB.url,
-          authMode: "service-file",
-          serviceFile: serviceFileB,
-        }),
-        fakeServer
-      )
-    ).json()
+    expect((await request("/api/info")).status).toBe(503)
+    const test = await request(endpoint("test"), "POST", { engineUrl: engineA, password: "secret-a" })
+    expect(await test.json()).toMatchObject({ ok: true, version: "2.1.4-a" })
+    const first = await request(CONNECTIONS_ROUTE, "POST", { name: "Local", engineUrl: engineA, password: "secret-a" })
+    expect(first.status).toBe(201)
+    const { activeId: firstId } = await first.json()
+    expect(await (await request("/api/info")).json()).toEqual({ version: "2.1.4-a" })
 
-    const activateRes = await app.fetch(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${created.profile.id}/activate`, "POST", {}),
-      fakeServer
-    )
-    expect(activateRes.status).toBe(200)
-    expect(changeCount).toBe(1)
+    const second = await request(CONNECTIONS_ROUTE, "POST", { name: "Other", engineUrl: engineB, password: "secret-b" })
+    const { profile: { id: secondId } } = await second.json()
+    expect((await request(`${endpoint(secondId)}/activate`, "POST", {})).status).toBe(200)
+    expect(await (await request("/api/info")).json()).toEqual({ version: "2.1.4-b" })
+    expect((await request(endpoint(secondId), "DELETE")).status).toBe(409)
 
-    // Proxy immediately serves engine B
-    const infoAfter = await (await app.fetch(jsonRequest("/api/info"), fakeServer)).json()
-    expect(infoAfter.version).toBe("2.1.4-b")
-
-    // Deleting active profile is refused
-    const deleteActive = await app.fetch(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${created.profile.id}`, "DELETE"),
-      fakeServer
-    )
-    expect(deleteActive.status).toBe(409)
-
-    // Switching back to default succeeds, then deleting B succeeds
-    const switchDefault = await app.fetch(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${DEFAULT_ENGINE_PROFILE_ID}/activate`, "POST", {}),
-      fakeServer
-    )
-    expect(switchDefault.status).toBe(200)
-    const infoBack = await (await app.fetch(jsonRequest("/api/info"), fakeServer)).json()
-    expect(infoBack.version).toBe("2.1.4-a")
-
-    const deleteB = await app.fetch(
-      jsonRequest(`${CONNECTIONS_ROUTE}/${created.profile.id}`, "DELETE"),
-      fakeServer
-    )
-    expect(deleteB.status).toBe(200)
-    const savedRaw = await readFile(stateFile, "utf8")
-    expect(JSON.parse(savedRaw).profiles).toHaveLength(0)
+    expect((await request(`${endpoint(firstId)}/activate`, "POST", {})).status).toBe(200)
+    expect((await request(endpoint(secondId), "DELETE")).status).toBe(200)
+    expect(await (await request(endpoint(firstId), "DELETE")).json()).toEqual({ activeId: null, active: null, profiles: [] })
+    expect((await request("/api/info")).status).toBe(503)
+    expect(changes).toEqual([firstId, secondId, firstId, null])
   })
 })

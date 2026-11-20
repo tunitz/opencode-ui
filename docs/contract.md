@@ -10,22 +10,19 @@ are intentional; do not weaken them when simplifying UI code.
 ## Target [runtime]
 
 - OpenCode **2.1.4**; the engine is a separate HTTP service. The UI server is the only
-  browser-facing origin and injects the server-held credential. Engine URL and port are
-  configuration-dependent: the CLI defaults to `http://127.0.0.1:4096`, while the direct/dev
-  server defaults to `http://127.0.0.1:8090`.
-- Registration JSON must contain a nonempty `password`; other fields (such as hostname and port) are
-  not required by this client. The CLI reads `$XDG_CONFIG_HOME/opencode/service.json` or
-  `~/.config/opencode/service.json`; the direct server uses `~/.config/opencode/service.json`. The
-  password is read server-side and never printed, persisted in browser storage, or exposed to client
-  code.
+  browser-facing origin and injects the saved engine password when configured. No engine URL
+  or profile is created at startup. The user sets the engine origin during connection setup.
+- The engine password is required and separate from the UI password. After entry the engine
+  password is kept server-side and never printed, persisted in browser storage, or returned in
+  responses. Engine registration files are not read.
 - The engine API is not a frontend review URL. Network isolation of the engine listener is outside
   this client and requires separate approval.
 
 ## Auth, CORS, and spec [runtime] [source] [spec]
 
-- Unauthenticated `/api/*` and `/openapi.json` return **401**. Basic auth with username
-  exactly `opencode` plus the registration password succeeds; empty/wrong username or
-  Bearer fails 401. It is **not** generic Bearer.
+- On a password-protected engine, unauthenticated `/api/*` and `/openapi.json` return **401**.
+  New connections use Basic auth with username `opencode` and the supplied engine password.
+  When an older profile has no password, edit it to supply the engine password.
 - **CORS is origin-allowlisted, not absent** [source `packages/server/src/cors.ts:11-25`]:
   no-Origin requests, `http://localhost:*`, `http://127.0.0.1:*`, `oc://renderer`, Tauri
   origins, `https://*.opencode.ai`, and configured `cors` are allowed.
@@ -86,9 +83,8 @@ pruned on each auth write.
   protect that origin with transport/network controls. `OPENCODE_UI_SESSION_COOKIE` overrides the
   cookie name; keep the default unless running another UI instance on the same host, because cookies
   are host-scoped and ignore port numbers.
-- Gating is active when a password is configured **or** the resolved bind host is not loopback
-  (`0.0.0.0` and LAN addresses count as non-loopback). When inactive, requests pass through.
-- When active, every path starting with `/api` requires a valid session cookie, including SSE and
+- The UI server requires an access password on every bind, including loopback.
+- Every path starting with `/api` requires a valid session cookie, including SSE and
   WebSocket upgrades, except `/api/ui/auth/status`, `/api/ui/auth/setup`, `/api/ui/auth/login`, and
   `/api/ui/auth/logout`. Static/SPA paths and `/openapi.json` are not gated.
 - Unauthorized API response: **401** JSON `{ "error": { "code": "auth_required" } }`, or
@@ -99,11 +95,11 @@ pruned on each auth write.
 
 | Method and path | Body | Result |
 |---|---|---|
-| `GET /api/ui/auth/status` | none | `{ configured, required, authenticated }`; `authenticated` is true for a valid session or when gating is inactive. |
+| `GET /api/ui/auth/status` | none | `{ configured, required, authenticated }`; `authenticated` is true for a valid session. |
 | `POST /api/ui/auth/setup` | `{ password }` | 200 `{ ok: true }` + session cookie; 409 `already_configured`; 400 `invalid`. |
 | `POST /api/ui/auth/login` | `{ password }` | 200 `{ ok: true }` + session cookie; 401 `invalid_credentials`; 409 `not_configured`; 429 `too_many_attempts`. |
 | `POST /api/ui/auth/logout` | none | 204, clears the cookie, removes the session server-side. |
-| `PUT /api/ui/auth/password` | `{ current, next }` | 200 `{ ok: true }`; 401 `invalid_credentials` or `auth_required`; 409 `password_required` when `next: ""` on a non-loopback bind. Changing the password keeps the current session and invalidates others; `next: ""` removes the password and all sessions. |
+| `PUT /api/ui/auth/password` | `{ current, next }` | 200 `{ ok: true }`; 401 `invalid_credentials` or `auth_required`; 409 `password_required` when `next: ""`. Changing the password keeps the current session and invalidates others. |
 
 Auth bodies are JSON objects limited to 8 KiB; failures use `{ "error": { "code" } }`. The UI fetches
 status once at boot and re-fetches it after sign-in; it does not poll. Mid-session `auth_required` /
@@ -113,18 +109,21 @@ status once at boot and re-fetches it after sign-in; it does not poll. Mid-sessi
 
 Mounted under `/api/ui/connections` before the generic engine proxy; body limit 16 KiB. Saved
 profiles live in `~/.local/share/opencode-ui/connections.json` (or `OPENCODE_UI_CONNECTIONS_STATE`)
-with directory mode `0700` and file mode `0600` (atomic temp-file + rename). The startup CLI/env
-engine (`--engine-url` + `--service-file`) is always available as the immutable `default` profile.
+with directory mode `0700` and file mode `0600` (atomic temp-file + rename). With no profiles,
+engine-dependent routes return 503 and the authenticated home screen links to Settings → Connections.
 
-- `GET /api/ui/connections` → `{ activeId, active, profiles }` where each summary contains
-  `{ id, name, engineUrl, authMode, serviceFile?, username, hasPassword, isDefault, isRemote, unencryptedRemote, isActive, createdAt, updatedAt }`. Passwords and Basic auth headers are never returned.
-- `POST /api/ui/connections` → creates a custom profile (`authMode: "password" | "service-file"`, max
-  32 profiles, optionally `activate: true`) → 201 `{ profile, activeId, active, profiles }`.
-- `PUT /api/ui/connections/:id` → updates a custom profile. Changing `engineUrl` on a password
-  profile without providing a new `password` is rejected with 400 `credential_required_for_url_change`
-  so saved credentials cannot be redirected to another host.
-- `DELETE /api/ui/connections/:id` → deletes an inactive custom profile (400 `default_immutable` for
-  `default`; 409 `cannot_delete_active` for the active profile).
+- `GET /api/ui/connections` → `{ activeId, active, profiles, suggestedEngineUrl? }`. With no
+  profiles, `activeId` and `active` are null. The optional suggestion comes from `--engine-url`.
+  Each summary contains `{ id, name, engineUrl, hasPassword, isRemote, unencryptedRemote, isActive, createdAt, updatedAt }`.
+- `POST /api/ui/connections` → verifies the required password and saves
+  `{ name, engineUrl, password, activate? }` (max 32 profiles). On success, returns 201 with the state
+  and created `profile`; the first profile is activated. A failed engine check returns 422
+  `engine_connection_failed` without saving.
+- `PUT /api/ui/connections/:id` → updates a profile. Omit `password` to keep it at the same origin.
+  An empty password is rejected. Changing the origin while omitting a saved password is rejected
+  with 400 `credential_required_for_url_change`. Changed credentials are verified before saving.
+- `DELETE /api/ui/connections/:id` → deletes an inactive profile or the last profile. Switch
+  away from an active profile before deleting it if other profiles are saved.
 - `POST /api/ui/connections/:id/activate` → resolves credentials, switches the live proxy, PTY
   WebSocket bridge, notifications watcher, artifact delivery, plugins API, and agent-config target,
   and persists `activeId`.

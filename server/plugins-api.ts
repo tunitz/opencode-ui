@@ -725,7 +725,7 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
       redirect: "manual",
       proxy: false,
       headers: {
-        authorization,
+        ...(authorization ? { authorization } : {}),
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         ...init.headers,
       },

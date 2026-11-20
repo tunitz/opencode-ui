@@ -78,7 +78,7 @@ export function AuthScreen({
           </h1>
           {setup ? (
             <p className="text-sm text-muted-foreground">
-              This password protects the UI on this network.
+              Set an OpenCode UI password. It is separate from your OpenCode engine password.
             </p>
           ) : null}
         </div>

@@ -7,10 +7,7 @@ Production UI for a separately installed, running OpenCode V2 engine
 
   --host <host>              Bind hostname/IP (OPENCODE_UI_HOST or 127.0.0.1)
   --port <port>              UI port 1–65535 (OPENCODE_UI_PORT or 5174)
-  --engine-url <origin>      Engine HTTP(S) host and port (http://127.0.0.1:4096)
-  --service-file <path>      Existing registration containing a password
-                            ($XDG_CONFIG_HOME/opencode/service.json, else
-                             ~/.config/opencode/service.json)
+  --engine-url <origin>      Prefill the first connection's engine URL
   --allowed-host <host>      Add exact trusted hostname/IP (repeatable)
   --allowed-origin <origin> Add exact trusted HTTP(S) origin (repeatable)
   --artifact-root <path>     Allow proven artifact files under this root (repeatable;
@@ -24,15 +21,15 @@ UI port. --host changes binding only, never trust. Non-loopback binding requires
 explicit non-loopback --allowed-host AND --allowed-origin. Proxy public hosts
 and origins must also be explicitly allowed, even with a loopback listener.
 
-A shared browser password gate protects the API: optional on loopback binds,
-required otherwise. Allowlists are not authentication or tenant isolation;
+Set an OpenCode UI password on first visit. It protects the API on every bind.
+Allowlists are not authentication or tenant isolation;
 remote use still requires secure transport.
 Unprotected remote HTTP engines expose credentials and private traffic.
-Credentials stay in the service file, never flags. This CLI never installs,
+Configure connections in the browser, never pass credentials as flags. This CLI never installs,
 starts, or changes the engine. Artifact roots do not bypass provenance checks.
 `
 
-export const scalarFlagNames = new Set(["host", "port", "engine-url", "service-file"])
+export const scalarFlagNames = new Set(["host", "port", "engine-url"])
 export const listFlagNames = new Set(["allowed-host", "allowed-origin", "artifact-root"])
 
 export type CliFlags = {
@@ -41,7 +38,6 @@ export type CliFlags = {
   host?: string
   port?: string
   engineUrl?: string
-  serviceFile?: string
   allowedHosts: string[]
   allowedOrigins: string[]
   artifactRoots: string[]
@@ -82,7 +78,6 @@ export function parseCliFlags(args: readonly string[]): CliFlags {
     host: values.get("host")?.[0],
     port: values.get("port")?.[0],
     engineUrl: values.get("engine-url")?.[0],
-    serviceFile: values.get("service-file")?.[0],
     allowedHosts: values.get("allowed-host") ?? [],
     allowedOrigins: values.get("allowed-origin") ?? [],
     artifactRoots: values.get("artifact-root") ?? [],

@@ -192,7 +192,7 @@ test("the tab bar renders every section in registry order with icon and label", 
       ["alerts", "Alerts"],
       ["keys", "Keys"],
       ["plugins", "Plugins"],
-      ["connection", "Connection"],
+      ["connection", "Connections"],
       ["access", "Access"],
     ]) {
       const tab = tabByID(root, id)

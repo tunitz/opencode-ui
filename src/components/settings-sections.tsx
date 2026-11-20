@@ -88,7 +88,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
   },
   {
     id: "connection",
-    label: "Connection",
+    label: "Connections",
     Icon: ServerIcon,
     Component: SettingsConnectionSection,
   },

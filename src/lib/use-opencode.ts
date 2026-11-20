@@ -87,7 +87,7 @@ import {
   inferMime,
   joinProjectPath,
 } from "@/lib/files"
-export type ConnectionStatus = "connecting" | "connected" | "offline"
+export type ConnectionStatus = "unconfigured" | "connecting" | "connected" | "offline"
 export type LoadStatus = "idle" | "loading" | "ready" | "error"
 export type StreamStatus = "idle" | "connecting" | "ready" | "lost"
 export type ProjectScope = "project" | "all"
@@ -252,7 +252,7 @@ export type OpenCodeController = OpenCodeState & {
   selectSession: (sessionID: string) => void
   openSessionByID: (sessionID: string) => Promise<string | null>
   retryConnection: () => void
-  resetForEngineSwitch: () => void
+  resetForEngineSwitch: (reconnect?: boolean) => void
   retryProjects: () => void
   refreshSessions: () => void
   dismissStartupNotice: () => void
@@ -344,7 +344,7 @@ export function withSessionSnapshot(
   return next
 }
 
-export function useOpenCode(): OpenCodeController {
+export function useOpenCode(engineEnabled = true): OpenCodeController {
   const sessionListListeners = useRef(new Set<(change: SessionListChange) => void>())
   const pendingSessionLookup = useRef<{ sessionID: string; changed: boolean } | null>(null)
   const subscribeSessionListChanges = useCallback((listener: (change: SessionListChange) => void) => {
@@ -568,6 +568,8 @@ export function useOpenCode(): OpenCodeController {
   const directoryRef = useRef("")
   const scopeRef = useRef<ProjectScope>("all")
   const activeSessionRef = useRef<string | null>(null)
+  const connectionRequest = useRef(0)
+  const projectsRequest = useRef(0)
   const sessionsRequest = useRef(0)
   const deletedSessionsRef = useRef(new Set<string>())
   const historyRequest = useRef(0)
@@ -1085,15 +1087,18 @@ export function useOpenCode(): OpenCodeController {
   }, [])
 
   const loadProjects = useCallback(async (): Promise<Project[] | null> => {
+    const request = ++projectsRequest.current
     setProjectsStatus("loading")
     setProjectsError(null)
 
     try {
       const list = await openCode.project.list()
+      if (request !== projectsRequest.current) return null
       setProjects(list)
       setProjectsStatus("ready")
       return list
     } catch (error) {
+      if (request !== projectsRequest.current) return null
       setProjectsStatus("error")
       setProjectsError(errorMessage(error))
       return null
@@ -1314,15 +1319,19 @@ export function useOpenCode(): OpenCodeController {
 
   const connect = useCallback(
     async (requestedDirectory?: string) => {
+      if (!engineEnabled) return
+      const request = ++connectionRequest.current
       let version: string | null
       try {
         const info = await openCode.server.info()
+        if (request !== connectionRequest.current) return
         version = info.version
         setServerVersion(info.version)
         setConnection("connected")
         setConnectionError(null)
         setStream("connecting")
       } catch (error) {
+        if (request !== connectionRequest.current) return
         setConnection("offline")
         setConnectionError(errorMessage(error))
         setStream("idle")
@@ -1331,6 +1340,7 @@ export function useOpenCode(): OpenCodeController {
       }
 
       await loadProjects()
+      if (request !== connectionRequest.current) return
 
       try {
         const next = requestedDirectory
@@ -1338,6 +1348,7 @@ export function useOpenCode(): OpenCodeController {
               location: { directory: requestedDirectory },
             })
           : await openCode.location.get()
+        if (request !== connectionRequest.current) return
 
         setDirectoryError(null)
         commitLocation(next)
@@ -1352,11 +1363,13 @@ export function useOpenCode(): OpenCodeController {
         setSessionsStatus("loading")
         setSessionsError(null)
         await loadSessions({})
+        if (request !== connectionRequest.current) return
         if (version) rememberLastOpened({ kind: "all" }, version)
         // Reconcile durable state (history/pending/active/sessions) after a
         // manual reconnect; harmless on the initial connect.
         setWakeKey((current) => current + 1)
       } catch (error) {
+        if (request !== connectionRequest.current) return
         setDirectoryError(errorMessage(error))
         setScope("all")
         await loadSessions({})
@@ -1364,6 +1377,7 @@ export function useOpenCode(): OpenCodeController {
     },
     [
       commitLocation,
+      engineEnabled,
       loadProjects,
       loadSessions,
       rememberLastOpened,
@@ -1373,13 +1387,20 @@ export function useOpenCode(): OpenCodeController {
   )
 
   useEffect(() => {
-    void Promise.resolve().then(() => connect())
+    if (!engineEnabled) return
+    let cancelled = false
+    void Promise.resolve().then(() => {
+      if (!cancelled) void connect()
+    })
 
     return () => {
+      cancelled = true
+      connectionRequest.current += 1
+      projectsRequest.current += 1
       sessionsRequest.current += 1
       historyRequest.current += 1
     }
-  }, [connect])
+  }, [connect, engineEnabled])
 
   useEffect(() => {
     if (connection !== "connected") {
@@ -1975,7 +1996,9 @@ export function useOpenCode(): OpenCodeController {
     void connect(directoryRef.current || undefined)
   }, [connect])
 
-  const resetForEngineSwitch = useCallback(() => {
+  const resetForEngineSwitch = useCallback((reconnect = true) => {
+    connectionRequest.current += 1
+    projectsRequest.current += 1
     openSessionRequest.current += 1
     historyRequest.current += 1
     sessionsRequest.current += 1
@@ -1996,11 +2019,12 @@ export function useOpenCode(): OpenCodeController {
     setFocusMessageID(null)
     setLocation(null)
     setProjects([])
-    setProjectsStatus("loading")
+    setProjectsStatus(reconnect ? "loading" : "idle")
+    setProjectsError(null)
     setProjectError(null)
     setDirectoryError(null)
     setSessions([])
-    setSessionsStatus("loading")
+    setSessionsStatus(reconnect ? "loading" : "idle")
     setSessionsError(null)
     setMessages([])
     setHistoryStatus("idle")
@@ -2022,9 +2046,14 @@ export function useOpenCode(): OpenCodeController {
     setCommandsReloadKey((current) => current + 1)
     setConnection("connecting")
     setConnectionError(null)
-    scheduleReconnect(true)
-    void connect()
-  }, [connect, scheduleReconnect])
+    if (reconnect) {
+      scheduleReconnect(true)
+      void connect()
+    } else {
+      clearReconnectTimer()
+      setStream("idle")
+    }
+  }, [clearReconnectTimer, connect, scheduleReconnect, setStream])
 
   const retryProjects = useCallback(() => {
     void loadProjects()
@@ -3410,7 +3439,7 @@ export function useOpenCode(): OpenCodeController {
     : EMPTY_ATTACHMENTS
 
   const state = useShallowMemo<OpenCodeState>({
-    connection,
+    connection: engineEnabled ? connection : "unconfigured",
     connectionError,
     scope,
     location,

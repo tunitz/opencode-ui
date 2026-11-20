@@ -2,17 +2,11 @@ import { authAwareFetch } from "@/lib/auth"
 
 export const ENGINE_CONNECTION_CHANGED = "opencode-ui:engine-connection-changed"
 
-export type EngineAuthMode = "password" | "service-file"
-
 export type EngineProfileSummary = {
   id: string
   name: string
   engineUrl: string
-  authMode: EngineAuthMode
-  serviceFile?: string
-  username: string
   hasPassword: boolean
-  isDefault: boolean
   isRemote: boolean
   unencryptedRemote: boolean
   isActive: boolean
@@ -21,9 +15,10 @@ export type EngineProfileSummary = {
 }
 
 export type ConnectionsState = {
-  activeId: string
-  active: EngineProfileSummary
+  activeId: string | null
+  active: EngineProfileSummary | null
   profiles: EngineProfileSummary[]
+  suggestedEngineUrl?: string
 }
 
 export type EngineTestResult = {
@@ -40,20 +35,14 @@ export type EngineTestResult = {
 export type ConnectionDraftInput = {
   name: string
   engineUrl: string
-  authMode: EngineAuthMode
-  username?: string
   password?: string
-  serviceFile?: string
   activate?: boolean
 }
 
 export type ConnectionTestInput = {
   profileId?: string
   engineUrl?: string
-  authMode?: EngineAuthMode
-  username?: string
   password?: string
-  serviceFile?: string
 }
 
 type ErrorBody = {
@@ -160,7 +149,7 @@ export function testConnection(
   })
 }
 
-export function notifyEngineConnectionChanged(active: EngineProfileSummary): void {
+export function notifyEngineConnectionChanged(active: EngineProfileSummary | null): void {
   if (typeof window === "undefined") return
   window.dispatchEvent(
     new CustomEvent(ENGINE_CONNECTION_CHANGED, { detail: active })

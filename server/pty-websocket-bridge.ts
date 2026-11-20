@@ -44,10 +44,10 @@ interface BridgeState {
 
 export interface PtyBridgeOptions {
   /** Trusted server configuration only, never derived from the browser request. */
-  upstream: string
-  authorization: string
-  /** Optional live target provider when switching engines at runtime. */
-  getTarget?: () => { upstream: string; authorization: string }
+  upstream?: string
+  authorization?: string
+  /** Live target provider; null means there is no configured engine. */
+  getTarget?: () => { upstream: string; authorization?: string } | null
   /** Explicit allowlists are required; request validation cannot be bypassed. */
   security: Required<Pick<SecurityOptions, "allowedHosts" | "allowedOrigins">> & SecurityOptions
   connectTimeoutMs?: number
@@ -74,22 +74,20 @@ function positiveInteger(value: number, name: string): number {
  * Call dispose() before stopping the owning server. No retries (PTY is stateful).
  */
 export function createPtyWebSocketBridge(options: PtyBridgeOptions) {
-  function parseUpstream(rawUpstream: string, rawAuthorization: string): { base: URL; authorization: string } {
+  function parseUpstream(rawUpstream: string, authorization = ""): { base: URL; authorization: string } {
     const base = new URL(rawUpstream)
     if (!["http:", "https:", "ws:", "wss:"].includes(base.protocol) ||
       base.username || base.password || base.pathname !== "/" || base.search || base.hash) {
       throw new Error("Upstream must be a trusted HTTP/WebSocket origin")
     }
-    if (!rawAuthorization || /[\r\n]/.test(rawAuthorization)) {
-      throw new Error("Server-side authorization is required")
-    }
-    return { base, authorization: rawAuthorization }
+    if (/[\r\n]/.test(authorization)) throw new Error("Invalid server-side authorization")
+    return { base, authorization }
   }
-  const initialTarget = parseUpstream(options.upstream, options.authorization)
+  const initialTarget = options.upstream ? parseUpstream(options.upstream, options.authorization) : null
   const resolveTarget = () => {
     if (!options.getTarget) return initialTarget
     const current = options.getTarget()
-    return parseUpstream(current.upstream, current.authorization)
+    return current ? parseUpstream(current.upstream, current.authorization) : null
   }
   const security = {
     ...options.security,
@@ -165,8 +163,9 @@ export function createPtyWebSocketBridge(options: PtyBridgeOptions) {
       // PTY uses no subprotocol; do not forward browser-supplied credentials/headers.
       if (request.headers.has("sec-websocket-protocol")) return failure(400)
       if (request.signal.aborted) return failure(400)
-      let resolved: { base: URL; authorization: string }
+      let resolved: ReturnType<typeof resolveTarget>
       try { resolved = resolveTarget() } catch { return failure(502) }
+      if (!resolved) return failure(503)
       const target = new URL(resolved.base)
       target.protocol = resolved.base.protocol === "https:" || resolved.base.protocol === "wss:" ? "wss:" : "ws:"
       target.pathname = url.pathname
@@ -176,7 +175,7 @@ export function createPtyWebSocketBridge(options: PtyBridgeOptions) {
         url: string, options: { headers: Record<string, string> },
       ) => UpstreamSocket
       let upstream: UpstreamSocket
-      try { upstream = new NativeWebSocket(target.href, { headers: { authorization: resolved.authorization } }) }
+      try { upstream = new NativeWebSocket(target.href, { headers: resolved.authorization ? { authorization: resolved.authorization } : {} }) }
       catch { return failure(502) }
       upstream.binaryType = "arraybuffer"
       const state: BridgeState = {

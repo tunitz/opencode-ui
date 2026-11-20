@@ -1,22 +1,18 @@
 import { randomBytes } from "node:crypto"
-import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 
-import { isLoopbackHost, validateOrigin, validatePath } from "./bun-config.ts"
+import { isLoopbackHost, validateOrigin } from "./bun-config.ts"
 
 export const CONNECTIONS_ROUTE = "/api/ui/connections"
 export const CONNECTIONS_BODY_LIMIT = 16 * 1024
-export const DEFAULT_ENGINE_PROFILE_ID = "default"
 export const MAX_ENGINE_PROFILES = 32
-const MAX_SERVICE_FILE_BYTES = 64 * 1024
 const MAX_PASSWORD_LENGTH = 256
 const MAX_NAME_LENGTH = 80
 const MAX_USERNAME_LENGTH = 64
 const TEST_TIMEOUT_MS = 5_000
 const PROFILE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
-
-export type EngineAuthMode = "password" | "service-file"
 
 export type ActiveEngineTarget = {
   id: string
@@ -30,11 +26,7 @@ export type EngineProfileSummary = {
   id: string
   name: string
   engineUrl: string
-  authMode: EngineAuthMode
-  serviceFile?: string
-  username: string
   hasPassword: boolean
-  isDefault: boolean
   isRemote: boolean
   unencryptedRemote: boolean
   isActive: boolean
@@ -57,25 +49,20 @@ type StoredEngineProfile = {
   id: string
   name: string
   engineUrl: string
-  authMode: EngineAuthMode
   username: string
   password?: string
-  serviceFile?: string
   createdAt: number
   updatedAt: number
 }
 
 type StoredState = {
   version: 1
-  activeId: string
+  activeId: string | null
   profiles: StoredEngineProfile[]
 }
 
 export type EngineConnectionsOptions = {
-  defaultEngineUrl: string
-  defaultAuthorization: string
-  defaultServiceFile?: string
-  defaultName?: string
+  suggestedEngineUrl?: string
   stateFile?: string
   fetch?: typeof fetch
   now?: () => number
@@ -161,7 +148,7 @@ function normalizeUsername(value: unknown): string {
 
 function normalizePassword(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new ConnectionApiError(400, "invalid_password", "Provide the engine password.")
+    throw new ConnectionApiError(400, "invalid_password", "Enter the engine password. For a background service, run opencode service get password on the engine machine.")
   }
   if (value.length > MAX_PASSWORD_LENGTH || /[\r\n\0]/.test(value)) {
     throw new ConnectionApiError(
@@ -173,78 +160,17 @@ function normalizePassword(value: unknown): string {
   return value
 }
 
-function expandHomePath(value: string): string {
-  if (value === "~") return homedir()
-  if (value.startsWith("~/")) return join(homedir(), value.slice(2))
-  return value
-}
-
-function normalizeServiceFile(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ConnectionApiError(400, "invalid_service_file", "Provide the path to an existing service.json file.")
-  }
-  try {
-    return resolve(validatePath(expandHomePath(value.trim())))
-  } catch {
-    throw new ConnectionApiError(400, "invalid_service_file", "Service file path must be a valid filesystem path.")
-  }
-}
-
-function normalizeAuthMode(value: unknown): EngineAuthMode {
-  if (value === "password" || value === "service-file") return value
-  throw new ConnectionApiError(400, "invalid_auth_mode", "Choose password or service-file authentication.")
-}
-
 function basicAuthHeader(username: string, password: string): string {
-  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
+  return password ? `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}` : ""
 }
 
-async function readServiceFilePassword(filePath: string): Promise<string> {
-  let fileStat
-  try {
-    fileStat = await stat(filePath)
-  } catch {
-    throw new ConnectionApiError(
-      400,
-      "service_file_unreadable",
-      "The service file could not be read on the UI server."
-    )
-  }
-  if (!fileStat.isFile() || fileStat.size > MAX_SERVICE_FILE_BYTES) {
-    throw new ConnectionApiError(
-      400,
-      "service_file_invalid",
-      "The service file must be a small JSON file with a nonempty password."
-    )
-  }
-  let text: string
-  try {
-    text = await readFile(filePath, "utf8")
-  } catch {
-    throw new ConnectionApiError(
-      400,
-      "service_file_unreadable",
-      "The service file could not be read on the UI server."
-    )
-  }
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (
-      !isRecord(parsed) ||
-      typeof parsed.password !== "string" ||
-      !parsed.password.trim() ||
-      parsed.password.length > MAX_PASSWORD_LENGTH ||
-      /[\r\n\0]/.test(parsed.password)
-    ) {
-      throw new Error("invalid")
-    }
-    return parsed.password
-  } catch {
-    throw new ConnectionApiError(
-      400,
-      "service_file_invalid",
-      "The service file must contain a JSON object with a nonempty password."
-    )
+function targetForProfile(profile: StoredEngineProfile): ActiveEngineTarget {
+  return {
+    id: profile.id,
+    name: profile.name,
+    engineUrl: profile.engineUrl,
+    authorization: basicAuthHeader(profile.username, profile.password ?? ""),
+    isRemote: urlFlags(profile.engineUrl).isRemote,
   }
 }
 
@@ -291,52 +217,37 @@ async function readJsonBody(request: Request): Promise<Record<string, unknown>> 
 
 function sanitizeStoredProfile(raw: unknown): StoredEngineProfile | null {
   if (!isRecord(raw)) return null
-  if (typeof raw.id !== "string" || !PROFILE_ID_PATTERN.test(raw.id) || raw.id === DEFAULT_ENGINE_PROFILE_ID) {
+  if (typeof raw.id !== "string" || !PROFILE_ID_PATTERN.test(raw.id) || raw.id === "default") {
     return null
   }
   try {
     const name = sanitizeName(raw.name)
     const engineUrl = normalizeEngineUrl(raw.engineUrl)
-    const authMode = normalizeAuthMode(raw.authMode)
     const username = normalizeUsername(raw.username)
     const createdAt = typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now()
     const updatedAt = typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt
-    if (authMode === "password") {
-      const password = normalizePassword(raw.password)
-      return { id: raw.id, name, engineUrl, authMode, username, password, createdAt, updatedAt }
-    }
-    const serviceFile = normalizeServiceFile(raw.serviceFile)
-    return { id: raw.id, name, engineUrl, authMode, username, serviceFile, createdAt, updatedAt }
+    // Keep legacy profile metadata without reading credentials from the filesystem.
+    const password = raw.password === undefined || raw.password === "" ? "" : normalizePassword(raw.password)
+    return { id: raw.id, name, engineUrl, username, password, createdAt, updatedAt }
   } catch {
     return null
   }
 }
 
 export function createEngineConnectionsService(options: EngineConnectionsOptions) {
-  const defaultEngineUrl = validateOrigin(options.defaultEngineUrl)
-  const defaultAuthorization = options.defaultAuthorization
-  const defaultServiceFile = options.defaultServiceFile
-  const defaultName = options.defaultName ?? "Default (startup)"
+  const suggestedEngineUrl = options.suggestedEngineUrl && validateOrigin(options.suggestedEngineUrl)
   const stateFile = options.stateFile ?? defaultStateFile()
   const fetchImpl = options.fetch ?? fetch
   const now = options.now ?? Date.now
 
-  const defaultTarget: ActiveEngineTarget = {
-    id: DEFAULT_ENGINE_PROFILE_ID,
-    name: defaultName,
-    engineUrl: defaultEngineUrl,
-    authorization: defaultAuthorization,
-    isRemote: urlFlags(defaultEngineUrl).isRemote,
-  }
-
-  let activeTarget: ActiveEngineTarget = defaultTarget
-  let state: StoredState = { version: 1, activeId: DEFAULT_ENGINE_PROFILE_ID, profiles: [] }
+  let activeTarget: ActiveEngineTarget | null = null
+  let state: StoredState = { version: 1, activeId: null, profiles: [] }
   let loaded = false
   let loadPromise: Promise<void> | null = null
   let mutationQueue: Promise<unknown> = Promise.resolve()
-  const listeners = new Set<(target: ActiveEngineTarget) => void>()
+  const listeners = new Set<(target: ActiveEngineTarget | null) => void>()
 
-  function notifyListeners(target: ActiveEngineTarget) {
+  function notifyListeners(target: ActiveEngineTarget | null) {
     for (const listener of listeners) {
       try {
         listener(target)
@@ -346,43 +257,21 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
     }
   }
 
-  async function resolveProfileAuthorization(profile: StoredEngineProfile): Promise<string> {
-    if (profile.authMode === "password") {
-      if (!profile.password) {
-        throw new ConnectionApiError(400, "invalid_password", "Saved password is missing for this profile.")
-      }
-      return basicAuthHeader(profile.username, profile.password)
-    }
-    if (!profile.serviceFile) {
-      throw new ConnectionApiError(400, "invalid_service_file", "Service file path is missing for this profile.")
-    }
-    const password = await readServiceFilePassword(profile.serviceFile)
-    return basicAuthHeader(profile.username, password)
-  }
-
-  async function resolveTargetForId(id: string): Promise<ActiveEngineTarget> {
-    if (id === DEFAULT_ENGINE_PROFILE_ID) return defaultTarget
+  function resolveTargetForId(id: string): ActiveEngineTarget {
     const profile = state.profiles.find((item) => item.id === id)
     if (!profile) {
       throw new ConnectionApiError(404, "not_found", "Connection profile was not found.")
     }
-    const authorization = await resolveProfileAuthorization(profile)
-    return {
-      id: profile.id,
-      name: profile.name,
-      engineUrl: profile.engineUrl,
-      authorization,
-      isRemote: urlFlags(profile.engineUrl).isRemote,
-    }
+    return targetForProfile(profile)
   }
 
-  async function persist(): Promise<void> {
+  async function persist(next: StoredState): Promise<void> {
     const dir = dirname(stateFile)
     await mkdir(dir, { recursive: true, mode: 0o700 })
     await chmod(dir, 0o700).catch(() => {})
     const tmp = `${stateFile}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`
     try {
-      await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+      await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
       await chmod(tmp, 0o600).catch(() => {})
       await rename(tmp, stateFile)
     } catch (error) {
@@ -408,29 +297,12 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
               profiles.push(sanitized)
               if (profiles.length >= MAX_ENGINE_PROFILES) break
             }
-            const rawActive = typeof parsed.activeId === "string" ? parsed.activeId : DEFAULT_ENGINE_PROFILE_ID
-            const activeId =
-              rawActive === DEFAULT_ENGINE_PROFILE_ID || profiles.some((p) => p.id === rawActive)
-                ? rawActive
-                : DEFAULT_ENGINE_PROFILE_ID
-            state = { version: 1, activeId, profiles }
-            if (activeId !== DEFAULT_ENGINE_PROFILE_ID) {
-              try {
-                activeTarget = await resolveTargetForId(activeId)
-              } catch {
-                // Fall back to the CLI startup profile if a saved service file vanished between restarts.
-                state.activeId = DEFAULT_ENGINE_PROFILE_ID
-                activeTarget = defaultTarget
-              }
-            }
+            const active = profiles.find((profile) => profile.id === parsed.activeId) ?? profiles[0]
+            activeTarget = active ? targetForProfile(active) : null
+            state = { version: 1, activeId: active?.id ?? null, profiles }
           }
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException | null)?.code
-          if (code !== "ENOENT") {
-            // Corrupt or unreadable state file: stay on the startup default without crashing boot.
-            state = { version: 1, activeId: DEFAULT_ENGINE_PROFILE_ID, profiles: [] }
-            activeTarget = defaultTarget
-          }
+        } catch {
+          // Missing, corrupt, or unreadable state: start without an engine.
         }
         loaded = true
       })()
@@ -444,48 +316,19 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
     return next
   }
 
-  function summarize(): {
-    activeId: string
-    active: EngineProfileSummary
-    profiles: EngineProfileSummary[]
-  } {
-    const defaultFlags = urlFlags(defaultEngineUrl)
-    const defaultSummary: EngineProfileSummary = {
-      id: DEFAULT_ENGINE_PROFILE_ID,
-      name: defaultName,
-      engineUrl: defaultEngineUrl,
-      authMode: "service-file",
-      ...(defaultServiceFile ? { serviceFile: defaultServiceFile } : {}),
-      username: "opencode",
-      hasPassword: true,
-      isDefault: true,
-      isRemote: defaultFlags.isRemote,
-      unencryptedRemote: defaultFlags.unencryptedRemote,
-      isActive: state.activeId === DEFAULT_ENGINE_PROFILE_ID,
-      createdAt: 0,
-      updatedAt: 0,
-    }
-    const customSummaries: EngineProfileSummary[] = state.profiles.map((profile) => {
-      const flags = urlFlags(profile.engineUrl)
-      return {
-        id: profile.id,
-        name: profile.name,
-        engineUrl: profile.engineUrl,
-        authMode: profile.authMode,
-        ...(profile.serviceFile ? { serviceFile: profile.serviceFile } : {}),
-        username: profile.username,
-        hasPassword: profile.authMode === "password" ? Boolean(profile.password) : false,
-        isDefault: false,
-        isRemote: flags.isRemote,
-        unencryptedRemote: flags.unencryptedRemote,
-        isActive: state.activeId === profile.id,
-        createdAt: profile.createdAt,
-        updatedAt: profile.updatedAt,
-      }
-    })
-    const profiles = [defaultSummary, ...customSummaries]
-    const active = profiles.find((item) => item.isActive) ?? defaultSummary
-    return { activeId: active.id, active, profiles }
+  function summarize() {
+    const profiles: EngineProfileSummary[] = state.profiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      engineUrl: profile.engineUrl,
+      ...urlFlags(profile.engineUrl),
+      hasPassword: Boolean(profile.password),
+      isActive: state.activeId === profile.id,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    }))
+    const active = profiles.find((item) => item.isActive) ?? null
+    return { activeId: state.activeId, active, profiles, suggestedEngineUrl }
   }
 
   async function probeEngine(engineUrl: string, authorization: string): Promise<EngineTestResult> {
@@ -494,7 +337,7 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
     let response: Response
     try {
       response = await fetchImpl(`${engineUrl}/api/info`, {
-        headers: { authorization, accept: "application/json" },
+        headers: { ...(authorization ? { authorization } : {}), accept: "application/json" },
         redirect: "manual",
         proxy: false,
         cache: "no-store",
@@ -527,7 +370,9 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
         version: null,
         latencyMs,
         unencryptedRemote: flags.unencryptedRemote,
-        error: "Authentication failed — check the engine password or service file.",
+        error: response.status === 403
+          ? "The engine denied access (HTTP 403). Check its access settings."
+          : "The engine rejected the password (HTTP 401). Check the address with opencode service status and the password with opencode service get password on the engine machine.",
       }
     }
     if (response.status >= 300 && response.status < 400) {
@@ -596,49 +441,52 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
     }
   }
 
-  async function handleTest(body: Record<string, unknown>): Promise<Response> {
-    const profileId = typeof body.profileId === "string" && body.profileId.trim() ? body.profileId.trim() : null
-    const hasExplicitUrl = typeof body.engineUrl === "string" && body.engineUrl.trim().length > 0
+  async function probeCredentials(engineUrl: string, username: string, password: string, allowTrim: boolean) {
+    const result = await probeEngine(engineUrl, basicAuthHeader(username, password))
+    const trimmed = password.trim()
+    // A paste can include surrounding whitespace. Prefer the exact password so
+    // intentional spaces in a valid password are preserved.
+    if (!allowTrim || result.status !== 401 || trimmed === password) return { result, password }
+    const retry = await probeEngine(engineUrl, basicAuthHeader(username, trimmed))
+    return retry.ok ? { result: retry, password: trimmed } : { result, password }
+  }
 
-    // Testing a saved profile directly (no candidate overrides).
-    if (profileId && !hasExplicitUrl) {
-      const target = await resolveTargetForId(profileId)
-      return jsonResponse(200, await probeEngine(target.engineUrl, target.authorization))
+  async function verifyCredentials(engineUrl: string, username: string, password: string, allowTrim: boolean) {
+    const checked = await probeCredentials(engineUrl, username, password, allowTrim)
+    if (!checked.result.ok) {
+      throw new ConnectionApiError(422, "engine_connection_failed", checked.result.error ?? "Could not verify the engine connection.")
     }
+    return checked.password
+  }
 
-    const engineUrl = normalizeEngineUrl(body.engineUrl)
-    const authMode = normalizeAuthMode(body.authMode ?? "password")
-    const username = normalizeUsername(body.username)
-
-    if (authMode === "service-file") {
-      const serviceFile = normalizeServiceFile(body.serviceFile)
-      const password = await readServiceFilePassword(serviceFile)
-      return jsonResponse(200, await probeEngine(engineUrl, basicAuthHeader(username, password)))
-    }
-
-    const rawPassword = typeof body.password === "string" ? body.password : ""
-    if (rawPassword) {
-      const password = normalizePassword(rawPassword)
-      return jsonResponse(200, await probeEngine(engineUrl, basicAuthHeader(username, password)))
-    }
-
-    // Reuse an existing profile's saved password ONLY when the URL is identical.
-    // Never forward a saved credential to a different origin (prevents exfiltration).
-    if (profileId && profileId !== DEFAULT_ENGINE_PROFILE_ID) {
-      const existing = state.profiles.find((item) => item.id === profileId)
-      if (existing && existing.authMode === "password" && existing.password) {
-        if (existing.engineUrl !== engineUrl) {
-          throw new ConnectionApiError(
-            400,
-            "credential_required_for_url_change",
-            "Re-enter the password when testing a different engine URL."
-          )
-        }
-        return jsonResponse(200, await probeEngine(engineUrl, basicAuthHeader(username, existing.password)))
+  function passwordFor(body: Record<string, unknown>, engineUrl: string, existing?: StoredEngineProfile): string {
+    // Omission keeps the saved password only at the same origin.
+    if (body.password === undefined && existing?.password) {
+      if (existing.engineUrl !== engineUrl) {
+        throw new ConnectionApiError(
+          400,
+          "credential_required_for_url_change",
+          "Enter the engine password for the new URL."
+        )
       }
+      return existing.password
     }
+    return normalizePassword(body.password)
+  }
 
-    throw new ConnectionApiError(400, "invalid_password", "Provide the engine password to test this connection.")
+  async function handleTest(body: Record<string, unknown>): Promise<Response> {
+    const existing = typeof body.profileId === "string"
+      ? state.profiles.find((profile) => profile.id === body.profileId)
+      : undefined
+    if (body.profileId !== undefined && !existing) {
+      throw new ConnectionApiError(404, "not_found", "Connection profile was not found.")
+    }
+    const engineUrl = body.engineUrl === undefined && existing
+      ? existing.engineUrl
+      : normalizeEngineUrl(body.engineUrl)
+    const password = passwordFor(body, engineUrl, existing)
+    const { result } = await probeCredentials(engineUrl, existing?.username ?? "opencode", password, body.password !== undefined)
+    return jsonResponse(200, result)
   }
 
   async function handleCreate(body: Record<string, unknown>): Promise<Response> {
@@ -648,158 +496,86 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
       }
       const name = sanitizeName(body.name)
       const engineUrl = normalizeEngineUrl(body.engineUrl)
-      const authMode = normalizeAuthMode(body.authMode ?? "password")
-      const username = normalizeUsername(body.username)
-      const timestamp = now()
-      const id = `eng_${randomBytes(8).toString("hex")}`
-      let profile: StoredEngineProfile
-      if (authMode === "password") {
-        const password = normalizePassword(body.password)
-        profile = { id, name, engineUrl, authMode, username, password, createdAt: timestamp, updatedAt: timestamp }
-      } else {
-        const serviceFile = normalizeServiceFile(body.serviceFile)
-        // Validate readability before saving.
-        await readServiceFilePassword(serviceFile)
-        profile = { id, name, engineUrl, authMode, username, serviceFile, createdAt: timestamp, updatedAt: timestamp }
+      const username = "opencode"
+      const password = await verifyCredentials(engineUrl, username, normalizePassword(body.password), true)
+      const profile: StoredEngineProfile = {
+        id: `eng_${randomBytes(8).toString("hex")}`,
+        name,
+        engineUrl,
+        username,
+        password,
+        createdAt: now(),
+        updatedAt: now(),
       }
-      state.profiles.push(profile)
-      let switched: ActiveEngineTarget | null = null
-      if (body.activate === true) {
-        switched = await resolveTargetForId(profile.id)
-        state.activeId = profile.id
-      }
-      await persist()
-      if (switched) {
-        activeTarget = switched
-        notifyListeners(switched)
+      const activate = state.activeId === null || body.activate === true
+      const next = { ...state, activeId: activate ? profile.id : state.activeId, profiles: [...state.profiles, profile] }
+      await persist(next)
+      state = next
+      if (activate) {
+        activeTarget = targetForProfile(profile)
+        notifyListeners(activeTarget)
       }
       const summary = summarize()
-      const created = summary.profiles.find((item) => item.id === profile.id)!
-      return jsonResponse(201, { profile: created, ...summary })
+      return jsonResponse(201, { profile: summary.profiles.find((item) => item.id === profile.id)!, ...summary })
     })
   }
 
   async function handleUpdate(id: string, body: Record<string, unknown>): Promise<Response> {
     return serialize(async () => {
-      if (id === DEFAULT_ENGINE_PROFILE_ID) {
-        throw new ConnectionApiError(400, "default_immutable", "The startup default connection cannot be edited; create a new profile instead.")
-      }
-      const index = state.profiles.findIndex((item) => item.id === id)
-      if (index < 0) {
+      const existing = state.profiles.find((item) => item.id === id)
+      if (!existing) {
         throw new ConnectionApiError(404, "not_found", "Connection profile was not found.")
       }
-      const existing = state.profiles[index]
-      const name = body.name !== undefined ? sanitizeName(body.name) : existing.name
       const engineUrl = body.engineUrl !== undefined ? normalizeEngineUrl(body.engineUrl) : existing.engineUrl
-      const authMode = body.authMode !== undefined ? normalizeAuthMode(body.authMode) : existing.authMode
-      const username = body.username !== undefined ? normalizeUsername(body.username) : existing.username
-      const urlChanged = engineUrl !== existing.engineUrl
-
-      let updated: StoredEngineProfile
-      if (authMode === "password") {
-        const suppliedPassword = typeof body.password === "string" && body.password.length > 0
-        if (suppliedPassword) {
-          const password = normalizePassword(body.password)
-          updated = {
-            id: existing.id,
-            name,
-            engineUrl,
-            authMode,
-            username,
-            password,
-            createdAt: existing.createdAt,
-            updatedAt: now(),
-          }
-        } else if (existing.authMode === "password" && existing.password) {
-          if (urlChanged) {
-            throw new ConnectionApiError(
-              400,
-              "credential_required_for_url_change",
-              "Enter the password for the new engine URL before saving."
-            )
-          }
-          updated = {
-            id: existing.id,
-            name,
-            engineUrl,
-            authMode,
-            username,
-            password: existing.password,
-            createdAt: existing.createdAt,
-            updatedAt: now(),
-          }
-        } else {
-          throw new ConnectionApiError(400, "invalid_password", "Provide the engine password.")
-        }
-      } else {
-        const serviceFile =
-          body.serviceFile !== undefined
-            ? normalizeServiceFile(body.serviceFile)
-            : existing.serviceFile
-              ? existing.serviceFile
-              : normalizeServiceFile(undefined)
-        await readServiceFilePassword(serviceFile)
-        updated = {
-          id: existing.id,
-          name,
-          engineUrl,
-          authMode,
-          username,
-          serviceFile,
-          createdAt: existing.createdAt,
-          updatedAt: now(),
-        }
+      const name = body.name !== undefined ? sanitizeName(body.name) : existing.name
+      let password = passwordFor(body, engineUrl, existing)
+      if (engineUrl !== existing.engineUrl || body.password !== undefined) {
+        password = await verifyCredentials(engineUrl, existing.username, password, body.password !== undefined)
       }
-
-      const previous = state.profiles[index]
-      state.profiles[index] = updated
-      let switched: ActiveEngineTarget | null = null
+      const updated = { ...existing, name, engineUrl, password, updatedAt: now() }
+      const next = { ...state, profiles: state.profiles.map((item) => item.id === id ? updated : item) }
+      await persist(next)
+      state = next
       if (state.activeId === id) {
-        try {
-          switched = await resolveTargetForId(id)
-        } catch (error) {
-          state.profiles[index] = previous
-          throw error
-        }
-      }
-      await persist()
-      if (switched) {
-        activeTarget = switched
-        notifyListeners(switched)
+        activeTarget = targetForProfile(updated)
+        notifyListeners(activeTarget)
       }
       const summary = summarize()
-      const profileSummary = summary.profiles.find((item) => item.id === id)!
-      return jsonResponse(200, { profile: profileSummary, ...summary })
+      return jsonResponse(200, { profile: summary.profiles.find((item) => item.id === id)!, ...summary })
     })
   }
 
   async function handleDelete(id: string): Promise<Response> {
     return serialize(async () => {
-      if (id === DEFAULT_ENGINE_PROFILE_ID) {
-        throw new ConnectionApiError(400, "default_immutable", "The startup default connection cannot be deleted.")
-      }
-      if (state.activeId === id) {
-        throw new ConnectionApiError(409, "cannot_delete_active", "Switch to another connection before deleting this one.")
-      }
-      const index = state.profiles.findIndex((item) => item.id === id)
-      if (index < 0) {
+      const profiles = state.profiles.filter((item) => item.id !== id)
+      if (profiles.length === state.profiles.length) {
         throw new ConnectionApiError(404, "not_found", "Connection profile was not found.")
       }
-      state.profiles.splice(index, 1)
-      await persist()
+      const removingActive = state.activeId === id
+      if (removingActive && profiles.length) {
+        throw new ConnectionApiError(409, "cannot_delete_active", "Switch to another connection before deleting this one.")
+      }
+      const next = { ...state, activeId: removingActive ? null : state.activeId, profiles }
+      await persist(next)
+      state = next
+      if (removingActive) {
+        activeTarget = null
+        notifyListeners(null)
+      }
       return jsonResponse(200, summarize())
     })
   }
 
   async function handleActivate(id: string): Promise<Response> {
     return serialize(async () => {
-      const nextTarget = await resolveTargetForId(id)
-      const changed =
-        activeTarget.id !== nextTarget.id ||
-        activeTarget.engineUrl !== nextTarget.engineUrl ||
-        activeTarget.authorization !== nextTarget.authorization
-      state.activeId = id
-      await persist()
+      const nextTarget = resolveTargetForId(id)
+      if (!nextTarget.authorization) {
+        throw new ConnectionApiError(400, "invalid_password", "Edit this connection and enter the engine password before switching to it.")
+      }
+      const changed = activeTarget?.id !== nextTarget.id
+      const next = { ...state, activeId: id }
+      await persist(next)
+      state = next
       activeTarget = nextTarget
       if (changed) notifyListeners(nextTarget)
       return jsonResponse(200, summarize())
@@ -851,7 +627,7 @@ export function createEngineConnectionsService(options: EngineConnectionsOptions
   return {
     init: load,
     getActiveTarget: () => activeTarget,
-    onChange(listener: (target: ActiveEngineTarget) => void): () => void {
+    onChange(listener: (target: ActiveEngineTarget | null) => void): () => void {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },

@@ -188,7 +188,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
     options.stateFile ??
     process.env.OPENCODE_UI_NOTIFICATION_STATE ??
     join(homedir(), ".local", "state", "opencode-ui", "notifications", "state.json")
-  let opencodeBaseUrl = options.opencodeBaseUrl ?? "http://127.0.0.1:8090"
+  let opencodeBaseUrl = options.opencodeBaseUrl ?? ""
   let authorization = options.authorization
   const now = options.now ?? Date.now
   const startWatcher = options.startWatcher ?? true
@@ -402,10 +402,10 @@ export function createNotificationService(options: ServiceOptions = {}) {
   }
 
   async function snapshotPending() {
-    if (!state || !authorization || snapshotRunning) return
+    if (!state || !opencodeBaseUrl || snapshotRunning) return
     snapshotRunning = true
     try {
-      const headers = { authorization, accept: "application/json" }
+      const headers = { ...(authorization ? { authorization } : {}), accept: "application/json" }
       const [permissions, forms] = await Promise.all([
         fetch(`${opencodeBaseUrl}/api/permission/request`, { headers, redirect: "manual", proxy: false, signal: AbortSignal.timeout(10_000) } as RequestInit)
           .then((r) => (r.ok ? (r.json() as Promise<{ data?: unknown }>) : (void r.body?.cancel(), null)))
@@ -460,7 +460,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
   }
 
   async function watcherLoop(epoch: number) {
-    if (!authorization || stopped || epoch !== watcherEpoch) return
+    if (!opencodeBaseUrl || stopped || epoch !== watcherEpoch) return
     let attempt = 0
     while (!stopped && epoch === watcherEpoch) {
       const controller = new AbortController()
@@ -468,7 +468,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
       let reader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | null = null
       try {
         const response = await fetch(`${opencodeBaseUrl}/api/event`, {
-          headers: { authorization, accept: "text/event-stream" },
+          headers: { ...(authorization ? { authorization } : {}), accept: "text/event-stream" },
           redirect: "manual",
           proxy: false,
           signal: controller.signal,
@@ -528,7 +528,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
   async function start() {
     started = true
     await load()
-    if (startWatcher && authorization) {
+    if (startWatcher && opencodeBaseUrl) {
       watcherEpoch += 1
       watcherStatus = "connecting"
       void watcherLoop(watcherEpoch)
@@ -548,7 +548,7 @@ export function createNotificationService(options: ServiceOptions = {}) {
       reconnectTimer = null
     }
     if (stopped || !started) return
-    if (startWatcher && authorization) {
+    if (startWatcher && opencodeBaseUrl) {
       watcherStatus = "connecting"
       void watcherLoop(watcherEpoch)
     } else {

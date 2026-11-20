@@ -13,7 +13,7 @@ tools, providers, and history.
 - A Settings workspace for appearance, agents, alerts, keys, plugins, engine connections, and access.
 - Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
 - Optional Web Push notifications.
-- UI password gate: optional on loopback, required on non-loopback; the engine credential always stays on the UI server.
+- First-run UI password setup; any saved engine credential stays on the UI server.
 
 ## Architecture
 
@@ -30,15 +30,11 @@ project does not install, start, or modify it.
 
 - Install and start the **OpenCode V2 engine** separately, compatible with the pinned
   `@opencode/client` **2.1.4**. This project does not install or start the engine.
-- Have the engine's existing **service-registration JSON** at `~/.config/opencode/service.json`
-  (or the path selected with `--service-file`) containing a nonempty string `password`, readable by
-  the account running the UI. The server authenticates with Basic username `opencode`; the UI only
-  reads this file.
 - [Bun](https://bun.sh/) **1.4.4**. `package.json` declares the exact version; broader
   compatibility is not established.
 
-Keep the registration private. Never print or log its password, pass it on the command line, put it
-in a URL, or commit it.
+If the engine requires a password, enter it privately during connection setup. Never pass it on the
+command line, put it in a URL, or commit it.
 
 ## Quick start from a checkout
 
@@ -48,13 +44,21 @@ bun run start
 ```
 
 Open <http://127.0.0.1:5174> on the same machine. `bun run start` serves the production build,
-creating it on first run when it is missing. On a loopback bind no sign-in is shown unless a
-password has already been set; any non-loopback bind requires a password and shows the first-run
-setup screen. Set or change it later in Settings → Access.
+creating it on first run when it is missing. On first visit, set an OpenCode UI password. You can
+change it later in Settings → Access.
 
-With no overrides, the server connects to `http://127.0.0.1:8090` and reads the engine's existing
-service-registration JSON at `~/.config/opencode/service.json`. The UI only reads this file; it
-never creates it or accepts the credential on the command line.
+After setup, the home screen shows **No available connections** until you add one. Select **Open
+Connection Settings**, then **Add connection**. Enter a name and the HTTP(S) address shown by
+`opencode service status`.
+
+OpenCode V2's background service can generate its own password even if you never set one. If the
+connection test says a password is required, run `opencode service get password` privately on the
+engine machine and enter the result as the required **Engine password**. Use **Test connection** to
+verify, then **Save and connect**. A failed check does not save or activate a connection.
+
+The engine password is separate from the UI access password. The UI no longer reads engine
+registration files. If an existing connection was using a registration file, edit it and enter
+the engine password.
 
 ### Remote access
 
@@ -90,8 +94,7 @@ security boundary below.
 | --- | --- |
 | `--host <host>` | `OPENCODE_UI_HOST`, otherwise `127.0.0.1`. Bind hostname/IP only. |
 | `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174`. Integer from 1 through 65535. |
-| `--engine-url <origin>` | `http://127.0.0.1:8090` for `bun run start`; `http://127.0.0.1:4096` for the packaged CLI. |
-| `--service-file <path>` | `~/.config/opencode/service.json` for `bun run start`; the CLI additionally honors `$XDG_CONFIG_HOME`. |
+| `--engine-url <origin>` | Optional prefill for first-run setup. Does not create a connection. |
 | `--allowed-host <host>` | Repeatable additions to loopback hosts. Hostname/IP only. |
 | `--allowed-origin <origin>` | Repeatable additions to loopback origins at the UI port. |
 | `--artifact-root <path>` | Repeatable artifact roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. `bun run start` otherwise allows `/tmp/opencode/shots`; the CLI allows none. |
@@ -121,16 +124,15 @@ Common environment variables include:
 - `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
   `~/.local/state/opencode-ui/notifications/state.json`.
 - `OPENCODE_UI_VAPID_SUBJECT`: Web Push contact URI; set an appropriate contact for your use.
-- `OPENCODE_CONFIG_DIR`: local agent configuration directory. This does not select the CLI service
-  file.
+- `OPENCODE_CONFIG_DIR`: local agent configuration directory.
 
 Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL creates
 a separate storage scope, and preferences are not shared across devices.
 
 ## Security boundary
 
-The UI has a single access password. On a loopback bind it is optional; on any non-loopback bind it
-is required, and the first visit prompts for setup. Sessions use an HTTP-only, SameSite=Lax cookie
+The UI has a single required access password, set on first visit. Sessions use an HTTP-only,
+SameSite=Lax cookie
 valid for 30 days; the server stores an argon2id password hash and SHA-256 session-token hashes
 under `~/.local/share/opencode-ui/auth/`, and no password or token is placed in `localStorage` or
 `sessionStorage`. Anyone with the password can exercise the permissions of the engine credential.

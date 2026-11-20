@@ -65,7 +65,7 @@ test("setup mode renders both password fields and the one-line purpose hint", as
     root = await mount({ mode: "setup" })
     expect(JSON.stringify(root.toJSON())).toContain("Set a password")
     expect(JSON.stringify(root.toJSON())).toContain(
-      "This password protects the UI on this network."
+      "Set an OpenCode UI password. It is separate from your OpenCode engine password."
     )
     expect(passwordInput(root).props.type).toBe("password")
     expect(passwordInput(root).props.autoComplete).toBe("new-password")

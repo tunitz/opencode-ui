@@ -8,10 +8,10 @@ import { createStaticHandler } from "./web-static.ts"
 
 type Service = { handleRequest: (request: Request) => Promise<Response> }
 export function createBunApplication(options: {
-  target: string
-  authorization: string
-  /** Optional live target provider when switching engines at runtime. */
-  getTarget?: () => { target: string; authorization: string }
+  target?: string
+  authorization?: string
+  /** Live target provider; null means that an engine connection is not configured. */
+  getTarget?: () => { target: string; authorization: string } | null
   directory: string
   security: Required<Pick<SecurityOptions, "allowedHosts" | "allowedOrigins">> & SecurityOptions
   agents: Service
@@ -31,14 +31,20 @@ export function createBunApplication(options: {
   const resolveTarget = () =>
     options.getTarget
       ? options.getTarget()
-      : { target: options.target, authorization: options.authorization }
+      : options.target ? { target: options.target, authorization: options.authorization } : null
+  const connectionRequired = () => new Response("Set up an OpenCode engine connection first.\n", {
+    status: 503,
+    headers: { "cache-control": "no-store" },
+  })
+  const withEngine = (service: Service) => (request: Request) =>
+    resolveTarget() ? service.handleRequest(request) : connectionRequired()
   const bridge = createPtyWebSocketBridge({
     upstream: options.target,
     authorization: options.authorization,
     getTarget: options.getTarget
       ? () => {
           const current = resolveTarget()
-          return { upstream: current.target, authorization: current.authorization }
+          return current ? { upstream: current.target, authorization: current.authorization } : null
         }
       : undefined,
     security: options.security,
@@ -49,13 +55,13 @@ export function createBunApplication(options: {
     auth: options.auth ? createAuthApiHandler(options.auth) : undefined,
     connections: options.connections?.handleRequest,
     notes: options.notes?.handleRequest,
-    plugins: options.plugins?.handleRequest,
+    plugins: options.plugins && withEngine(options.plugins),
     sessionShortcuts: options.sessionShortcuts?.handleRequest,
-    agents: options.agents.handleRequest, artifacts: options.artifacts.handleRequest,
+    agents: withEngine(options.agents), artifacts: withEngine(options.artifacts),
     notifications: options.notifications.handleRequest,
     engine: (request) => {
       const current = resolveTarget()
-      return proxyEngineRequest(request, { target: current.target, authorization: current.authorization })
+      return current ? proxyEngineRequest(request, current) : connectionRequired()
     },
     frontend: createStaticHandler(options.directory), bridge,
   })

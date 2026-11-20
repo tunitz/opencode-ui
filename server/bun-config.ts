@@ -39,6 +39,6 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 export function validatePath(value: string): string {
-  if (!value.trim() || value.includes("\0")) throw new BunConfigurationError("Service-file and artifact-root paths must be nonempty filesystem paths.")
+  if (!value.trim() || value.includes("\0")) throw new BunConfigurationError("Artifact-root paths must be nonempty filesystem paths.")
   return value
 }
