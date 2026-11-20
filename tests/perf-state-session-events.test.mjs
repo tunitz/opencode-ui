@@ -42,3 +42,37 @@ test("a duplicate event never changes the run", () => {
   expect(second).toBe(first)
   expect(second.texts["text:assistant:0"].text).toBe("A")
 })
+
+test("inbox cancelled removes only the exact pending user", () => {
+  const pending = (id) => ({
+    key: `key-${id}`,
+    seq: 0,
+    id,
+    text: id,
+    delivery: "queue",
+    requestedSteer: false,
+    requestedDelivery: "queue",
+    status: "sent",
+  })
+  const run = {
+    ...emptyLiveRun(),
+    pendingUsers: [pending("inbox-1"), pending("inbox-2")],
+  }
+  const cancelled = applySessionEvent(run, {
+    id: "event-cancel",
+    type: "session.inbox.cancelled",
+    data: { sessionID: "s-alpha", inboxID: "inbox-1" },
+  })
+  expect(cancelled.pendingUsers.map((user) => user.id)).toEqual(["inbox-2"])
+
+  // A delivered event keeps the user but marks it delivered; a cancel event
+  // never falsely marks a delivered message as cancelled.
+  const delivered = applySessionEvent(run, {
+    id: "event-delivered",
+    type: "session.inbox.delivered",
+    data: { sessionID: "s-alpha", inboxID: "inbox-1" },
+  })
+  expect(delivered.pendingUsers.find((user) => user.id === "inbox-1").status).toBe(
+    "delivered"
+  )
+})

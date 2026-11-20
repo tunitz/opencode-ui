@@ -77,6 +77,7 @@ import {
   createSessionCompositionState,
   insertReferenceToken,
   insertTextAtSelection,
+  mergeRestoredDraft,
 } from "@/lib/composer-state"
 import {
   filterSlashCommands,
@@ -122,6 +123,7 @@ import { fileQueryRange, referenceRanges } from "@/lib/file-references"
 import { fsFindUrl, type ProjectEntry } from "@/lib/files"
 import { recordPerfMark, recordPerfRender } from "@/lib/perf-probe"
 import { useLiveRunStatus } from "@/lib/use-live-run"
+import { setComposerFocusHandoff } from "@/lib/composer-focus-handoff"
 import { useIsDesktop } from "@/lib/use-is-desktop"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import type { PromptSkillAttachment } from "@/lib/opencode"
@@ -582,18 +584,26 @@ export function Composer({
     }
   }, [])
 
-  // Taking a queued prompt back cancels the native inbox item and restores its
-  // exact text and attachments; it must re-enter the queue at the end.
+  function focusComposer() {
+    requestAnimationFrame(() => editor.focus())
+  }
+
+  // Returning a queued prompt to the composer cancels the native inbox item
+  // and merges its exact text/files into the draft without losing what is
+  // already there. Files that cannot be attached are reported, not dropped.
   useEffect(() => {
     const restore = nav.composerRestore
     if (!restore || restore.sessionID !== nav.activeSessionID) return
     let cancelled = false
     void Promise.resolve().then(() => {
       if (cancelled) return
-      setDraft(restore.text)
+      setDraft(mergeRestoredDraft(draftsRef.current[draftKey] ?? "", restore.text))
+      const attachedURIs = new Set(nav.attachments.map((file) => file.uri))
+      const failures: string[] = []
       for (const file of restore.files) {
+        if (attachedURIs.has(file.uri)) continue
         attachmentSequenceRef.current += 1
-        nav.addAttachment({
+        const failure = nav.addAttachment({
           id: `restored-${attachmentSequenceRef.current}`,
           name: file.name,
           mime: file.mime,
@@ -601,9 +611,23 @@ export function Composer({
           uri: file.uri,
           source: file.uri.startsWith("data:") ? "inline" : "uri",
         })
+        if (failure) failures.push(`${file.name}: ${failure}`)
+        else attachedURIs.add(file.uri)
       }
-      nav.clearComposerRestore()
-      requestAnimationFrame(() => editor.focus())
+      nav.clearComposerRestore(restore)
+      if (failures.length > 0) {
+        setAttachmentError(
+          `Some files from the queued prompt could not be restored — ${failures.join("; ")}`
+        )
+      }
+      if (!isDesktop && nav.inspectorOpen) {
+        // The sheet owns its close animation; focus is applied from its
+        // onOpenChangeComplete so it cannot land behind the closing popup.
+        setComposerFocusHandoff(() => editor.focus())
+        nav.closeInspector()
+      } else {
+        focusComposer()
+      }
     })
     return () => {
       cancelled = true
@@ -783,10 +807,6 @@ export function Composer({
       : commandFeedback?.tone === "status"
         ? commandFeedback.text
         : null)
-
-  function focusComposer() {
-    requestAnimationFrame(() => editor.focus())
-  }
 
   function isVisible(element: HTMLElement) {
     const style = getComputedStyle(element)

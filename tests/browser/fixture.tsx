@@ -7,7 +7,7 @@
  * the mounted panels request with fixed, synthetic JSON.
  */
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
-import { StrictMode, memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { StrictMode, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { AppDirection } from "@/components/app-direction"
@@ -27,11 +27,13 @@ import { SessionSidebar, SessionsSheet } from "@/components/session-nav"
 import { ThemeProvider } from "@/components/theme-provider"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { WorkspaceProvider } from "@/components/workspace-context"
-import type { FormInfo, SessionInfo, SessionMessageInfo } from "@/lib/opencode"
+import type { FormInfo, SessionInfo, SessionInboxInfo, SessionMessageInfo } from "@/lib/opencode"
+import type { ComposerAttachment } from "@/lib/attachments"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
 import { recordPerfMark, recordPerfRender } from "@/lib/perf-probe"
 import { useAppViewportHeight } from "@/lib/use-app-viewport-height"
+import { MessageFilesFixture } from "./message-files-fixture"
 
 type QACall = { kind: string; value?: string }
 type QAWindow = Window & {
@@ -632,6 +634,210 @@ function InspectorFixture() {
   )
 }
 
+/**
+ * Inspector Activity queue interactions. This fixture drives the real panel,
+ * composer, and inspector sheet against an in-memory controller so steer,
+ * rejected actions, and returning a prompt to an existing draft are observable
+ * without touching an engine.
+ */
+function InspectorQueueFixture() {
+  const base = useComposerNav()
+  const [inbox, setInbox] = useState<SessionInboxInfo[]>(() => [
+    {
+      id: "inbox-first",
+      sessionID: "s-alpha",
+      time: { created: now },
+      type: "user",
+      delivery: "queue",
+      payload: {
+        text: "Return this queued prompt",
+        files: [
+          {
+            data: "cXVldWVk",
+            mime: "text/plain",
+            source: { type: "uri", uri: "file:///synthetic/queued.txt" },
+            name: "queued.txt",
+          },
+        ],
+      },
+    },
+    {
+      id: "inbox-second",
+      sessionID: "s-alpha",
+      time: { created: now - 1_000 },
+      type: "user",
+      delivery: "queue",
+      payload: { text: "Second queued prompt" },
+    },
+    {
+      id: "inbox-third",
+      sessionID: "s-alpha",
+      time: { created: now - 2_000 },
+      type: "user",
+      delivery: "queue",
+      payload: { text: "Third queued prompt" },
+    },
+  ] as unknown as SessionInboxInfo[])
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => [
+    {
+      id: "existing-1",
+      name: "existing.txt",
+      mime: "text/plain",
+      size: null,
+      uri: "file:///synthetic/existing.txt",
+      source: "uri",
+    },
+  ])
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [composerRestores, setComposerRestores] = useState<
+    Record<string, NonNullable<OpenCodeController["composerRestore"]>[]>
+  >({})
+  const restoreNonceRef = useRef(0)
+  const composerRestore = composerRestores["s-alpha"]?.[0] ?? null
+  const inboxRef = useRef(inbox)
+  const attachmentsRef = useRef(attachments)
+  const rejectNextRef = useRef(false)
+  useEffect(() => {
+    inboxRef.current = inbox
+    attachmentsRef.current = attachments
+  }, [inbox, attachments])
+
+  const nav = {
+    ...base,
+    inbox,
+    inboxStatus: "ready",
+    inboxError: null,
+    inboxBusy: {},
+    inspectorOpen,
+    inspectorTab: "activity",
+    attachments,
+    composerRestore,
+    closeInspector: () => {
+      log("closeInspector")
+      setInspectorOpen(false)
+    },
+    loadInbox: async () => {
+      log("loadInbox")
+      return null
+    },
+    steerInboxItem: async (inboxID: string) => {
+      log("steerInboxItem", inboxID)
+      if (rejectNextRef.current) {
+        rejectNextRef.current = false
+        return "The engine rejected the steer request."
+      }
+      setInbox((current) =>
+        current.map((item) =>
+          item.id === inboxID && item.type === "user"
+            ? { ...item, delivery: "steer" }
+            : item
+        )
+      )
+      return null
+    },
+    takeBackInboxItem: async (inboxID: string) => {
+      log("takeBackInboxItem", inboxID)
+      const item = inboxRef.current.find((entry) => entry.id === inboxID)
+      if (!item || item.type !== "user") return "That queued prompt is no longer waiting."
+      setInbox((current) => current.filter((entry) => entry.id !== inboxID))
+      restoreNonceRef.current += 1
+      const restore = {
+        sessionID: "s-alpha",
+        text: item.payload.text,
+        files: (item.payload.files ?? []).flatMap((file) =>
+          file.source.type === "uri"
+            ? [{ uri: file.source.uri, name: file.name ?? "attachment", mime: file.mime }]
+            : []
+        ),
+        nonce: restoreNonceRef.current,
+      }
+      setComposerRestores((current) => ({
+        ...current,
+        "s-alpha": [...(current["s-alpha"] ?? []), restore],
+      }))
+      return null
+    },
+    cancelInboxItem: async (inboxID: string) => {
+      log("cancelInboxItem", inboxID)
+      if (rejectNextRef.current) {
+        rejectNextRef.current = false
+        return "The engine rejected the cancel request."
+      }
+      setInbox((current) => current.filter((entry) => entry.id !== inboxID))
+      return null
+    },
+    clearComposerRestore: (consumed?: { sessionID: string; nonce: number }) => {
+      const sessionID = consumed?.sessionID ?? "s-alpha"
+      setComposerRestores((current) => {
+        const list = current[sessionID]
+        if (!list?.length) return current
+        const head = list[0]
+        if (
+          consumed &&
+          (head.sessionID !== consumed.sessionID || head.nonce !== consumed.nonce)
+        ) {
+          return current
+        }
+        const remaining = list.slice(1)
+        const next = { ...current }
+        if (remaining.length) next[sessionID] = remaining
+        else delete next[sessionID]
+        return next
+      })
+    },
+    addAttachment: (attachment: ComposerAttachment) => {
+      if (attachmentsRef.current.some((item) => item.uri === attachment.uri)) {
+        return `${attachment.name} is already attached.`
+      }
+      attachmentsRef.current = [...attachmentsRef.current, attachment]
+      setAttachments(attachmentsRef.current)
+      return null
+    },
+    removeAttachment: (attachmentID: string) => {
+      attachmentsRef.current = attachmentsRef.current.filter(
+        (item) => item.id !== attachmentID
+      )
+      setAttachments(attachmentsRef.current)
+    },
+  } as unknown as OpenCodeController
+
+  return (
+    <Providers nav={nav}>
+      <div className="flex h-svh min-w-0">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center gap-2 border-b border-border p-2">
+            <span className="text-sm">Queue fixture</span>
+            <SessionInspector
+              nav={nav}
+              onOpenSettings={() => undefined}
+              onOpenWorktrees={() => undefined}
+            />
+            <button
+              type="button"
+              data-qa-reject-next
+              className="min-h-11 rounded-lg border px-2 text-xs"
+              onClick={() => {
+                rejectNextRef.current = true
+                log("rejectNext")
+              }}
+            >
+              Reject next action
+            </button>
+          </header>
+          <main className="flex min-h-0 flex-1 flex-col px-3">
+            <Composer nav={nav} />
+          </main>
+        </div>
+        <SessionInspectorPanel
+          nav={nav}
+          onOpenSettings={() => undefined}
+          onOpenWorktrees={() => undefined}
+        />
+      </div>
+    </Providers>
+  )
+}
+
 function NotesFixture({ wide = false }: { wide?: boolean }) {
   const [directory, setDirectory] = useState("/synthetic/notes")
   const nav = {
@@ -1160,9 +1366,19 @@ function PerfMessagesFixture() {
   )
 }
 
+const fixtureName = new URLSearchParams(window.location.search).get("fixture") ?? "nav"
+
 function Fixture() {
-  const fixture = new URLSearchParams(window.location.search).get("fixture")
+  const fixture = fixtureName
   switch (fixture) {
+    case "message-files-three":
+      return <MessageFilesFixture testCase="three" />
+    case "message-files-many":
+      return <MessageFilesFixture testCase="many" />
+    case "message-files-binary":
+      return <MessageFilesFixture testCase="binary" />
+    case "sidebar":
+      return <NavFixture />
     case "notes":
       return <NotesFixture />
     case "notes-wide":
@@ -1181,6 +1397,8 @@ function Fixture() {
       return <ChangesFixture />
     case "inspector":
       return <InspectorFixture />
+    case "inspector-queue":
+      return <InspectorQueueFixture />
     case "pending":
       return <PendingFixture />
     case "settings":

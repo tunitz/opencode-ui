@@ -598,6 +598,16 @@ export function applySessionEvent(
         ),
       }
 
+    case "session.inbox.cancelled":
+      // The native cancel event is authoritative. Drop only the exact inbox id
+      // so an optimistic admission does not linger as a ghost pending user.
+      return {
+        ...base,
+        pendingUsers: base.pendingUsers.filter(
+          (user) => user.id !== event.data.inboxID
+        ),
+      }
+
     case "session.inbox.delivery.changed":
       return {
         ...base,

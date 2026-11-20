@@ -20,6 +20,8 @@ import {
 
 import { buildFixture } from "./build"
 import { findChromiumExecutable } from "./chromium"
+import { checkMessageFilesStrip } from "./message-files-check"
+import { checkSidebarRecent } from "./sidebar-recent"
 import { parseSessionShortcuts, updateSessionShortcut } from "@/lib/session-shortcuts"
 
 const repoRoot = resolve(import.meta.dir, "../..")
@@ -2534,6 +2536,211 @@ if (browser) {
       await opened.context.close()
     }
   })
+
+  await run(
+    "inspector queue steer labels, progress and rejected action recovery",
+    async ({ check }) => {
+      const opened = await openPage({ width: 1280, height: 900 }, "inspector-queue")
+      const page = opened.page
+      try {
+        await resetQa(page)
+        const scope = page.locator('[data-desktop-sidebar="inspector"]')
+        await scope.waitFor({ state: "visible" })
+        await scope.getByRole("tab", { name: "Activity" }).click()
+        const first = scope.locator("li").filter({ hasText: "Return this queued prompt" })
+        const second = scope.locator("li").filter({ hasText: "Second queued prompt" })
+        await first.waitFor({ state: "visible" })
+        check(
+          "first prompt offers the explicit steer action",
+          await first.getByRole("button", { name: "Steer current run" }).isVisible()
+        )
+        check(
+          "non-head prompt has no steer action at all",
+          (await second.getByRole("button", { name: /steer/i }).count()) === 0
+        )
+        check(
+          "ordinary queue state is labeled as queued",
+          (await first.textContent())?.includes("Queued") === true
+        )
+
+        await first.getByRole("button", { name: "Steer current run" }).click()
+        await first.getByText("Waiting to steer").waitFor({ state: "visible" })
+        check(
+          "an already-steering prompt has no redundant steer action",
+          (await first.getByRole("button", { name: "Steer current run" }).count()) === 0
+        )
+        check(
+          "success is visible in the queue live region",
+          await scope
+            .getByText("Delivery set to steer for the next opportunity.")
+            .isVisible()
+        )
+        check(
+          "one steer request was sent",
+          (await qaCalls(page)).filter((call) => call.kind === "steerInboxItem")
+            .length === 1
+        )
+
+        await page.getByRole("button", { name: "Reject next action" }).click()
+        await first.getByRole("button", { name: "Cancel queued prompt 1" }).click()
+        const confirm = page.getByRole("alertdialog")
+        await confirm.waitFor({ state: "visible" })
+        check(
+          "cancel requires an explicit destructive confirmation",
+          await confirm.getByRole("button", { name: "Cancel prompt" }).isVisible()
+        )
+        await confirm.getByRole("button", { name: "Cancel prompt" }).click()
+        const alert = scope
+          .getByRole("alert")
+          .filter({ hasText: "The engine rejected the cancel request." })
+        await alert.waitFor({ state: "visible" })
+        check(
+          "a rejected action shows an associated error with Retry",
+          await alert.getByRole("button", { name: "Retry cancel" }).isVisible()
+        )
+        await alert.getByRole("button", { name: "Retry cancel" }).click()
+        await confirm.getByRole("button", { name: "Cancel prompt" }).click()
+        await first.waitFor({ state: "detached" })
+        check(
+          "retry reaches the native action a second time",
+          (await qaCalls(page)).filter((call) => call.kind === "cancelInboxItem")
+            .length === 2
+        )
+        check(
+          "no page errors",
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) =>
+            result.name.startsWith("inspector queue steer labels")
+          )!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  )
+
+  await run(
+    "inspector queue return to draft keeps existing draft and focuses composer on mobile",
+    async ({ check }) => {
+      const opened = await openPage(
+        { width: 390, height: 844 },
+        "inspector-queue",
+        {
+          "opencode-ui:drafts": JSON.stringify({
+            version: 1,
+            drafts: { "s-alpha": "Existing draft line" },
+          }),
+        }
+      )
+      const page = opened.page
+      try {
+        await resetQa(page)
+        const drawer = page.locator('[data-fixed-drawer="inspector"]')
+        await drawer.waitFor({ state: "visible" })
+        await drawer.getByRole("tab", { name: "Activity" }).click()
+        const first = drawer.locator("li").filter({ hasText: "Return this queued prompt" })
+        await first.getByRole("button", { name: "Return to draft" }).click()
+
+        const textarea = page.locator("[data-composer-input]")
+        await poll(async () => {
+          const value = await textarea.inputValue()
+          return value.includes("Existing draft line") &&
+            value.includes("Return this queued prompt")
+            ? true
+            : null
+        }, "the existing and restored draft text were not both present")
+        check("existing and returned draft text are both present", true)
+        check("the existing attachment is kept", await page.getByText("existing.txt").first().isVisible())
+        check("the returned attachment is added", await page.getByText("queued.txt").first().isVisible())
+        await poll(
+          async () => (!(await drawer.isVisible()) ? true : null),
+          "mobile inspector sheet stayed open after returning to draft"
+        )
+        check("mobile inspector sheet closes on success", true)
+        const focused = await activeElement(page)
+        check(
+          "focus lands on the composer textarea",
+          focused.ariaLabel === "Message",
+          JSON.stringify(focused)
+        )
+        check(
+          "the native take-back action was called",
+          (await qaCalls(page)).some((call) => call.kind === "takeBackInboxItem")
+        )
+        check(
+          "no page errors",
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) =>
+            result.name.startsWith("inspector queue return to draft")
+          )!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  )
+
+  await run(
+    "inspector queue overlapping take-backs keep queued restores",
+    async ({ check }) => {
+      const opened = await openPage({ width: 1280, height: 900 }, "inspector-queue")
+      const page = opened.page
+      try {
+        await resetQa(page)
+        const scope = page.locator('[data-desktop-sidebar="inspector"]')
+        await scope.waitFor({ state: "visible" })
+        await scope.getByRole("tab", { name: "Activity" }).click()
+        const first = scope.locator("li").filter({ hasText: "Return this queued prompt" })
+        const second = scope.locator("li").filter({ hasText: "Second queued prompt" })
+        const third = scope.locator("li").filter({ hasText: "Third queued prompt" })
+        await first.getByRole("button", { name: "Return to draft" }).click()
+        await second.getByRole("button", { name: "Return to draft" }).click()
+
+        const textarea = page.locator("[data-composer-input]")
+        await poll(async () => {
+          const value = await textarea.inputValue()
+          return value.includes("Return this queued prompt") &&
+            value.includes("Second queued prompt")
+            ? true
+            : null
+        }, "both returned prompts did not reach the draft")
+        check("two quick take-backs both reach the draft", true)
+        await third.getByRole("button", { name: "Return to draft" }).click()
+        await poll(async () => {
+          const value = await textarea.inputValue()
+          return value.includes("Third queued prompt") ? true : null
+        }, "a later take-back did not reach the draft")
+        check("a third take-back after the queue drains also reaches the draft", true)
+        check(
+          "all three take-backs reached the native action",
+          (await qaCalls(page)).filter((call) => call.kind === "takeBackInboxItem")
+            .length === 3
+        )
+        check("desktop inspector remains usable", await scope.isVisible())
+        check(
+          "no page errors",
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) =>
+            result.name.startsWith("inspector queue overlapping take-backs")
+          )!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -4628,6 +4835,116 @@ if (browser) {
       }
     }
   )
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar Recent/Archive collapse and bounded scrolling
+// ---------------------------------------------------------------------------
+if (browser) {
+  await run("sidebar Recent and Archive collapse layout", async ({ check }) => {
+    const cases = [
+      ["desktop", { width: 1280, height: 900 }, false, "no-preference"],
+      ["mobile 390", { width: 390, height: 844 }, true, "no-preference"],
+      ["mobile 320", { width: 320, height: 700 }, true, "no-preference"],
+      ["reduced motion", { width: 1280, height: 900 }, false, "reduce"],
+    ] as const
+    for (const [label, viewport, mobile, reducedMotion] of cases) {
+      const opened = await openPage(viewport, "sidebar", undefined, {
+        reducedMotion,
+      })
+      try {
+        const scopedCheck: typeof check = (step, ok, detail) =>
+          check(`${label}: ${step}`, ok, detail)
+        await checkSidebarRecent(opened.page, { mobile, check: scopedCheck })
+        check(
+          `${label}: no page errors`,
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        check(
+          `${label}: no console errors`,
+          opened.consoleErrors.length === 0,
+          opened.consoleErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) =>
+            result.name.startsWith("sidebar Recent and Archive")
+          )!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Sent-message attachment strip regressions
+// ---------------------------------------------------------------------------
+if (browser) {
+  await run("message attachment strip layout and keyboard reach", async ({ check }) => {
+    const cases = [
+      {
+        label: "320 three",
+        fixture: "message-files-three",
+        viewport: { width: 320, height: 700 },
+        testCase: "three",
+        dir: "ltr",
+        hasTouch: false,
+      },
+      {
+        label: "390 many touch RTL",
+        fixture: "message-files-many",
+        viewport: { width: 390, height: 844 },
+        testCase: "many",
+        dir: "rtl",
+        hasTouch: true,
+      },
+      {
+        label: "desktop binary keyboard",
+        fixture: "message-files-binary",
+        viewport: { width: 1280, height: 900 },
+        testCase: "binary",
+        dir: "ltr",
+        hasTouch: false,
+      },
+    ] as const
+    for (const item of cases) {
+      const opened = await openPage(item.viewport, item.fixture, undefined, {
+        hasTouch: item.hasTouch,
+        dir: item.dir,
+      })
+      try {
+        const scopedCheck: typeof check = (step, ok, detail) =>
+          check(`${item.label}: ${step}`, ok, detail)
+        await checkMessageFilesStrip(opened.page, {
+          testCase: item.testCase,
+          dir: item.dir,
+          hasTouch: item.hasTouch,
+          check: scopedCheck,
+        })
+        check(
+          `${item.label}: no page errors`,
+          opened.pageErrors.length === 0,
+          opened.pageErrors.join(" | ")
+        )
+        check(
+          `${item.label}: no console errors`,
+          opened.consoleErrors.length === 0,
+          opened.consoleErrors.join(" | ")
+        )
+        mergeDiagnostics(
+          results.find((result) =>
+            result.name.startsWith("message attachment strip")
+          )!,
+          opened
+        )
+      } finally {
+        await opened.context.close()
+      }
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

@@ -39,5 +39,18 @@ export function inboxSummary(item: SessionInboxInfo): string {
 }
 
 export function inboxDeliveryLabel(delivery: PromptDelivery): string {
-  return delivery === "queue" ? "Queued" : "Steer pending"
+  return delivery === "queue" ? "Queued" : "Waiting to steer"
+}
+
+/**
+ * Native delivery is a PATCH of the `delivery` field: it changes how the next
+ * opportunity is handled and never reorders the queue. Offer the explicit
+ * steer action only for the first, ordinarily queued user prompt; other items
+ * keep their native place without a disabled action that implies reordering.
+ */
+export function canSteerInboxItem(
+  item: SessionInboxInfo,
+  index: number
+): boolean {
+  return index === 0 && item.type === "user" && item.delivery === "queue"
 }

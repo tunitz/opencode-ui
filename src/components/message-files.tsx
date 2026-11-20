@@ -1,5 +1,5 @@
 import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState, type FocusEvent } from "react"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -191,8 +191,11 @@ function AttachmentChip({
         state="done"
         size="sm"
         className={cn(
-          "min-h-11 cursor-pointer overflow-hidden border border-border/70 bg-muted p-0 text-muted-foreground",
-          isImage ? "size-11 rounded-lg" : "max-w-[8.5rem] rounded-lg"
+          "min-h-11 min-w-0 cursor-pointer overflow-hidden border border-border/70 bg-muted p-0 text-muted-foreground",
+          // The installed Attachment primitive's horizontal orientation sets
+          // min-w-40; min-w-0 keeps thumbnails at one 44px tile and lets the
+          // file variant honour its own bounded max width.
+          isImage ? "size-11 shrink-0 rounded-lg" : "max-w-[8.5rem] rounded-lg"
         )}
       >
         <AttachmentMedia
@@ -239,8 +242,9 @@ function AttachmentChip({
     <Attachment
       state="done"
       size="sm"
+      tabIndex={0}
       aria-label={`${imageLabel(file)}, preview unavailable`}
-      className="flex min-h-11 max-w-[8.5rem] items-center overflow-hidden rounded-lg border border-border/70 bg-background/60 p-0 text-muted-foreground"
+      className="flex min-h-11 min-w-0 max-w-[8.5rem] items-center overflow-hidden rounded-lg border border-border/70 bg-background/60 p-0 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
     >
       <AttachmentMedia variant="icon" className="size-11 rounded-none bg-transparent">
         <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
@@ -256,45 +260,13 @@ function AttachmentChip({
 }
 
 export function MessageFiles({ files }: { files: DisplayFile[] }) {
-  const [width, setWidth] = useState(0)
-  const [expanded, setExpanded] = useState(false)
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [previewError, setPreviewError] = useState(false)
   const rowRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
 
-  useEffect(() => {
-    const element = rowRef.current
-    if (!element) return
-
-    const measure = () => setWidth(element.getBoundingClientRect().width)
-    measure()
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure)
-      return () => window.removeEventListener("resize", measure)
-    }
-    const observer = new ResizeObserver(measure)
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
-
   if (files.length === 0) return null
 
-  const hasWideChip = files.some((file) => previewKind(file) !== "image")
-  const slots =
-    width < 340
-      ? 2
-      : width < 640
-        ? hasWideChip
-          ? 2
-          : 3
-        : 4
-  const hasOverflow = files.length > slots
-  const visibleCount = expanded
-    ? files.length
-    : Math.max(1, slots - (hasOverflow ? 1 : 0))
-  const visible = files.slice(0, visibleCount)
-  const hiddenCount = files.length - visibleCount
   const previewFile = previewIndex === null ? null : files[previewIndex]
   const kind = previewFile ? previewKind(previewFile) : null
   const imageItems = files
@@ -313,42 +285,49 @@ export function MessageFiles({ files }: { files: DisplayFile[] }) {
     setPreviewIndex(imageItems[next].index)
   }
 
+  // Native focus scrolling uses "nearest" semantics and can leave a wide chip
+  // partly clipped. Fully reveal whichever chip receives focus (Tab, preview
+  // close focus return, or pointer focus) in the strip's writing direction.
+  function revealFocusedChip(event: FocusEvent<HTMLDivElement>) {
+    const chip = (event.target as HTMLElement).closest<HTMLElement>('[data-slot="attachment"]')
+    if (!chip) return
+    // Defer past the browser's own "nearest" focus scroll; centering works in
+    // both LTR and RTL without relying on signed scrollLeft values.
+    requestAnimationFrame(() => {
+      if (chip.isConnected) chip.scrollIntoView({ block: "nearest", inline: "center" })
+    })
+  }
+
   return (
     <>
       <div
         ref={rowRef}
-        tabIndex={-1}
+        tabIndex={0}
         role="group"
         aria-label={`${files.length} attached file${files.length === 1 ? "" : "s"}`}
-        className={cn(
-          "flex w-full min-w-0 items-center justify-end gap-1.5",
-          expanded ? "flex-wrap" : "flex-nowrap"
-        )}
+        onFocus={revealFocusedChip}
+        className="flex w-full min-w-0 overflow-x-auto overscroll-x-contain scrollbar-thin py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        {visible.map((file, index) => (
-          <AttachmentChip
-            key={`${fileName(file)}-${index}`}
-            file={file}
-            onPreview={(nextKind, trigger) => {
-              if (!nextKind) return
-              triggerRef.current = trigger
-              setPreviewError(false)
-              setPreviewIndex(index)
-            }}
-          />
-        ))}
-        {hasOverflow ? (
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11 shrink-0 px-2.5 text-xs"
-            aria-label={expanded ? "Show fewer attachments" : `Show ${hiddenCount} more attachment${hiddenCount === 1 ? "" : "s"}`}
-            aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? "Show less" : `+${hiddenCount} more`}
-          </Button>
-        ) : null}
+        {/*
+          min-w-full keeps short rows end-aligned; w-max lets long rows grow to
+          their content so the logical start is reachable by local scrolling.
+          justify-end no longer clips items: it only positions the short-row
+          case, where there is no overflow to hide.
+        */}
+        <div className="flex w-max min-w-full shrink-0 items-center justify-end gap-1.5 px-1">
+          {files.map((file, index) => (
+            <AttachmentChip
+              key={`${fileName(file)}-${index}`}
+              file={file}
+              onPreview={(nextKind, trigger) => {
+                if (!nextKind) return
+                triggerRef.current = trigger
+                setPreviewError(false)
+                setPreviewIndex(index)
+              }}
+            />
+          ))}
+        </div>
       </div>
 
       <Dialog

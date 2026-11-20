@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react"
@@ -18,6 +19,16 @@ import {
 
 import { FormView } from "@/components/form-view"
 import { PermissionCard } from "@/components/permission-card"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { CodeBlock, CodeBlockContent } from "@/components/ui/code-block"
@@ -38,7 +49,7 @@ import {
   TraceLine,
   TraceTitle,
 } from "@/components/ui/trace"
-import { inboxDeliveryLabel, inboxSummary } from "@/lib/queue"
+import { canSteerInboxItem, inboxDeliveryLabel, inboxSummary } from "@/lib/queue"
 import type { SessionInfo } from "@/lib/opencode"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { liveRunStore } from "@/lib/live-run-store"
@@ -48,6 +59,16 @@ import { formatDurationMs } from "@/lib/context-usage"
 import { cn } from "@/lib/utils"
 
 type ChildNode = { session: SessionInfo; depth: number }
+
+type QueueAction = "steer" | "edit" | "cancel"
+
+type QueueFeedback = {
+  sessionID: string
+  inboxID: string
+  action: QueueAction
+  tone: "status" | "error"
+  text: string
+}
 
 /** Loaded child sessions only; never presented as an unbounded native tree. */
 export function boundedChildSessions(
@@ -145,6 +166,67 @@ export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
   const attention = nav.pendingPermissions.length + nav.pendingForms.length
   const running = run?.status === "running" || run?.status === "submitting"
   const [now, setNow] = useState<number | null>(null)
+  const [feedback, setFeedback] = useState<QueueFeedback | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null)
+  const [pendingAction, setPendingAction] = useState<Record<string, QueueAction>>({})
+  const actionGuardRef = useRef<Set<string>>(new Set())
+
+  async function runQueueAction(inboxID: string, action: QueueAction) {
+    const sessionID = nav.activeSessionID
+    if (!sessionID) {
+      setFeedback({
+        sessionID: "",
+        inboxID,
+        action,
+        tone: "error",
+        text: "Select a session first.",
+      })
+      return
+    }
+    const index = nav.inbox.findIndex((entry) => entry.id === inboxID)
+    if (index < 0) return
+    const eligible =
+      action === "steer"
+        ? canSteerInboxItem(nav.inbox[index], index)
+        : nav.inbox[index].type === "user"
+    if (!eligible) return
+    // The native hook also guards by inbox id; this keeps a double click from
+    // reaching it before its state has propagated to the component.
+    if (actionGuardRef.current.has(inboxID) || nav.inboxBusy[inboxID]) return
+    actionGuardRef.current.add(inboxID)
+    setPendingAction((current) => ({ ...current, [inboxID]: action }))
+    setFeedback(null)
+
+    let failure: string | null
+    try {
+      if (action === "steer") failure = await nav.steerInboxItem(inboxID)
+      else if (action === "edit") failure = await nav.takeBackInboxItem(inboxID)
+      else failure = await nav.cancelInboxItem(inboxID)
+    } catch (error) {
+      failure = error instanceof Error ? error.message : "Could not complete that action."
+    } finally {
+      actionGuardRef.current.delete(inboxID)
+      setPendingAction((current) => {
+        const next = { ...current }
+        delete next[inboxID]
+        return next
+      })
+    }
+
+    setFeedback({
+      sessionID,
+      inboxID,
+      action,
+      tone: failure ? "error" : "status",
+      text: failure
+        ? failure
+        : action === "steer"
+          ? "Delivery set to steer for the next opportunity."
+          : action === "edit"
+            ? "Returned to the composer and removed from the queue; it may already have been delivered."
+            : "Prompt removed from the queue; it may already have been delivered.",
+    })
+  }
 
   useEffect(() => {
     if (!running) return
@@ -165,6 +247,22 @@ export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
             : run?.status === "completed"
               ? "Last run completed"
               : "Idle"
+
+  // Feedback stays bound to the session that started the action; switching
+  // sessions cannot make another session's error look like its own. Only one
+  // lightweight latest outcome is kept — never the native payload.
+  const visibleFeedback =
+    feedback?.sessionID === (nav.activeSessionID ?? "") ? feedback : null
+  const canRetry =
+    visibleFeedback?.tone === "error" &&
+    (() => {
+      const index = nav.inbox.findIndex((entry) => entry.id === visibleFeedback.inboxID)
+      if (index < 0) return false
+      const item = nav.inbox[index]
+      return visibleFeedback.action === "steer"
+        ? canSteerInboxItem(item, index)
+        : item.type === "user"
+    })()
 
   return (
     <div className="flex flex-col gap-5 px-3 pb-6">
@@ -234,12 +332,58 @@ export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
             </Button>
           </div>
         ) : null}
-        {nav.inbox.length > 0 ? (
-          <p className="text-[10px] text-muted-foreground">
-            Taking a prompt back restores its text and files; skills and agents
-            are not restored.
-          </p>
-        ) : null}
+        {/* Two persistent, non-nested live regions: the outcome is announced
+            even when its row leaves the queue on success. */}
+        <div className="flex flex-col gap-1">
+          <div
+            role="status"
+            aria-atomic="true"
+            className={cn(
+              "rounded-lg px-2 py-1 text-[11px] break-words",
+              visibleFeedback?.tone === "status"
+                ? "bg-muted/60 text-muted-foreground"
+                : "sr-only"
+            )}
+          >
+            {visibleFeedback?.tone === "status" ? visibleFeedback.text : ""}
+          </div>
+          <div
+            role="alert"
+            aria-atomic="true"
+            className={cn(
+              "flex flex-wrap items-center gap-1 rounded-lg px-2 py-1 text-[11px] break-words",
+              visibleFeedback?.tone === "error"
+                ? "bg-destructive/10 text-destructive"
+                : "sr-only"
+            )}
+          >
+            {visibleFeedback?.tone === "error" ? (
+              <>
+                <span className="min-w-0 flex-1">{visibleFeedback.text}</span>
+                {canRetry ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 px-3 text-[11px]"
+                    disabled={
+                      pendingAction[visibleFeedback.inboxID] !== undefined ||
+                      nav.inboxBusy[visibleFeedback.inboxID] === true
+                    }
+                    onClick={() => {
+                      if (visibleFeedback.action === "cancel") {
+                        setCancelTarget(visibleFeedback.inboxID)
+                      } else {
+                        void runQueueAction(visibleFeedback.inboxID, visibleFeedback.action)
+                      }
+                    }}
+                  >
+                    {visibleFeedback.action === "cancel" ? "Retry cancel" : "Retry"}
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </div>
         {nav.inbox.length === 0 && nav.inboxStatus !== "loading" ? (
           <Empty className="p-3">
             <EmptyHeader>
@@ -250,47 +394,78 @@ export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
         ) : (
           <ul className="flex flex-col gap-1.5">
             {nav.inbox.map((item, index) => {
-              const busy = nav.inboxBusy[item.id] === true
+              const action = pendingAction[item.id]
+              const busy = nav.inboxBusy[item.id] === true || action !== undefined
+              const isUser = item.type === "user"
               return (
                 <li key={item.id}>
                   <Item variant="outline" size="sm">
                     <ItemContent className="min-w-0 flex-1">
                       <p className="line-clamp-3 break-words text-[13px]">{inboxSummary(item)}</p>
                       <p className="text-[10px] text-muted-foreground">
-                        {item.type === "user" ? inboxDeliveryLabel(item.delivery === "queue" ? "queue" : "steer") : item.type}
+                        {isUser ? inboxDeliveryLabel(item.delivery === "queue" ? "queue" : "steer") : item.type}
                       </p>
+                      {isUser && index === 0 && item.delivery === "queue" ? (
+                        <p className="text-[10px] text-muted-foreground">
+                          Steering applies at the next opportunity, not instantly.
+                        </p>
+                      ) : null}
+                      {isUser &&
+                      ((item.payload.agents?.length ?? 0) > 0 ||
+                        (item.payload.skills?.length ?? 0) > 0) ? (
+                        <p className="text-[10px] text-muted-foreground">
+                          Skills and agents from this prompt are not restored.
+                        </p>
+                      ) : null}
                     </ItemContent>
-                    {item.type === "user" ? (
+                    {isUser ? (
                       <ItemActions className="w-full flex-wrap">
+                        {canSteerInboxItem(item, index) ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-11 px-2 text-[11px]"
+                            aria-busy={action === "steer"}
+                            disabled={busy}
+                            onClick={() => void runQueueAction(item.id, "steer")}
+                          >
+                            {action === "steer" ? (
+                              <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+                            ) : (
+                              <MoveUpIcon aria-hidden="true" className="size-3.5" />
+                            )}
+                            {action === "steer" ? "Steering…" : "Steer current run"}
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           variant="outline"
                           className="h-11 px-2 text-[11px]"
-                          disabled={busy || index !== 0}
-                          onClick={() => void nav.steerInboxItem(item.id)}
-                        >
-                          <MoveUpIcon aria-hidden="true" className="size-3.5" />
-                          Send first as steer
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-11 px-2 text-[11px]"
+                          aria-busy={action === "edit"}
                           disabled={busy}
-                          onClick={() => void nav.takeBackInboxItem(item.id)}
+                          onClick={() => void runQueueAction(item.id, "edit")}
                         >
-                          <CornerUpLeftIcon aria-hidden="true" className="size-3.5" />
-                          Take back
+                          {action === "edit" ? (
+                            <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+                          ) : (
+                            <CornerUpLeftIcon aria-hidden="true" className="size-3.5" />
+                          )}
+                          {action === "edit" ? "Returning…" : "Return to draft"}
                         </Button>
                         <Button
                           type="button"
                           variant="ghost"
                           className="h-11 px-2 text-[11px]"
-                          disabled={busy}
+                          aria-busy={action === "cancel"}
                           aria-label={`Cancel queued prompt ${index + 1}`}
-                          onClick={() => void nav.cancelInboxItem(item.id)}
+                          disabled={busy}
+                          onClick={() => setCancelTarget(item.id)}
                         >
-                          <XIcon aria-hidden="true" className="size-3.5" />
+                          {action === "cancel" ? (
+                            <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+                          ) : (
+                            <XIcon aria-hidden="true" className="size-3.5" />
+                          )}
                           Cancel
                         </Button>
                       </ItemActions>
@@ -378,6 +553,36 @@ export function ActivityPanel({ nav }: { nav: OpenCodeController }) {
           </Marker>
         </section>
       ) : null}
+
+      <AlertDialog
+        open={cancelTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setCancelTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this queued prompt?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cancel removes it from the native queue. Its text and files are
+              not returned to your draft, and the prompt may already have been
+              delivered.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep prompt</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (cancelTarget) void runQueueAction(cancelTarget, "cancel")
+                setCancelTarget(null)
+              }}
+            >
+              Cancel prompt
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -96,6 +96,20 @@ export function insertReferenceToken(
   }
 }
 
+/**
+ * Merge a returned queued prompt into the current draft without losing either
+ * string. An empty/whitespace-only draft is replaced exactly; otherwise the
+ * restored text is appended with the smallest separator that keeps the lines
+ * distinct. No trimming or rewriting of either original string.
+ */
+export function mergeRestoredDraft(existing: string, restored: string): string {
+  if (!existing.trim()) return restored
+  if (!restored.trim()) return existing
+  const separator =
+    existing.endsWith("\n") || restored.startsWith("\n") ? "" : "\n\n"
+  return `${existing}${separator}${restored}`
+}
+
 /** Composition belongs to the mounted editor, never the next session. */
 export function createSessionCompositionState() {
   let active: string | null = null

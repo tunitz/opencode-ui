@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/sheet"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { fixedMobileDrawerStyle } from "@/lib/drawer-layout"
+import { takeComposerFocusHandoff } from "@/lib/composer-focus-handoff"
 import { contextLimitForModel, formatTokenCount } from "@/lib/context-usage"
 import { INSPECTOR_TAB_LABELS, type InspectorTab } from "@/lib/inspector-tabs"
 import { useIsDesktop } from "@/lib/use-is-desktop"
@@ -572,6 +573,9 @@ export function SessionInspector({
           return
         }
         if (!nav.inspectorOpen) nav.openInspector(nav.inspectorTab)
+      }}
+      onOpenChangeComplete={(next) => {
+        if (!next) takeComposerFocusHandoff()?.()
       }}
     >
       <InspectorTrigger nav={nav} sheet />

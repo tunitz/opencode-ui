@@ -310,7 +310,7 @@ export type OpenCodeController = OpenCodeState & {
   cancelInboxItem: (inboxID: string) => Promise<string | null>
   takeBackInboxItem: (inboxID: string) => Promise<string | null>
   steerInboxItem: (inboxID: string) => Promise<string | null>
-  clearComposerRestore: () => void
+  clearComposerRestore: (consumed?: Pick<ComposerRestore, "sessionID" | "nonce">) => void
   clearCompactionNotice: () => void
   loadTurnDiff: (sessionID: string, from?: string, to?: string) => Promise<SessionDiffResult>
   loadSessionContext: (sessionID: string) => Promise<SessionContextSnapshot | null>
@@ -496,7 +496,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   const [inboxStatus, setInboxStatus] = useState<LoadStatus>("idle")
   const [inboxError, setInboxError] = useState<string | null>(null)
   const [inboxBusy, setInboxBusy] = useState<Record<string, true>>({})
-  const [composerRestore, setComposerRestore] = useState<ComposerRestore | null>(null)
+  const [composerRestores, setComposerRestores] = useState<Record<string, ComposerRestore[]>>({})
+  // Only the active session's oldest unconsumed restore is exposed. Queues for
+  // other sessions stay intact and cannot block or focus this one.
+  const composerRestore = composerRestores[activeSessionID ?? ""]?.[0] ?? null
   const [focusMessageID, setFocusMessageID] = useState<string | null>(null)
   const [compactionNotice, setCompactionNotice] = useState<CompactionNotice | null>(null)
   const archivedRequest = useRef(0)
@@ -2201,6 +2204,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     inboxRequest.current += 1
     activeSessionsRequest.current += 1
     olderAbortRef.current?.abort()
+    setComposerRestores({})
     liveRunStore.reset()
     agentCatalogCache.invalidate()
     modelCatalogCache.invalidate()
@@ -2661,12 +2665,22 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setInboxBusy((current) => ({ ...current, [inboxID]: true }))
     try {
       await openCode.session.inbox.cancel({ sessionID, inboxID })
+      // A 204 DELETE can be a no-op when the native item was already delivered;
+      // the exact outcome is not recoverable from the response. Keep the copy
+      // conservative and never mutate the newly active session's inbox.
+      if (activeSessionRef.current !== sessionID) {
+        // The native DELETE already succeeded; do not report a false failure
+        // that would drop the returned prompt. Skip only the stale local view.
+        return null
+      }
       setInbox((current) => current.filter((item) => item.id !== inboxID))
       return null
     } catch (error) {
       const tag = errorTag(error)
-      if (tag === "InboxNotFoundError" || tag === "NotFoundError") {
-        setInbox((current) => current.filter((item) => item.id !== inboxID))
+      if (tag === "ConflictError" || tag === "SessionNotFoundError") {
+        if (activeSessionRef.current === sessionID) {
+          setInbox((current) => current.filter((item) => item.id !== inboxID))
+        }
         return "That queued message is no longer waiting; it may already be delivered."
       }
       return errorMessage(error)
@@ -2690,6 +2704,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setInboxBusy((current) => ({ ...current, [inboxID]: true }))
     try {
       await openCode.session.inbox.update({ sessionID, inboxID, delivery: "steer" })
+      if (activeSessionRef.current !== sessionID) {
+        // PATCH succeeded; skip the stale local view without a false error.
+        return null
+      }
       setInbox((current) =>
         current.map((item) =>
           item.id === inboxID && item.type === "user"
@@ -2697,8 +2715,40 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
             : item
         )
       )
+      // A successful PATCH is an explicit new steering intent for this exact
+      // pending user. Reflect it locally so the conversation does not keep
+      // showing the original queue/backend mismatch caption; a server-chosen
+      // delivery on ordinary admission stays untouched.
+      updateLiveRuns((current) => {
+        const run = current[sessionID]
+        if (!run) return current
+        const pendingUsers = run.pendingUsers.map((user) =>
+          user.id === inboxID
+            ? {
+                ...user,
+                delivery: "steer" as const,
+                requestedSteer: true,
+                requestedDelivery: "steer" as const,
+              }
+            : user
+        )
+        if (pendingUsers.every((user, index) => user === run.pendingUsers[index])) {
+          return current
+        }
+        return { ...current, [sessionID]: { ...run, pendingUsers } }
+      })
       return null
     } catch (error) {
+      // PATCH delivery conflicts when the item is no longer pending. The
+      // native event metadata cannot distinguish that from a normal cancel,
+      // so keep the feedback conservative instead of claiming a known state.
+      const tag = errorTag(error)
+      if (tag === "ConflictError" || tag === "SessionNotFoundError") {
+        if (activeSessionRef.current === sessionID) {
+          setInbox((current) => current.filter((item) => item.id !== inboxID))
+        }
+        return "That prompt is no longer waiting; its delivery may already be set."
+      }
       return errorMessage(error)
     } finally {
       delete inboxBusyRef.current[inboxID]
@@ -2708,7 +2758,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
         return next
       })
     }
-  }, [])
+  }, [updateLiveRuns])
 
   const takeBackInboxItem = useCallback(async (inboxID: string) => {
     const sessionID = activeSessionRef.current
@@ -2730,16 +2780,45 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
         : []
     })
     restoreSequence.current += 1
-    setComposerRestore({
+    const restore: ComposerRestore = {
       sessionID,
       text: item.payload.text,
       files,
       nonce: restoreSequence.current,
-    })
+    }
+    // Both native DELETEs may succeed before the composer consumes either one.
+    // Append to the originating session's queue regardless of the current UI
+    // selection; no prompt is silently overwritten or blocks another session.
+    setComposerRestores((current) => ({
+      ...current,
+      [sessionID]: [...(current[sessionID] ?? []), restore],
+    }))
     return null
   }, [cancelInboxItem])
 
-  const clearComposerRestore = useCallback(() => setComposerRestore(null), [])
+  const clearComposerRestore = useCallback(
+    (consumed?: Pick<ComposerRestore, "sessionID" | "nonce">) => {
+      const sessionID = consumed?.sessionID ?? activeSessionRef.current
+      if (!sessionID) return
+      setComposerRestores((current) => {
+        const list = current[sessionID]
+        if (!list?.length) return current
+        const head = list[0]
+        if (
+          consumed &&
+          (head.sessionID !== consumed.sessionID || head.nonce !== consumed.nonce)
+        ) {
+          return current
+        }
+        const remaining = list.slice(1)
+        const next = { ...current }
+        if (remaining.length) next[sessionID] = remaining
+        else delete next[sessionID]
+        return next
+      })
+    },
+    []
+  )
   const clearCompactionNotice = useCallback(() => setCompactionNotice(null), [])
 
   // A queued compaction may never emit a terminal event (older engines, a
