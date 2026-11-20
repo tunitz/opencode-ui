@@ -26,6 +26,7 @@ import {
   type TokenUsageInfo,
 } from "@/lib/opencode"
 import { agentModelDefaults } from "@/lib/session-selection"
+import { mergeRefreshedSessions } from "@/lib/session-refresh"
 import { createStreamWatchdog } from "@/lib/stream-watchdog"
 import { useShallowMemo } from "@/lib/use-shallow-memo"
 import { recordPerfMark } from "@/lib/perf-probe"
@@ -138,7 +139,8 @@ type SessionQuery = {
 }
 
 const SESSION_LIMIT = 50
-/** Sidebar groups grow in small pages so a large engine stays responsive. */
+/** First page fills the Recent/Archive lists; later scrolls append this many. */
+export const SESSION_INITIAL_PAGE_SIZE = 20
 const SESSION_PAGE_SIZE = 10
 const MESSAGE_LIMIT = 50
 // Catalog caches are keyed by directory; this sentinel stands for the
@@ -273,7 +275,7 @@ export type OpenCodeController = OpenCodeState & {
   retryConnection: () => void
   resetForEngineSwitch: (reconnect?: boolean) => void
   retryProjects: () => void
-  refreshSessions: () => void
+  refreshSessions: (background?: boolean) => void
   loadMoreSessions: () => Promise<string | null>
   loadSubsessionPage: (
     parentID: string,
@@ -997,9 +999,29 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     async (
       { directory: nextDirectory, projectID: nextProjectID }: SessionQuery,
       selectSessionID?: string,
-      createdSession?: SessionInfo
+      createdSession?: SessionInfo,
+      background = false
     ) => {
       const request = ++sessionsRequest.current
+      if (background) {
+        // Tab wake: reconcile the newest page into the already loaded pages.
+        // Never replace the list or reset the cursor — that would discard
+        // everything infinite scroll has accumulated and restart paging.
+        try {
+          const response = await openCode.session.list({
+            limit: SESSION_INITIAL_PAGE_SIZE,
+            order: "desc",
+            archived: false,
+            ...(nextProjectID ? { project: nextProjectID } : {}),
+            ...(nextDirectory ? { directory: nextDirectory } : {}),
+          })
+          if (request !== sessionsRequest.current) return
+          setSessions((previous) => mergeRefreshedSessions(previous, response.data))
+        } catch {
+          // Keep the loaded pages; the reconnecting stream reconciles live events.
+        }
+        return
+      }
       setSessionsStatus("loading")
       setSessionsError(null)
       sessionsCursorRef.current = null
@@ -1009,7 +1031,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
 
       try {
         const response = await openCode.session.list({
-          limit: SESSION_PAGE_SIZE,
+          limit: SESSION_INITIAL_PAGE_SIZE,
           order: "desc",
           archived: false,
           ...(nextProjectID ? { project: nextProjectID } : {}),
@@ -1159,11 +1181,15 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     }
   }, [])
 
-  /** Resolve pinned sessions that are outside the current paged session list. */
+  /**
+   * Resolve every pinned session in one asynchronous pass, independent of the
+   * paged Recent/Archive queries. Pinned ids live in the app server's shortcuts
+   * state, so a pinned session far outside the first pages is still included.
+   */
   const loadPinnedSessions = useCallback(async (ids: readonly string[]) => {
     if (ids.length === 0) return []
     const results = await Promise.allSettled(
-      ids.slice(0, 50).map((sessionID) => openCode.session.get({ sessionID }))
+      ids.map((sessionID) => openCode.session.get({ sessionID }))
     )
     return results.flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : []
@@ -2234,9 +2260,9 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     void loadProjects()
   }, [loadProjects])
 
-  const refreshSessions = useCallback(() => {
+  const refreshSessions = useCallback((background = false) => {
     if (scopeRef.current === "all") {
-      void loadSessions({})
+      void loadSessions({}, undefined, undefined, background)
       return
     }
 
@@ -2247,20 +2273,26 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       return
     }
 
-    void loadSessions({
-      directory: directoryRef.current || null,
-      projectID: currentProjectID,
-    })
+    void loadSessions(
+      {
+        directory: directoryRef.current || null,
+        projectID: currentProjectID,
+      },
+      undefined,
+      undefined,
+      background
+    )
   }, [connect, loadSessions])
 
-  // On reconnect, refresh the authoritative session list so the active
-  // session's model/agent/metadata stay current after the volatile stream gap.
+  // On tab wake, reconcile the newest page in the background so the active
+  // session's metadata stays current after the volatile stream gap without
+  // discarding pages loaded by infinite scroll or flashing a loading state.
   useEffect(() => {
     if (wakeKey === 0 || connection !== "connected") {
       return
     }
 
-    void refreshSessions()
+    refreshSessions(true)
   }, [connection, refreshSessions, wakeKey])
 
   const selectAllProjects = useCallback(() => {
@@ -2525,7 +2557,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       const directory =
         scopeRef.current === "project" ? directoryRef.current || undefined : undefined
       const response = await openCode.session.list({
-        limit: SESSION_PAGE_SIZE,
+        limit: SESSION_INITIAL_PAGE_SIZE,
         order: "desc",
         archived: true,
         ...(projectID ? { project: projectID } : {}),

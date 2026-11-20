@@ -941,7 +941,7 @@ function mergeDiagnostics(
 // ---------------------------------------------------------------------------
 if (browser) {
   await run(
-    "desktop session navigation, tree expansion, date grouping and local labels",
+    "desktop session navigation, tree expansion, grouping and local labels",
     async ({ check }) => {
       const opened = await openPage({ width: 1280, height: 900 }, "nav")
       const page = opened.page
@@ -1032,7 +1032,7 @@ if (browser) {
         )
 
         await page
-          .getByRole("region", { name: "Pinned sessions" })
+          .getByRole("group", { name: "Pinned sessions" })
           .getByRole("button", { name: "Session actions: Alpha" })
           .click()
         await page.getByRole("menuitem", { name: "Edit local label" }).click()
@@ -1054,12 +1054,26 @@ if (browser) {
         const pinnedGroup = page.getByRole("button", {
           name: /^Pinned sessions/,
         })
+        const pinnedViewport = page.getByRole("group", {
+          name: "Pinned sessions",
+        })
         check(
           "pinned group appears once a session is pinned",
           await pinnedGroup.isVisible()
         )
         check(
-          "pinned sessions default expanded and still show in their date group",
+          "pinned viewport is capped to about five rows",
+          await pinnedViewport.evaluate((node) => {
+            const max = Number.parseFloat(getComputedStyle(node).maxHeight)
+            return max > 0 && max <= 240
+          })
+        )
+        check(
+          "archive stays visible while Recent is populated",
+          await page.getByRole("button", { name: "Archive" }).isVisible()
+        )
+        check(
+          "a pinned session shows in both its own group and Recent",
           (await page.locator('button[data-session-id="s-alpha"]').count()) === 2,
           `rows=${await page.locator('button[data-session-id="s-alpha"]').count()}`
         )
@@ -1070,12 +1084,8 @@ if (browser) {
           `rows=${await page.locator('button[data-session-id="s-alpha"]').count()}`
         )
         await pinnedGroup.click()
-
-        const previous = page.getByRole("button", { name: "Previous" })
-        await previous.waitFor({ state: "visible" })
-        await previous.click()
         check(
-          "date grouping keeps older sessions reachable",
+          "older sessions stay reachable in the single Recent group",
           await page.locator('button[data-session-id="s-gamma"]').isVisible()
         )
 
@@ -1101,10 +1111,9 @@ if (browser) {
           await page.locator('button[data-session-id="s-alpha"]').first().isVisible()
         )
 
-        await page.getByRole("button", { name: /^Pinned sessions/ }).click()
         await page
+          .getByRole("group", { name: "Pinned sessions" })
           .getByRole("button", { name: "Session actions: Alpha" })
-          .first()
           .click()
         await page.getByRole("menuitem", { name: "Unpin session" }).click()
         check(
@@ -3818,6 +3827,23 @@ if (browser) {
         await page
           .locator('[data-directory="/synthetic"]')
           .waitFor({ state: "visible" })
+        const spaceDialog = page.getByRole("dialog")
+        const heightOpen = await spaceDialog.evaluate(
+          (el) => el.getBoundingClientRect().height
+        )
+        await directory.press("Escape")
+        await page
+          .locator("[data-directory-options]")
+          .waitFor({ state: "detached" })
+        const heightClosed = await spaceDialog.evaluate(
+          (el) => el.getBoundingClientRect().height
+        )
+        check(
+          "opening the directory browser does not resize the dialog",
+          Math.abs(heightOpen - heightClosed) < 1,
+          `open=${heightOpen} closed=${heightClosed}`
+        )
+        await directory.click()
 
         const rootRows = await page
           .locator("[data-directory]")

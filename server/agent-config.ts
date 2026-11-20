@@ -69,7 +69,12 @@ const FIELD_SET = new Set<string>(AGENT_CONFIG_FIELDS)
 type AgentConfigServiceOptions = {
   opencodeBaseUrl?: string
   authorization?: string
-  getTarget?: () => { opencodeBaseUrl: string; authorization?: string }
+  getTarget?: () => {
+    opencodeBaseUrl: string
+    authorization?: string
+    isRemote?: boolean
+    name?: string
+  }
   env?: NodeJS.ProcessEnv
   home?: string
   fetch?: typeof fetch
@@ -1129,6 +1134,26 @@ async function writeAtomic(
   }
 }
 
+/**
+ * Primary agents first, then subagents, hidden last, then id. Shared by the
+ * local merge and the remote catalog so both present agents in the same order.
+ */
+function compareAgentEntries(
+  a: AgentConfigEntry,
+  b: AgentConfigEntry
+): number {
+  const aSource = a.source ? 1 : 0
+  const bSource = b.source ? 1 : 0
+  if (aSource !== bSource) return bSource - aSource
+  const aMode = a.effective?.mode ?? a.source?.values.mode ?? "primary"
+  const bMode = b.effective?.mode ?? b.source?.values.mode ?? "primary"
+  if (aMode !== bMode) return aMode === "primary" ? -1 : 1
+  const aHidden = a.effective?.hidden ?? a.source?.values.hidden ?? false
+  const bHidden = b.effective?.hidden ?? b.source?.values.hidden ?? false
+  if (aHidden !== bHidden) return aHidden ? 1 : -1
+  return a.id.localeCompare(b.id)
+}
+
 const locks = new Map<string, Promise<unknown>>()
 
 async function withLock<T>(key: string, run: () => Promise<T>): Promise<T> {
@@ -1152,14 +1177,22 @@ export function createAgentConfigService(
   const staticAuthorization = options.authorization
   const resolveTarget = () => {
     if (!options.getTarget) {
-      return { baseUrl: staticBaseUrl, authorization: staticAuthorization }
+      return {
+        baseUrl: staticBaseUrl,
+        authorization: staticAuthorization,
+        isRemote: false,
+      }
     }
+    // Read the selected connection on every call; never cache it. A switch to
+    // (or away from) a remote engine must be visible to the very next request.
     const current = options.getTarget()
     return {
       baseUrl: current.opencodeBaseUrl.replace(/\/+$/, ""),
       authorization: current.authorization,
+      isRemote: current.isRemote === true,
     }
   }
+  const isRemoteTarget = () => resolveTarget().isRemote === true
   const fetchImpl = options.fetch ?? globalThis.fetch
   const env = options.env ?? process.env
   const home = options.home ?? homedir()
@@ -1867,21 +1900,54 @@ export function createAgentConfigService(
       }
     }
 
-    return [...entries.values()].sort((a, b) => {
-      const aSource = a.source ? 1 : 0
-      const bSource = b.source ? 1 : 0
-      if (aSource !== bSource) return bSource - aSource
-      const aMode = a.effective?.mode ?? a.source?.values.mode ?? "primary"
-      const bMode = b.effective?.mode ?? b.source?.values.mode ?? "primary"
-      if (aMode !== bMode) return aMode === "primary" ? -1 : 1
-      const aHidden = a.effective?.hidden ?? a.source?.values.hidden ?? false
-      const bHidden = b.effective?.hidden ?? b.source?.values.hidden ?? false
-      if (aHidden !== bHidden) return aHidden ? 1 : -1
-      return a.id.localeCompare(b.id)
-    })
+    return [...entries.values()].sort(compareAgentEntries)
   }
 
   async function buildCatalog(scopeRoot: ScopeRoot): Promise<CatalogBuild> {
+    if (isRemoteTarget()) {
+      // A remote engine owns the agent catalog. Never merge in agent files
+      // from the machine running the UI: those belong to a different engine.
+      // Also do not suppress a failed fetch — showing local files instead
+      // would silently present the wrong engine's agents as current.
+      let nativeAgents: NativeAgent[]
+      try {
+        nativeAgents = await fetchAgents(scopeRoot.project)
+      } catch {
+        throw new AgentConfigError(
+          503,
+          "remote_catalog_unavailable",
+          "The remote engine's agent list could not be loaded."
+        )
+      }
+      const agents = nativeAgents
+        .filter((agent) => AGENT_ID.test(agent.id))
+        .map((agent): AgentConfigEntry => ({
+          id: agent.id,
+          name: agent.name,
+          effective: effectiveFromNative(agent),
+          source: null,
+          target: null,
+          readonly: true,
+          permissionsReadOnly: true,
+          warnings: [],
+        }))
+        .sort(compareAgentEntries)
+      return {
+        nativeAvailable: true,
+        catalog: {
+          scope: scopeRoot.scope,
+          project: scopeRoot.project
+            ? { id: scopeRoot.project.id, name: scopeRoot.project.name }
+            : null,
+          sourceLabel: "Remote engine agents",
+          remote: true,
+          agents,
+          warnings: [
+            "Agents are provided by the selected remote engine and are read-only here. Edit them on that engine.",
+          ],
+        },
+      }
+    }
     const scan = await scanScope(scopeRoot)
     const warnings = [...scan.warnings]
     let nativeAgents: NativeAgent[] = []
@@ -2513,6 +2579,21 @@ export function createAgentConfigService(
       return jsonResponse(404, {
         error: { code: "not_found", message: "Agent configuration route not found." },
       })
+    }
+    // A remote engine owns its configuration files. Reject every mutation
+    // here, centrally, so putCatalog, deleteAgent and the default route can
+    // never write files on the machine running the UI. Reads stay available.
+    if (
+      isRemoteTarget() &&
+      (request.method === "PUT" || request.method === "DELETE")
+    ) {
+      return errorResponse(
+        new AgentConfigError(
+          403,
+          "remote_read_only",
+          "Agent configuration is read-only for a remote engine. Edit it on that engine."
+        )
+      )
     }
     if (request.method === "GET") {
       if (isDefault) {

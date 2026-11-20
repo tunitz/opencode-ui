@@ -304,177 +304,179 @@ export function DirectoryBrowser({
       <label htmlFor={id} className="text-sm font-medium">
         {label}
       </label>
-      <Input
-        id={id}
-        ref={inputRef}
-        className="h-11"
-        dir="ltr"
-        type="text"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={placeholder}
-        value={value}
-        disabled={disabled}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy}
-        aria-controls={open ? optionsID : undefined}
-        onFocus={() => setOpen(true)}
-        onClick={() => setOpen(true)}
-        onChange={(event) => {
-          onChange(event.target.value)
-          setOpen(true)
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && open) {
-            event.preventDefault()
-            event.stopPropagation()
-            setOpen(false)
-          }
-        }}
-      />
+      <div className="relative">
+        <Input
+          id={id}
+          ref={inputRef}
+          className="h-11"
+          dir="ltr"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={placeholder}
+          value={value}
+          disabled={disabled}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          aria-controls={open ? optionsID : undefined}
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          onChange={(event) => {
+            onChange(event.target.value)
+            setOpen(true)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && open) {
+              event.preventDefault()
+              event.stopPropagation()
+              setOpen(false)
+            }
+          }}
+        />
+        {open && (
+          <div
+            id={optionsID}
+            data-directory-options
+            className="absolute inset-x-0 top-full z-50 mt-1 max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border bg-popover text-popover-foreground shadow-lg"
+            style={optionsMaxHeight ? { maxHeight: optionsMaxHeight } : undefined}
+          >
+            <ul aria-label={optionsLabel} className="min-w-0 divide-y divide-border">
+              {showGlobalRow && (
+                <li>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={optionClass}
+                    disabled={disabled}
+                    aria-pressed={trimmed === ""}
+                    data-directory=""
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      onChange("")
+                      changeBrowse("/")
+                    }}
+                  >
+                    {globalRowContent ?? (
+                      <>
+                        <GlobeIcon
+                          aria-hidden="true"
+                          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                        />
+                        <span className="flex min-w-0 flex-col gap-0.5">
+                          <span className="text-sm font-medium">Global</span>
+                          <span className="text-xs text-muted-foreground">
+                            Visible in every project
+                          </span>
+                        </span>
+                      </>
+                    )}
+                  </Button>
+                </li>
+              )}
+              {parent !== null && (
+                <li>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={optionClass}
+                    disabled={disabled}
+                    aria-pressed={trimmed === parent}
+                    data-directory-parent={parent}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      onChange(parent)
+                      changeBrowse(parent)
+                    }}
+                  >
+                    <ArrowUpIcon
+                      aria-hidden="true"
+                      className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                    />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-sm font-medium" dir="auto">
+                        {projectBasename(parent) || "Up one level"}
+                      </span>
+                      <span
+                        className="truncate text-xs text-muted-foreground"
+                        dir="auto"
+                        title={parent}
+                      >
+                        {parent}
+                      </span>
+                    </span>
+                  </Button>
+                </li>
+              )}
+              {listing === "loading" && (
+                <li
+                  aria-busy="true"
+                  data-directory-loading
+                  className="px-3 py-2 text-sm text-muted-foreground"
+                >
+                  Loading directories…
+                </li>
+              )}
+              {listing === "error" && (
+                <li
+                  data-directory-error
+                  className="px-3 py-2 text-sm text-muted-foreground"
+                >
+                  Could not list this directory.
+                </li>
+              )}
+              {visibleSiblings.map((directory) => (
+                <DirectoryRow
+                  key={directory}
+                  directory={directory}
+                  selected={trimmed === directory}
+                  disabled={disabled}
+                  onSelect={handleSelectDirectory}
+                />
+              ))}
+              {hiddenCount > 0 ? (
+                <li>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={optionClass}
+                    disabled={disabled}
+                    data-directory-show-more
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setExpandedKey(resetKey)}
+                  >
+                    Show {hiddenCount} more
+                  </Button>
+                </li>
+              ) : null}
+              {custom && (
+                <li>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={optionClass}
+                    disabled={disabled}
+                    data-directory-custom={trimmed}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => onChange(trimmed)}
+                  >
+                    <FolderPlusIcon
+                      aria-hidden="true"
+                      className="size-4 shrink-0 text-muted-foreground"
+                    />
+                    <span className="min-w-0 truncate" dir="auto">
+                      Use custom path: {trimmed}
+                    </span>
+                  </Button>
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+      </div>
       {error && (
         <p id={errorID} role="alert" className="text-sm text-destructive">
           {error}
         </p>
-      )}
-      {open && (
-        <div
-          id={optionsID}
-          data-directory-options
-          className="max-h-52 min-w-0 overflow-y-auto overscroll-contain rounded-lg border"
-          style={optionsMaxHeight ? { maxHeight: optionsMaxHeight } : undefined}
-        >
-          <ul aria-label={optionsLabel} className="min-w-0 divide-y divide-border">
-            {showGlobalRow && (
-              <li>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={optionClass}
-                  disabled={disabled}
-                  aria-pressed={trimmed === ""}
-                  data-directory=""
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onChange("")
-                    changeBrowse("/")
-                  }}
-                >
-                  {globalRowContent ?? (
-                    <>
-                      <GlobeIcon
-                        aria-hidden="true"
-                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                      />
-                      <span className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-sm font-medium">Global</span>
-                        <span className="text-xs text-muted-foreground">
-                          Visible in every project
-                        </span>
-                      </span>
-                    </>
-                  )}
-                </Button>
-              </li>
-            )}
-            {parent !== null && (
-              <li>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={optionClass}
-                  disabled={disabled}
-                  aria-pressed={trimmed === parent}
-                  data-directory-parent={parent}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    onChange(parent)
-                    changeBrowse(parent)
-                  }}
-                >
-                  <ArrowUpIcon
-                    aria-hidden="true"
-                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                  />
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate text-sm font-medium" dir="auto">
-                      {projectBasename(parent) || "Up one level"}
-                    </span>
-                    <span
-                      className="truncate text-xs text-muted-foreground"
-                      dir="auto"
-                      title={parent}
-                    >
-                      {parent}
-                    </span>
-                  </span>
-                </Button>
-              </li>
-            )}
-            {listing === "loading" && (
-              <li
-                aria-busy="true"
-                data-directory-loading
-                className="px-3 py-2 text-sm text-muted-foreground"
-              >
-                Loading directories…
-              </li>
-            )}
-            {listing === "error" && (
-              <li
-                data-directory-error
-                className="px-3 py-2 text-sm text-muted-foreground"
-              >
-                Could not list this directory.
-              </li>
-            )}
-            {visibleSiblings.map((directory) => (
-              <DirectoryRow
-                key={directory}
-                directory={directory}
-                selected={trimmed === directory}
-                disabled={disabled}
-                onSelect={handleSelectDirectory}
-              />
-            ))}
-            {hiddenCount > 0 ? (
-              <li>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={optionClass}
-                  disabled={disabled}
-                  data-directory-show-more
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => setExpandedKey(resetKey)}
-                >
-                  Show {hiddenCount} more
-                </Button>
-              </li>
-            ) : null}
-            {custom && (
-              <li>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className={optionClass}
-                  disabled={disabled}
-                  data-directory-custom={trimmed}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => onChange(trimmed)}
-                >
-                  <FolderPlusIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-muted-foreground"
-                  />
-                  <span className="min-w-0 truncate" dir="auto">
-                    Use custom path: {trimmed}
-                  </span>
-                </Button>
-              </li>
-            )}
-          </ul>
-        </div>
       )}
       {hint ? (
         <p id={hintID} className="text-xs text-muted-foreground">

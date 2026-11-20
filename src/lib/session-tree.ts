@@ -1,7 +1,4 @@
-import {
-  sessionGroupForUpdated,
-  type SessionGroup,
-} from "@/lib/session-activity"
+import type { SessionGroup } from "@/lib/session-activity"
 
 type SessionTreeRef = {
   id: string
@@ -125,23 +122,11 @@ export function countSessionTreeDescendants<T extends SessionTreeRef>(
 }
 
 /**
- * Group top-level rows by the day their session was last updated. Child rows
- * stay inside their parent's group so a subtree is never split across buckets;
- * only top-level sessions (including those whose parent is not loaded) decide
- * the bucket.
+ * All top-level rows share the single Recent bucket. Child rows stay inside
+ * their parent's subtree so a tree is never split across sections.
  */
 export function groupSessionTreeRows<T extends SessionTreeTimed>(
-  rows: readonly SessionTreeRow<T>[],
-  now: number
+  rows: readonly SessionTreeRow<T>[]
 ): Record<SessionGroup, SessionTreeRow<T>[]> {
-  const groups: Record<SessionGroup, SessionTreeRow<T>[]> = {
-    Today: [],
-    Previous: [],
-  }
-
-  for (const row of rows) {
-    groups[sessionGroupForUpdated(row.session.time.updated, now)].push(row)
-  }
-
-  return groups
+  return { Recent: [...rows] }
 }

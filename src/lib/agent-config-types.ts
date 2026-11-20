@@ -79,6 +79,8 @@ export type AgentConfigCatalog = {
   scope: AgentConfigScope
   project: { id: string; name: string } | null
   sourceLabel: string
+  /** True when agents come from the selected remote engine and are read-only. */
+  remote?: boolean
   agents: AgentConfigEntry[]
   warnings: string[]
 }

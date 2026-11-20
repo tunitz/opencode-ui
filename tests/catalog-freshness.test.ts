@@ -97,6 +97,9 @@ const controllerSource = await Bun.file(
 const composerSource = await Bun.file(
   new URL("../src/components/composer.tsx", import.meta.url)
 ).text()
+const agentSettingsSource = await Bun.file(
+  new URL("../src/components/agent-config-settings.tsx", import.meta.url)
+).text()
 
 describe("catalog epoch lifecycle wiring", () => {
   test("exposes catalogEpoch on controller state", () => {
@@ -167,5 +170,28 @@ describe("composer guard wiring", () => {
     expect(composerSource).toContain(
       "await executeServerCommand(command, argumentsText, capturedEpoch)"
     )
+  })
+})
+
+describe("agent settings catalog freshness", () => {
+  test("reloads the agent catalog when the active connection changes", () => {
+    expect(agentSettingsSource).toContain(
+      "const catalogEpochRef = useRef(nav.catalogEpoch)"
+    )
+    expect(agentSettingsSource).toContain(
+      "const engineChanged = catalogEpochRef.current !== nav.catalogEpoch"
+    )
+    expect(agentSettingsSource).toMatch(/\}, \[active, nav\.catalogEpoch, load\]\)/)
+  })
+
+  test("drops the previous connection's catalog before reloading", () => {
+    const effect = agentSettingsSource.slice(
+      agentSettingsSource.indexOf("const engineChanged"),
+      agentSettingsSource.indexOf("const selected =")
+    )
+    expect(effect).toContain("catalogRef.current = null")
+    expect(effect).toContain("setCatalog(null)")
+    expect(effect).toContain("setSelectedID(null)")
+    expect(effect).toContain("void load()")
   })
 })

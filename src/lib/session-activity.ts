@@ -1,6 +1,6 @@
 import type { SessionInfo } from "@/lib/opencode"
 
-export const SESSION_GROUPS = ["Today", "Previous"] as const
+export const SESSION_GROUPS = ["Recent"] as const
 
 export type SessionGroup = (typeof SESSION_GROUPS)[number]
 
@@ -17,15 +17,9 @@ type StorageLike = Pick<Storage, "getItem" | "setItem">
 
 type ActivitySession = Pick<SessionInfo, "id" | "time">
 
-/** The date bucket a session belongs to, using local midnight boundaries. */
-export function sessionGroupForUpdated(
-  updated: number,
-  now: number
-): SessionGroup {
-  const today = new Date(now)
-  today.setHours(0, 0, 0, 0)
-  if (updated >= today.getTime()) return "Today"
-  return "Previous"
+/** Every non-pinned session belongs to the single Recent bucket. */
+export function sessionGroupForUpdated(): SessionGroup {
+  return "Recent"
 }
 
 /**
@@ -33,33 +27,22 @@ export function sessionGroupForUpdated(
  * update times keep their list order.
  */
 export function groupSessionsByUpdated<T extends ActivitySession>(
-  sessions: readonly T[],
-  now: number
+  sessions: readonly T[]
 ): Record<SessionGroup, T[]> {
-  const groups: Record<SessionGroup, T[]> = {
-    Today: [],
-    Previous: [],
+  return {
+    Recent: [...sessions].sort((a, b) => b.time.updated - a.time.updated),
   }
-
-  for (const session of [...sessions].sort(
-    (a, b) => b.time.updated - a.time.updated
-  )) {
-    groups[sessionGroupForUpdated(session.time.updated, now)].push(session)
-  }
-
-  return groups
 }
 
 /** Group containing a session, or null when it is not in the loaded list. */
 export function sessionGroupForID(
   sessions: readonly ActivitySession[],
-  sessionID: string | null,
-  now: number
+  sessionID: string | null
 ): SessionGroup | null {
   if (!sessionID) return null
 
   const session = sessions.find((candidate) => candidate.id === sessionID)
-  return session ? sessionGroupForUpdated(session.time.updated, now) : null
+  return session ? sessionGroupForUpdated() : null
 }
 
 export type SessionActivityState = {

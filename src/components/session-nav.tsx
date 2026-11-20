@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type FormEvent,
   type ReactNode,
 } from "react"
@@ -813,31 +812,6 @@ const SessionTreeNode = memo(function SessionTreeNode({
   )
 })
 
-function currentDayStart(): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return today.getTime()
-}
-
-/**
- * Day-bucket boundaries are an external clock value, not render state. Reading
- * them through `useSyncExternalStore` keeps render pure and refreshes the
- * accordion after midnight without a state-setting effect.
- */
-function subscribeToDayStart(onStoreChange: () => void): () => void {
-  let observed = currentDayStart()
-  const timer = setInterval(() => {
-    const next = currentDayStart()
-
-    if (next !== observed) {
-      observed = next
-      onStoreChange()
-    }
-  }, 60_000)
-
-  return () => clearInterval(timer)
-}
-
 function PagedSessionTree({
   rows,
   context,
@@ -845,6 +819,7 @@ function PagedSessionTree({
   hasMore,
   loading,
   onLoadMore,
+  maxHeightClass = "max-h-80",
 }: {
   rows: readonly SessionTreeRow<SessionInfo>[]
   context: SessionTreeContext
@@ -852,25 +827,19 @@ function PagedSessionTree({
   hasMore: boolean
   loading: boolean
   onLoadMore: () => void
+  maxHeightClass?: string
 }) {
-  const [visibleCount, setVisibleCount] = useState(10)
-  const loadMore = useCallback(() => {
-    if (visibleCount < rows.length) {
-      setVisibleCount((current) => Math.min(rows.length, current + 10))
-      return
-    }
-    onLoadMore()
-  }, [onLoadMore, rows.length, visibleCount])
-
+  // Pages are server-driven: the first fetch loads 20 and each scroll adds 10,
+  // so every loaded row is rendered and the sentinel drives the next fetch.
   return (
     <IncrementalViewport
       label={label}
-      maxHeightClass="max-h-80"
-      hasMore={hasMore || visibleCount < rows.length}
+      maxHeightClass={maxHeightClass}
+      hasMore={hasMore}
       loading={loading}
-      onLoadMore={loadMore}
+      onLoadMore={onLoadMore}
     >
-      <SessionTree rows={rows.slice(0, visibleCount)} {...context} />
+      <SessionTree rows={rows} {...context} />
     </IncrementalViewport>
   )
 }
@@ -1037,11 +1006,6 @@ function SessionList({
     }
   }, [deferredQuery])
 
-  const dayStart = useSyncExternalStore(
-    subscribeToDayStart,
-    currentDayStart,
-    currentDayStart
-  )
   const sortedSessions = useMemo(
     () => [...nav.sessions].sort((a, b) => b.time.updated - a.time.updated),
     [nav.sessions]
@@ -1067,8 +1031,8 @@ function SessionList({
     [searchRows]
   )
   const groups = useMemo(
-    () => groupSessionTreeRows(treeRows, dayStart),
-    [treeRows, dayStart]
+    () => groupSessionTreeRows(treeRows),
+    [treeRows]
   )
   const activeAncestors = useMemo(
     () => sessionAncestorIDs(nav.sessions, nav.activeSessionID),
@@ -1076,8 +1040,7 @@ function SessionList({
   )
   const activeGroup = sessionGroupForID(
     nav.sessions,
-    activeAncestors.at(-1) ?? nav.activeSessionID,
-    dayStart
+    activeAncestors.at(-1) ?? nav.activeSessionID
   )
   const [openGroup, setOpenGroup] = useState<SessionGroup | null>(activeGroup)
   const lastActiveGroup = useRef<SessionGroup | null>(activeGroup)
@@ -1181,23 +1144,20 @@ function SessionList({
   }
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col">
       <SessionsHeader
-        count={
-          nav.sessionsStatus === "ready"
-            ? searching
-              ? searchRows.length
-              : nav.sessions.length
-            : null
-        }
         searchOpen={searchOpen}
         query={query}
         onOpenSearch={() => setSearchOpen(true)}
         onChangeQuery={setQuery}
         onCloseSearch={closeSearch}
       />
-      <div className="px-3">
-        <nav aria-label="Sessions" aria-busy={nav.sessionsStatus === "loading"}>
+      <div className="flex min-h-0 flex-1 flex-col px-3">
+        <nav
+          aria-label="Sessions"
+          aria-busy={nav.sessionsStatus === "loading"}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {shortcutError ? <p role="alert" className="px-2.5 text-xs text-destructive">{shortcutError}</p> : null}
           {nav.sessionsStatus === "loading" && !searching ? (
             <p role="status" className="px-2.5 py-2 text-[13px] text-muted-foreground">
@@ -1209,7 +1169,7 @@ function SessionList({
               <p className="text-xs break-words text-destructive">
                 {nav.sessionsError ?? "Could not load sessions."}
               </p>
-              <Button variant="outline" onClick={nav.refreshSessions} className="h-11 w-full text-[13px]">
+              <Button variant="outline" onClick={() => nav.refreshSessions()} className="h-11 w-full text-[13px]">
                 Retry sessions
               </Button>
             </div>
@@ -1222,7 +1182,6 @@ function SessionList({
               <AccordionSection
                 value="search-results"
                 title="Search results"
-                count={searchStatus === "loading" ? undefined : searchRows.length}
                 contentClassName="p-1"
               >
                 {searchError ? (
@@ -1252,21 +1211,20 @@ function SessionList({
           ) : null}
           {!searching && pinnedRows.length > 0 ? (
             <Accordion defaultValue={["pinned"]} className="space-y-2 py-1">
-              <AccordionSection value="pinned" title="Pinned sessions" count={pinnedRows.length} contentClassName="p-1">
-                <PagedSessionTree
-                  rows={pinnedRows}
-                  context={activeTreeContext}
-                  label="Pinned sessions"
-                  hasMore={nav.sessionsHasMore}
-                  loading={nav.loadingMoreSessions}
-                  onLoadMore={loadMoreGroup}
-                />
+              <AccordionSection value="pinned" title="Pinned sessions" contentClassName="p-1">
+                <div
+                  role="group"
+                  aria-label="Pinned sessions"
+                  className="max-h-[13.75rem] min-w-0 overflow-y-auto overscroll-contain pe-1"
+                >
+                  <SessionTree rows={pinnedRows} {...activeTreeContext} />
+                </div>
               </AccordionSection>
             </Accordion>
           ) : null}
           {!searching ? (
             <Accordion
-              key="date-groups"
+              key="recent"
               value={openGroup ? [openGroup] : []}
               onValueChange={(value) => {
                 const next = value[0]
@@ -1276,36 +1234,40 @@ function SessionList({
                     : null
                 )
               }}
-              className="space-y-2 py-1"
+              className={cn(
+                "py-1",
+                openGroup ? "flex min-h-0 flex-1 flex-col" : "shrink-0"
+              )}
             >
-              {SESSION_GROUPS.map((label) => {
-                const rows = groups[label]
-                if (!rows.length && label !== "Today") return null
-                return (
-                  <AccordionSection
-                    key={label}
-                    value={label}
-                    title={label}
-                    count={rows.length}
-                    contentClassName="p-1"
-                  >
-                    {rows.length > 0 ? (
-                      <PagedSessionTree
-                        rows={rows}
-                        context={activeTreeContext}
-                        label={`${label} sessions`}
-                        hasMore={nav.sessionsHasMore}
-                        loading={nav.loadingMoreSessions}
-                        onLoadMore={loadMoreGroup}
-                      />
-                    ) : (
-                      <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
-                        No sessions today.
-                      </p>
-                    )}
-                  </AccordionSection>
-                )
-              })}
+              <AccordionSection
+                value="Recent"
+                title="Recent"
+                className={
+                  openGroup ? "flex min-h-0 flex-1 flex-col" : undefined
+                }
+                panelClassName={
+                  openGroup ? "flex min-h-0 flex-1 flex-col" : undefined
+                }
+                contentClassName={
+                  openGroup ? "flex min-h-0 flex-1 flex-col p-1" : "p-1"
+                }
+              >
+                {groups.Recent.length > 0 ? (
+                  <PagedSessionTree
+                    rows={groups.Recent}
+                    context={activeTreeContext}
+                    label="Recent sessions"
+                    hasMore={nav.sessionsHasMore}
+                    loading={nav.loadingMoreSessions}
+                    onLoadMore={loadMoreGroup}
+                    maxHeightClass="min-h-0 flex-1"
+                  />
+                ) : (
+                  <p className="px-2.5 py-2 text-[13px] text-muted-foreground">
+                    No sessions yet.
+                  </p>
+                )}
+              </AccordionSection>
             </Accordion>
           ) : null}
           {!searching ? (
@@ -1317,12 +1279,11 @@ function SessionList({
                 setArchivedOpen(next)
                 if (next && nav.archivedStatus === "idle") void nav.loadArchivedSessions()
               }}
-              className="mt-2 space-y-2 pb-3"
+              className="mt-2 shrink-0 space-y-2 pb-3"
             >
               <AccordionSection
                 value="archive"
                 title="Archive"
-                count={nav.archivedStatus === "loading" ? undefined : nav.archivedSessions.length}
                 contentClassName="p-1"
               >
                 {nav.archivedStatus === "error" ? (
@@ -1354,19 +1315,17 @@ function SessionList({
           ) : null}
         </nav>
       </div>
-    </>
+    </div>
   )
 }
 
 function SessionsHeader({
-  count,
   searchOpen,
   query,
   onOpenSearch,
   onChangeQuery,
   onCloseSearch,
 }: {
-  count: number | null
   searchOpen: boolean
   query: string
   onOpenSearch: () => void
@@ -1414,9 +1373,6 @@ function SessionsHeader({
             Sessions
           </span>
           <div className="flex min-w-0 items-center gap-1">
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {count ?? "—"}
-            </span>
             <Button
               type="button"
               variant="ghost"
@@ -1557,8 +1513,10 @@ export function SessionSidebar({ nav }: { nav: SessionNavProps }) {
         <>
           <ProjectPanel nav={nav} className="mt-6" />
           <ScrollArea className="mt-2 min-h-0 flex-1">
-            <div className="px-3"><NotesSidebar /></div>
-            <SessionList nav={nav} onSelect={(sessionID) => leaveToChat(() => nav.selectSession(sessionID))} />
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="shrink-0 px-3"><NotesSidebar /></div>
+              <SessionList nav={nav} onSelect={(sessionID) => leaveToChat(() => nav.selectSession(sessionID))} />
+            </div>
           </ScrollArea>
         </>
       )}
@@ -1653,14 +1611,16 @@ export function SessionsSheet({ nav }: { nav: SessionNavProps }) {
         </div>
         <ProjectPanel nav={nav} className="mt-5" />
         <ScrollArea className="mt-2 min-h-0 flex-1">
-          <div className="px-4"><NotesSidebar onNavigate={() => setOpen(false)} /></div>
-          <SessionList
-            nav={nav}
-            onSelect={(sessionID) => {
-              leaveToChat(() => nav.selectSession(sessionID))
-              setOpen(false)
-            }}
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="shrink-0 px-4"><NotesSidebar onNavigate={() => setOpen(false)} /></div>
+            <SessionList
+              nav={nav}
+              onSelect={(sessionID) => {
+                leaveToChat(() => nav.selectSession(sessionID))
+                setOpen(false)
+              }}
+            />
+          </div>
         </ScrollArea>
         <SheetFooter className="flex-row items-center justify-start gap-1 border-t border-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <SettingsTriggerButton

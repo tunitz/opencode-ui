@@ -16,6 +16,7 @@ export function AccordionSection({
   children,
   className,
   triggerClassName,
+  panelClassName,
   contentClassName,
 }: {
   value: string
@@ -24,6 +25,7 @@ export function AccordionSection({
   children: ReactNode
   className?: string
   triggerClassName?: string
+  panelClassName?: string
   contentClassName?: string
 }) {
   return (
@@ -57,7 +59,7 @@ export function AccordionSection({
           />
         </AccordionTrigger>
       </AccordionHeader>
-      <AccordionPanel>
+      <AccordionPanel className={panelClassName}>
         <div className={cn("border-t border-foreground/10 px-3 py-3", contentClassName)}>
           {children}
         </div>

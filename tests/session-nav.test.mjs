@@ -12,8 +12,8 @@ test("session selection leaves every workspace through the shared guarded transi
     "onSelect={(sessionID) => leaveToChat(() => nav.selectSession(sessionID))}"
   )
   // Mobile sessions sheet: multi-line handler.
-  expect(navigation).toContain(
-    "leaveToChat(() => nav.selectSession(sessionID))\n              setOpen(false)"
+  expect(navigation).toMatch(
+    /leaveToChat\(\(\) => nav\.selectSession\(sessionID\)\)\s*\n\s*setOpen\(false\)/
   )
   // Both exits defer the actual selection until the coordinator commits.
   expect(navigation).toContain('workspace.requestWorkspace("chat", { run })')
@@ -38,6 +38,24 @@ test("the pinned sessions group starts expanded and stays user-collapsible", () 
   )
   expect(pinned).not.toContain("value={[")
   expect(pinned).not.toContain("onValueChange")
+  expect(pinned).toContain("max-h-[13.75rem] min-w-0 overflow-y-auto overscroll-contain")
+  expect(pinned).not.toContain("onLoadMore")
+})
+
+test("the Recent section grows only while expanded so Archive sits directly below it when collapsed", () => {
+  const start = navigation.indexOf('<Accordion\n              key="recent"')
+  expect(start).toBeGreaterThan(-1)
+  const recent = navigation.slice(
+    start,
+    navigation.indexOf("</Accordion>", start)
+  )
+  // Collapsed: shrink to the header, leaving no empty tall card.
+  expect(recent).toContain(
+    'openGroup ? "flex min-h-0 flex-1 flex-col" : "shrink-0"'
+  )
+  // The old unconditional growth must be gone.
+  expect(recent).not.toContain('className="flex min-h-0 flex-1 flex-col py-1"')
+  expect(recent).not.toContain('className="flex min-h-0 flex-1 flex-col"')
 })
 
 test("the worktree dialog delegates to the shared focus-gated directory browser", () => {

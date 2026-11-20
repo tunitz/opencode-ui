@@ -190,7 +190,11 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const activeEngine = () => connections.getActiveTarget()
   const upstream = () => {
     const current = activeEngine()
-    return { opencodeBaseUrl: current?.engineUrl ?? "", authorization: current?.authorization }
+    return {
+      opencodeBaseUrl: current?.engineUrl ?? "",
+      authorization: current?.authorization,
+      isRemote: current?.isRemote ?? false,
+    }
   }
   const auth = createAuthService({
     required: true,

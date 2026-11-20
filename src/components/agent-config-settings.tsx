@@ -68,6 +68,7 @@ import {
   variantsForModel,
 } from "@/lib/session-selection"
 import { useModelFavorites } from "@/lib/model-favorites"
+import { ENGINE_CONNECTION_CHANGED } from "@/lib/connections"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import { cn } from "@/lib/utils"
 
@@ -457,6 +458,7 @@ export function AgentConfigSettings({
   const { favorites, toggle: toggleFavorite } = useModelFavorites()
   const requestRef = useRef(0)
   const catalogRef = useRef<AgentConfigCatalog | null>(null)
+  const catalogEpochRef = useRef(nav.catalogEpoch)
   const wasActiveRef = useRef(active)
   const hashRef = useRef<string | null>(null)
   const draftRef = useRef(draft)
@@ -501,11 +503,42 @@ export function AgentConfigSettings({
   }, [catalog])
 
   useEffect(() => {
+    const engineChanged = catalogEpochRef.current !== nav.catalogEpoch
     const becameActive = active && !wasActiveRef.current
+    catalogEpochRef.current = nav.catalogEpoch
     wasActiveRef.current = active
+    if (engineChanged) {
+      // A different engine has a different agent catalog. Drop everything from
+      // the previous connection before the next load, even if this pane is not
+      // currently active — otherwise re-entering it would show stale agents.
+      catalogRef.current = null
+      setCatalog(null)
+      setSelectedID(null)
+      setView("list")
+      setCatalogError(null)
+    }
     if (!active) return
-    if (becameActive && catalogRef.current) return
+    if (becameActive && catalogRef.current && !engineChanged) return
     void load()
+  }, [active, nav.catalogEpoch, load])
+
+  // Connection switches also announce themselves directly; not every switch
+  // path goes through resetForEngineSwitch, so reload on that signal too. The
+  // request guard in load() collapses duplicate refreshes to one usable result.
+  useEffect(() => {
+    if (!active) return
+    const onConnectionChanged = () => {
+      catalogRef.current = null
+      setCatalog(null)
+      setSelectedID(null)
+      void load()
+    }
+    window.addEventListener(ENGINE_CONNECTION_CHANGED, onConnectionChanged)
+    return () =>
+      window.removeEventListener(
+        ENGINE_CONNECTION_CHANGED,
+        onConnectionChanged
+      )
   }, [active, load])
 
   const selected =
@@ -521,7 +554,8 @@ export function AgentConfigSettings({
   const canMakeDefault = Boolean(
     selected &&
       selected.effective?.mode === "primary" &&
-      !selected.effective?.hidden
+      !selected.effective?.hidden &&
+      !catalog?.remote
   )
   const selectedKey = selected
     ? `${selected.id}:${selected.source?.hash ?? ""}:${selected.target?.hash ?? ""}:${selected.target?.relativePath ?? ""}`
@@ -869,9 +903,16 @@ export function AgentConfigSettings({
         </div>
       ) : null}
 
+      {catalog?.remote ? (
+        <p className="text-xs text-muted-foreground">
+          Agents are managed on the selected remote engine and are read-only
+          here.
+        </p>
+      ) : null}
+
       {catalog && catalog.agents.length === 0 && !loading ? (
         <p className="text-xs text-muted-foreground">
-          No agents are available in the global catalog.
+          No agents are available in this engine's catalog.
         </p>
       ) : null}
 
