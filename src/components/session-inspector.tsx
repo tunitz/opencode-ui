@@ -711,7 +711,9 @@ export function SessionInspectorPanel({
     const rtl = document.documentElement.getAttribute("dir") === "rtl"
     const onMove = (move: PointerEvent) => {
       const delta = move.clientX - startX
-      persistWidth(startWidth + (rtl ? -delta : delta))
+      // The separator sits on the panel's inner edge: left in LTR, right in RTL.
+      // Moving it toward the conversation widens the inspector.
+      persistWidth(startWidth + (rtl ? delta : -delta))
     }
     const onUp = () => {
       window.removeEventListener("pointermove", onMove)
@@ -756,11 +758,10 @@ export function SessionInspectorPanel({
         onKeyDown={(event) => {
           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
           event.preventDefault()
-          const rtl = document.documentElement.getAttribute("dir") === "rtl"
           const delta = event.key === "ArrowRight" ? 16 : -16
-          persistWidth(width + (rtl ? -delta : delta))
+          persistWidth(width + delta)
         }}
-        className="absolute inset-y-0 start-0 z-30 w-2 cursor-ew-resize touch-none bg-transparent outline-none before:absolute before:inset-y-0 before:start-1/2 before:w-0.5 before:-translate-x-1/2 before:bg-border/70 before:content-[''] hover:before:bg-primary/60 focus-visible:before:bg-primary/80"
+        className="absolute inset-y-0 start-0 z-30 w-2 cursor-ew-resize touch-pan-y bg-transparent outline-none before:absolute before:inset-y-0 before:start-1/2 before:w-0.5 before:-translate-x-1/2 before:bg-border/70 before:content-[''] hover:before:bg-primary/60 focus-visible:before:bg-primary/80"
       />
       <InspectorBody
         nav={nav}

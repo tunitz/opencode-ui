@@ -44,8 +44,7 @@ bun run start
 `bun run start` serves `dist-bun-build/` on `127.0.0.1:5174` and accepts the shared flags described
 below. When the production build is missing it runs `scripts/build-bun.ts` first. The first visit
 requires setting a UI password, then shows the home screen with a shortcut to Settings → Connections. Use
-`bun run start --host 0.0.0.0 --port 1234 --allowed-host ui.example.test --allowed-origin http://ui.example.test:1234`
-for another interface (substitute the real reachable hostname or IP).
+`bun run start --host 0.0.0.0 --port 1234` for another interface; the host's private LAN IPv4 addresses and matching HTTP origins are trusted automatically. Report the reachable LAN IP URL, not `0.0.0.0`.
 
 For development:
 
@@ -57,15 +56,16 @@ bun run dev
 `public/`, and `index.html`, and runs the Bun server in watch mode. Set `OPENCODE_UI_PORT` to use a
 different port.
 
-For testing from another device, bind explicitly and add the exact reachable host and origin:
+For testing from another device, bind to all interfaces and open the host's LAN IP:
 
 ```sh
-OPENCODE_UI_HOST=<bind-host> \
+OPENCODE_UI_HOST=0.0.0.0 \
 OPENCODE_UI_PORT=5175 \
-OPENCODE_UI_ALLOWED_HOSTS=<reachable-host> \
-OPENCODE_UI_ALLOWED_ORIGINS=http://<reachable-host>:5175 \
 bun run dev
 ```
+
+For a custom hostname or HTTPS proxy, add the exact `OPENCODE_UI_ALLOWED_HOSTS` /
+`OPENCODE_UI_ALLOWED_ORIGINS` (or the equivalent CLI flags). Trust values are never wildcards.
 
 Report the reachable LAN URL, never `0.0.0.0`. Keep development output in `dist-bun-dev/`; do not
 overwrite or disturb an existing production `dist-bun-build/`.
@@ -80,7 +80,11 @@ overwrite or disturb an existing production `dist-bun-build/`.
 
 The server and CLI accept `--host`, `--port`, `--engine-url`, repeatable `--allowed-host` /
 `--allowed-origin` / `--artifact-root`, `--help`, and `--version`; flags override environment values.
-`--engine-url` only prefills the first-run connection form. The direct server keeps the legacy
+With no explicit trust values, a non-loopback bind automatically trusts this host's private LAN IPv4
+addresses and derives `http://<address>:<port>` origins; explicit values replace that automatic set.
+An explicit `--allowed-origin` also trusts its hostname, and an explicit non-loopback
+`--allowed-host` derives a matching HTTP origin. Tailscale/CGNAT and public addresses need explicit
+trust. `--engine-url` only prefills the first-run connection form. The direct server keeps the legacy
 artifact root `/tmp/opencode/shots` when `OPENCODE_UI_ARTIFACT_ROOTS` is absent. The CLI starts with
 no artifact roots unless `--artifact-root` or the environment list is supplied.
 
@@ -184,7 +188,9 @@ ships the UI server modules together with the internal `plugins/notes` sources d
   isolation; non-loopback use still needs secure transport and an appropriate network boundary.
 - Preserve explicit host and Origin checks, WebSocket guards, route/method allowlists, JSON
   mutation checks, no wildcard CORS, and `no-store` API responses. Do not bypass artifact
-  provenance or file safety checks. See [docs/contract.md](docs/contract.md) for relevant details.
+  provenance or file safety checks. LAN setup derives exact local-IP trusts instead of requiring
+  user-supplied allowlists; never replace the checks with wildcards or CIDRs. See
+  [docs/contract.md](docs/contract.md) for relevant details.
 - Ask before mutating live sessions, PTYs, providers, notifications, credentials, engine or agent
   configuration, permission policies, or other live state. Do not stage, commit, or push unless
   requested.

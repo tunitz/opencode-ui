@@ -41,7 +41,12 @@ are intentional; do not weaken them when simplifying UI code.
 - Request guard: Host allowlist; exact Origin allowlist; WebSocket Origin checked before upgrade;
   unknown/missing unsafe origins rejected for mutations/WS; API path/method allowlist; JSON
   content-type for bodied mutations; security headers; no wildcard CORS; API
-  `cache-control: no-store`; SSE remains `no-cache, no-transform`.
+  `cache-control: no-store`; SSE remains `no-cache, no-transform`. A non-loopback bind with no
+  explicit trust values derives exact trusts from this host's private IPv4 addresses and matching
+  `http://<address>:<port>` origins (`server/trusted-origins.ts`). An explicit `--allowed-origin`
+  also trusts its hostname; an explicit non-loopback `--allowed-host` derives a matching HTTP origin.
+  Public/CGNAT addresses and custom HTTPS proxy names require explicit values. The checks are never
+  wildcarded or disabled.
 - **Browser access gate:** a shared UI password gates `/api/*` (HTTP and WebSocket upgrades)
   whenever a password is configured or the bind host is non-loopback. Loopback with no password
   stays pass-through. It is one shared credential, not multi-tenant isolation.

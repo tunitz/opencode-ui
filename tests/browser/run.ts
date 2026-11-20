@@ -2341,8 +2341,8 @@ if (browser) {
           (element) => element.getBoundingClientRect().width
         )
         check(
-          "dragging the separator narrows the inspector",
-          after < before - 40,
+          "dragging the separator toward the conversation widens the inspector",
+          after > before + 40,
           `before=${before} after=${after}`
         )
         const stored = await page.evaluate(() =>
@@ -2352,6 +2352,16 @@ if (browser) {
           "the resized width is persisted",
           stored !== null && Math.abs(Number(stored) - after) < 2,
           `stored=${stored} after=${after}`
+        )
+        await handle.focus()
+        await page.keyboard.press("ArrowRight")
+        const afterKey = await panel.evaluate(
+          (element) => element.getBoundingClientRect().width
+        )
+        check(
+          "ArrowRight widens the focused separator",
+          afterKey > after + 8,
+          `after=${after} afterKey=${afterKey}`
         )
       } finally {
         await opened.context.close()

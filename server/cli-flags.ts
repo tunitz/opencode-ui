@@ -17,9 +17,10 @@ Production UI for a separately installed, running OpenCode V2 engine
 
 Long options accept --name=value or --name value. Relative paths use your cwd.
 Trust defaults to 127.0.0.1, localhost and [::1], with exact HTTP origins at the
-UI port. --host changes binding only, never trust. Non-loopback binding requires
-explicit non-loopback --allowed-host AND --allowed-origin. Proxy public hosts
-and origins must also be explicitly allowed, even with a loopback listener.
+UI port. A non-loopback bind also trusts this host's private LAN IPv4 addresses
+and derives matching HTTP origins. An explicit --allowed-origin also trusts its
+hostname; an explicit non-loopback --allowed-host gets a matching HTTP origin.
+Custom public hostnames and HTTPS proxies need explicit trust values.
 
 Set an OpenCode UI password on first visit. It protects the API on every bind.
 Allowlists are not authentication or tenant isolation;

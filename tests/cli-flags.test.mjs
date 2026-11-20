@@ -7,9 +7,19 @@ import { ensureFrontendAssets, serverOptionsFromFlags, shouldBuildFrontend } fro
 
 const repoRoot = resolve(import.meta.dirname, "..")
 const originalPort = process.env.OPENCODE_UI_PORT
+const originalHost = process.env.OPENCODE_UI_HOST
+const originalAllowedHosts = process.env.OPENCODE_UI_ALLOWED_HOSTS
+const originalAllowedOrigins = process.env.OPENCODE_UI_ALLOWED_ORIGINS
 afterEach(() => {
-  if (originalPort === undefined) delete process.env.OPENCODE_UI_PORT
-  else process.env.OPENCODE_UI_PORT = originalPort
+  for (const [name, value] of [
+    ["OPENCODE_UI_PORT", originalPort],
+    ["OPENCODE_UI_HOST", originalHost],
+    ["OPENCODE_UI_ALLOWED_HOSTS", originalAllowedHosts],
+    ["OPENCODE_UI_ALLOWED_ORIGINS", originalAllowedOrigins],
+  ]) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
 })
 
 const failure = (args) => {
@@ -74,6 +84,9 @@ describe("flag parsing", () => {
 describe("direct-server option mapping", () => {
   test("uses direct-server defaults without flags", () => {
     delete process.env.OPENCODE_UI_PORT
+    delete process.env.OPENCODE_UI_HOST
+    delete process.env.OPENCODE_UI_ALLOWED_HOSTS
+    delete process.env.OPENCODE_UI_ALLOWED_ORIGINS
     const options = serverOptionsFromFlags(parseCliFlags([]))
     expect(options.port).toBe(5174)
     expect(options.hostname).toBeUndefined()
@@ -90,12 +103,12 @@ describe("direct-server option mapping", () => {
       "--engine-url", "http://engine.test:8090",
       "--artifact-root", "/tmp/artifacts",
     ]))
-    expect(options).toEqual({
-      hostname: "0.0.0.0",
-      port: 1234,
-      engineUrl: "http://engine.test:8090",
-      artifactRoots: ["/tmp/artifacts"],
-    })
+    expect(options.hostname).toBe("0.0.0.0")
+    expect(options.port).toBe(1234)
+    expect(options.engineUrl).toBe("http://engine.test:8090")
+    expect(options.artifactRoots).toEqual(["/tmp/artifacts"])
+    expect(options.security.allowedHosts).toContain("127.0.0.1")
+    expect(options.security.allowedOrigins.some((origin) => origin.startsWith("http://") && !origin.includes("127.0.0.1"))).toBe(true)
   })
 
   test("explicit allowlists replace env merging and keep loopback trust", () => {
@@ -103,10 +116,8 @@ describe("direct-server option mapping", () => {
       "--allowed-host", "local.test",
       "--allowed-origin", "https://local.test",
     ]))
-    expect(options.security).toEqual({
-      allowedHosts: ["127.0.0.1", "localhost", "[::1]", "local.test"],
-      allowedOrigins: ["http://127.0.0.1:5174", "http://localhost:5174", "http://[::1]:5174", "https://local.test"],
-    })
+    expect(options.security.allowedHosts).toEqual(["127.0.0.1", "localhost", "[::1]", "local.test"])
+    expect(options.security.allowedOrigins).toEqual(["http://127.0.0.1:5174", "http://localhost:5174", "http://[::1]:5174", "https://local.test", "http://local.test:5174"])
   })
 })
 

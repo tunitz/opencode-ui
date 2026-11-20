@@ -11,7 +11,7 @@ import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
 import { parseCliFlags, type CliFlags } from "./cli-flags.ts"
 import type { PtyBridgeServer } from "./pty-websocket-bridge.ts"
-import { DEFAULT_ALLOWED_HOSTS, DEFAULT_ALLOWED_ORIGINS } from "./request-security.ts"
+import { resolveTrustedOrigins } from "./trusted-origins.ts"
 import { BunConfigurationError, isLoopbackHost, validateHostname, validateOrigin, validatePath, validatePort } from "./bun-config.ts"
 
 const SERVER_HELP = `Usage: bun run start [options]
@@ -31,8 +31,10 @@ installed, running OpenCode V2 engine (compatible with @opencode/client 2.1.4).
 
 Long options accept --name=value or --name value. When the production frontend
 build is missing, scripts/build-bun.ts runs first unless OPENCODE_UI_BUILD_TARGET=dev.
-Non-loopback binding should add explicit non-loopback --allowed-host and
---allowed-origin. Prerequisites: see README.md → Prerequisites.
+A non-loopback bind automatically trusts this host's private LAN IPv4 addresses
+and derives matching HTTP origins. Use --allowed-origin for a custom hostname or
+HTTPS proxy; the trusted host is derived from the origin. Prerequisites: see
+README.md → Prerequisites.
 `
 
 export interface BunServerOptions {
@@ -114,19 +116,29 @@ export async function ensureFrontendAssets(input: {
   if (result.stderr) process.stderr.write(result.stderr)
 }
 
+function envList(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
+
 /** Map shared CLI flags onto direct-server options; flags override the environment. */
 export function serverOptionsFromFlags(flags: CliFlags): BunServerOptions {
   const options: BunServerOptions = {}
   const port = validatePort(flags.port ?? process.env.OPENCODE_UI_PORT ?? "5174")
+  const hostname = flags.host ?? process.env.OPENCODE_UI_HOST
   if (flags.host !== undefined) options.hostname = flags.host
   options.port = port
   if (flags.engineUrl !== undefined) options.engineUrl = flags.engineUrl
   if (flags.artifactRoots.length > 0) options.artifactRoots = flags.artifactRoots
-  if (flags.allowedHosts.length > 0 || flags.allowedOrigins.length > 0) {
-    options.security = {
-      allowedHosts: ["127.0.0.1", "localhost", "[::1]", ...flags.allowedHosts],
-      allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`, `http://[::1]:${port}`, ...flags.allowedOrigins],
-    }
+
+  const useEnv = flags.allowedHosts.length === 0 && flags.allowedOrigins.length === 0
+  const allowedHosts = flags.allowedHosts.length > 0 ? flags.allowedHosts : useEnv ? envList("OPENCODE_UI_ALLOWED_HOSTS") : []
+  const allowedOrigins = flags.allowedOrigins.length > 0 ? flags.allowedOrigins : useEnv ? envList("OPENCODE_UI_ALLOWED_ORIGINS") : []
+  const nonLoopbackBind = hostname !== undefined && !isLoopbackHost(validateHostname(hostname))
+  if (allowedHosts.length > 0 || allowedOrigins.length > 0 || nonLoopbackBind) {
+    options.security = resolveTrustedOrigins({ hostname, port, allowedHosts, allowedOrigins })
   }
   return options
 }
@@ -143,38 +155,20 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const roots = (options.artifactRoots ?? legacyRoots ?? DEFAULT_ARTIFACT_ROOTS).map((value) => resolve(validatePath(value)))
   const developmentOrigin = options.security ? undefined : process.env.OPENCODE_UI_DEV_ORIGIN
   if (developmentOrigin) validateOrigin(developmentOrigin)
-  const devExtraHosts = (options.security ? "" : process.env.OPENCODE_UI_ALLOWED_HOSTS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map(validateHostname)
-  const devExtraOrigins = (options.security ? "" : process.env.OPENCODE_UI_ALLOWED_ORIGINS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map(validateOrigin)
-  const defaultOriginsForPort = [
-    `http://127.0.0.1:${port}`,
-    `http://localhost:${port}`,
-    `http://[::1]:${port}`,
-  ]
-  const security = options.security ? {
-    allowedHosts: options.security.allowedHosts.map(validateHostname),
-    allowedOrigins: options.security.allowedOrigins.map(validateOrigin),
-  } : {
-    allowedHosts: [...DEFAULT_ALLOWED_HOSTS, ...devExtraHosts],
-    allowedOrigins: [
-      ...new Set([
-        ...DEFAULT_ALLOWED_ORIGINS,
-        ...defaultOriginsForPort,
-        ...(developmentOrigin ? [developmentOrigin] : []),
-        ...devExtraOrigins,
-      ]),
+  const devExtraHosts = options.security ? [] : envList("OPENCODE_UI_ALLOWED_HOSTS")
+  const devExtraOrigins = options.security ? [] : envList("OPENCODE_UI_ALLOWED_ORIGINS")
+  const security = resolveTrustedOrigins({
+    hostname,
+    port,
+    allowedHosts: options.security?.allowedHosts ?? devExtraHosts,
+    allowedOrigins: options.security?.allowedOrigins ?? [
+      ...devExtraOrigins,
+      ...(developmentOrigin ? [developmentOrigin] : []),
     ],
-  }
+  })
   if (!isLoopbackHost(hostname) &&
     (!security.allowedHosts.some((host) => !isLoopbackHost(host)) || !security.allowedOrigins.some((origin) => !isLoopbackHost(new URL(origin).hostname)))) {
-    throw new BunConfigurationError("Non-loopback binding requires explicit non-loopback --allowed-host and --allowed-origin. The required UI password gate is a shared access boundary, not tenant isolation; use secure transport.")
+    throw new BunConfigurationError("Non-loopback binding needs a trusted non-loopback host and origin. Add local private IPv4 addresses, or pass explicit non-loopback --allowed-host/--allowed-origin. The required UI password gate is a shared access boundary, not tenant isolation; use secure transport.")
   }
   const directory = options.assetDirectory ?? resolve(import.meta.dirname, process.env.OPENCODE_UI_BUILD_TARGET === "dev" ? "../dist-bun-dev" : "../dist-bun-build")
   if (options.assetDirectory) {

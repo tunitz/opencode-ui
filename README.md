@@ -62,20 +62,32 @@ the engine password.
 
 ### Remote access
 
-To expose the UI on another interface, configure the access password first and pass explicit
-allowed host and origin values:
+For ordinary LAN use, bind to all interfaces and open the host's LAN IP from another device. No
+allowlist flags are needed:
 
 ```sh
-bun run start --host 0.0.0.0 --allowed-host ui.example.test --allowed-origin https://ui.example.test
+bun run start --host 0.0.0.0
 ```
 
-Replace `ui.example.test` with your real reachable hostname and use secure transport (HTTPS behind
-a trusted reverse proxy or tunnel). Set the UI password privately before exposing the service; a
-non-loopback bind requires one. The first visit opens the setup screen when no password is set, or
-the sign-in screen when one is already configured. The setup endpoint works without a session.
-The direct server derives its built-in loopback allowed origins from the resolved `--port`, so
-changing `--port` on loopback works automatically; pass an explicit `--allowed-origin` for any
-non-loopback origin. Use `bun run start --help` for the complete flag reference.
+Example: if this machine is `192.168.31.10`, visit `http://192.168.31.10:5174`. The server
+automatically trusts its own private RFC1918 IPv4 addresses and derives matching
+`http://<address>:<port>` origins. Tailscale/CGNAT and public addresses are not automatic. Host and
+Origin checks remain enabled; the UI password is still required on a non-loopback bind.
+
+For a custom hostname or an HTTPS reverse proxy, pass the origin; its hostname is trusted
+automatically:
+
+```sh
+bun run start --host 0.0.0.0 --allowed-origin https://ui.example.test
+```
+
+`--allowed-host` is available when an extra Host header must be trusted. Explicit trust values
+replace the automatic LAN addresses; repeat either flag for multiple values. Use secure transport
+for real credential protection. Set the UI password privately before exposing the service. The
+first visit opens the setup screen when no password is set, or the sign-in screen when one is
+already configured. The setup endpoint works without a session. The direct server derives its
+built-in loopback allowed origins from the resolved `--port`, so changing `--port` on loopback
+also works automatically. Use `bun run start --help` for the complete flag reference.
 
 ## Published package
 
@@ -86,17 +98,17 @@ checkout as shown above. The unscoped `opencode-ui` package is unrelated; do not
 ## Common options
 
 The start command accepts these flags (`bun run start:bun` and `bun run preview` are aliases).
-Flags override environment settings. For a non-loopback bind, always pass explicit non-loopback
-`--allowed-host` and `--allowed-origin` values — see [Remote access](#remote-access) and the
-security boundary below.
+Flags override environment settings. A non-loopback bind works with no trust flags; explicit values
+are for custom hostnames, HTTPS proxies, or non-private networks — see
+[Remote access](#remote-access) and the security boundary below.
 
 | Option | Default and behavior |
 | --- | --- |
 | `--host <host>` | `OPENCODE_UI_HOST`, otherwise `127.0.0.1`. Bind hostname/IP only. |
 | `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174`. Integer from 1 through 65535. |
 | `--engine-url <origin>` | Optional prefill for first-run setup. Does not create a connection. |
-| `--allowed-host <host>` | Repeatable additions to loopback hosts. Hostname/IP only. |
-| `--allowed-origin <origin>` | Repeatable additions to loopback origins at the UI port. |
+| `--allowed-host <host>` | Repeatable trusted hostname/IP. Derives a matching HTTP origin when non-loopback. Explicit values replace automatic LAN trust. |
+| `--allowed-origin <origin>` | Repeatable trusted HTTP(S) origin. Its hostname is trusted automatically. Explicit values replace automatic LAN trust. |
 | `--artifact-root <path>` | Repeatable artifact roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. `bun run start` otherwise allows `/tmp/opencode/shots`; the CLI allows none. |
 | `--help`, `--version` | Show usage or the package version without reading credentials or starting services. |
 
@@ -139,11 +151,12 @@ valid for 30 days; the server stores an argon2id password hash and SHA-256 sessi
 under `~/.local/share/opencode-ui/auth/`, and no password or token is placed in `localStorage` or
 `sessionStorage`. Anyone with the password can exercise the permissions of the engine credential.
 
-`bun run start` binds to loopback by default. A non-loopback bind requires a UI password and should
-add an explicit non-loopback `--allowed-host` and an explicit non-loopback `--allowed-origin`, plus
-secure transport such as HTTPS. Allowlists are not authentication or multi-tenant isolation. Protect
-the engine endpoint separately, and do not disable the UI's Host, Origin, WebSocket, route, method,
-JSON-mutation, artifact-provenance, or `no-store` protections.
+`bun run start` binds to loopback by default. A non-loopback bind requires a UI password. With no
+explicit trust flags it trusts this host's private LAN IPv4 addresses and matching HTTP origins; a
+custom hostname or HTTPS proxy needs `--allowed-origin` (or `--allowed-host`). Use secure transport
+such as HTTPS for real credential protection. Allowlists are not authentication or multi-tenant
+isolation. Protect the engine endpoint separately, and do not disable the UI's Host, Origin,
+WebSocket, route, method, JSON-mutation, artifact-provenance, or `no-store` protections.
 
 ## Notes
 
