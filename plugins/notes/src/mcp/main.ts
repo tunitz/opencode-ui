@@ -1,7 +1,18 @@
 #!/usr/bin/env bun
 import { startNotesMcpServer } from "./server.js"
 
-const created = await startNotesMcpServer({ defaultDirectory: process.cwd() })
+// The UI server injects the active saved connection id when it registers this
+// MCP server. It is an internal scope, never logged.
+const scopeEnv = process.env.OPENCODE_UI_CONNECTION_SCOPE
+const scope =
+  typeof scopeEnv === "string" && scopeEnv.trim()
+    ? { connectionId: scopeEnv.trim() }
+    : undefined
+
+const created = await startNotesMcpServer({
+  defaultDirectory: process.cwd(),
+  scope,
+})
 
 created.server.onclose = () => {
   process.exit(0)

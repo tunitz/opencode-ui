@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { PlugIcon, RefreshCwIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { ENGINE_CONNECTION_CHANGED } from "@/lib/connections"
 import { NOTES_PLUGINS_CHANGED } from "@/lib/notes-plugin-state"
 
 type PluginStatus = {
@@ -208,6 +209,51 @@ export function SettingsPluginsSection() {
     }
   }, [load])
 
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.addEventListener !== "function"
+    )
+      return
+    // A connection switch rewrites the Notes MCP scope on the server; re-read
+    // so the surface reflects the engine that is active now.
+    const onChange = () => void load()
+    window.addEventListener(ENGINE_CONNECTION_CHANGED, onChange)
+    return () => {
+      if (typeof window.removeEventListener === "function")
+        window.removeEventListener(ENGINE_CONNECTION_CHANGED, onChange)
+    }
+  }, [load])
+
+  const refreshScope = useCallback(
+    async (plugin: PluginStatus) => {
+      setBusyId(plugin.id)
+      setActionError(null)
+      let succeeded = false
+      try {
+        const response = await fetch(
+          `/api/ui/plugins/${encodeURIComponent(plugin.id)}/refresh-scope`,
+          {
+            method: "POST",
+            cache: "no-store",
+            credentials: "same-origin",
+            headers: { accept: "application/json" },
+          }
+        )
+        const body: unknown = await response.json().catch(() => null)
+        if (!response.ok) throw new Error(errorMessage(body, response.status))
+        succeeded = true
+      } catch (failure) {
+        setActionError(failureMessage(failure))
+      } finally {
+        setBusyId(null)
+        if (succeeded) notifyChanged()
+        await load()
+      }
+    },
+    [load, notifyChanged]
+  )
+
   const toggle = useCallback(
     async (plugin: PluginStatus, enable: boolean) => {
       setBusyId(plugin.id)
@@ -376,6 +422,19 @@ export function SettingsPluginsSection() {
                         : "Disable"}
                   </Button>
                 )}
+                {plugin.id === "notes" && plugin.configured ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-11"
+                    disabled={busy || loading || !engineAvailable}
+                    aria-label="Refresh Notes connection scope"
+                    title="Re-apply the active connection's Notes scope to this engine's MCP tools"
+                    onClick={() => void refreshScope(plugin)}
+                  >
+                    Refresh scope
+                  </Button>
+                ) : null}
               </li>
             )
           })}

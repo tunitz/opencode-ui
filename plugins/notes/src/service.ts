@@ -37,6 +37,7 @@ import {
   type ReadAttachmentOutput,
   type RestoreInput,
   type RestoreOutput,
+  type Scope,
   type SearchInput,
   type SearchOutput,
   type SearchResult,
@@ -259,6 +260,30 @@ function matchesDirectory(
   return projectDir === directory
 }
 
+/**
+ * Whether a space is visible to a caller. Unscoped library callers see
+ * everything; Global spaces are always shared; a linked space is visible only
+ * when its owner matches the caller's active connection. Legacy linked spaces
+ * (no connectionId) are hidden unless an explicit migration surface includes
+ * them.
+ */
+function matchesScope(space: Space, scope: Scope | undefined): boolean {
+  if (scope === undefined) return true
+  if (space.projectDir === null) return true
+  return (
+    typeof scope.connectionId === "string" &&
+    space.connectionId === scope.connectionId
+  )
+}
+
+function optionalConnectionId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== "string" || !value.trim())
+    invalid("connectionId", "connectionId must be a non-empty string or null")
+  return value
+}
+
 function collapseWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim()
 }
@@ -315,6 +340,8 @@ export interface NotesServiceOptions {
   /** Defaults to true for the built-in file store, false for an injected store. */
   readonly migrate?: boolean
   readonly engineDbPath?: string
+  /** Default scope applied when a public method is called without one. */
+  readonly scope?: Scope
 }
 
 export class NotesService {
@@ -366,6 +393,10 @@ export class NotesService {
     }
   }
 
+  private scopeOf(scope?: Scope): Scope | undefined {
+    return scope ?? this.options.scope
+  }
+
   private async requireSpace(spaceID: string): Promise<Space> {
     const space = await this.store.getSpace(spaceID)
     if (!space)
@@ -373,12 +404,42 @@ export class NotesService {
     return space
   }
 
+  private async assertSpaceInScope(
+    spaceID: string,
+    scope: Scope | undefined
+  ): Promise<Space> {
+    const space = await this.requireSpace(spaceID)
+    if (!matchesScope(space, scope))
+      throw new NotesError("space_not_found", "Space not found", { spaceID })
+    return space
+  }
+
+  /**
+   * Direct note access must not reveal the existence of another connection's
+   * note. Unassigned notes are shared; a note in a space is visible only when
+   * that space is Global or owned by the active connection.
+   */
+  private async assertNoteInScope(
+    noteID: string,
+    scope: Scope | undefined
+  ): Promise<void> {
+    if (scope === undefined) return
+    const note = await this.store.getNote(noteID)
+    if (!note)
+      throw new NotesError("note_not_found", "Note not found", { noteID })
+    if (note.spaceID === null) return
+    const space = await this.store.getSpace(note.spaceID)
+    if (!space || !matchesScope(space, scope))
+      throw new NotesError("note_not_found", "Note not found", { noteID })
+  }
+
   private async snapshot(existing: Note, savedAt: number): Promise<void> {
     await this.store.putSnapshot({ note: existing, savedAt })
   }
 
-  async list(input: ListInput = {}): Promise<ListOutput> {
+  async list(input: ListInput = {}, scope?: Scope): Promise<ListOutput> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const status = optionalStatus(input.status)
     const statuses = optionalStatuses(input.statuses)
     const pinned = optionalBoolean(input.pinned, "pinned")
@@ -412,9 +473,12 @@ export class NotesService {
       if (pinned !== undefined && note.pinned !== pinned) return false
       if (query && !`${note.title}\n${note.body}`.toLowerCase().includes(query))
         return false
-      if (directory) {
-        if (note.spaceID !== null) {
-          const space = spaceByID.get(note.spaceID)
+      if (note.spaceID !== null) {
+        const space = spaceByID.get(note.spaceID)
+        if (effectiveScope !== undefined) {
+          if (!space || !matchesScope(space, effectiveScope)) return false
+        }
+        if (directory) {
           if (!space) return false
           if (!matchesDirectory(space.projectDir, directory, includeGlobal))
             return false
@@ -433,17 +497,19 @@ export class NotesService {
     }
   }
 
-  async get(input: GetNoteInput): Promise<Note> {
+  async get(input: GetNoteInput, scope?: Scope): Promise<Note> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const note = await this.store.getNote(noteID)
     if (!note)
       throw new NotesError("note_not_found", "Note not found", { noteID })
     return note
   }
 
-  async create(input: CreateNoteInput): Promise<Note> {
+  async create(input: CreateNoteInput, scope?: Scope): Promise<Note> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const spaceID =
       input.spaceID === undefined || input.spaceID === null
         ? null
@@ -454,7 +520,8 @@ export class NotesService {
     const pinned = optionalBoolean(input.pinned, "pinned") ?? false
     const noteID = this.store.createID("note")
     const note = await this.store.transaction(`note:${noteID}`, async () => {
-      if (spaceID !== null) await this.requireSpace(spaceID)
+      if (spaceID !== null)
+        await this.assertSpaceInScope(spaceID, effectiveScope)
       const now = this.store.now()
       const created: Note = {
         id: noteID,
@@ -476,9 +543,11 @@ export class NotesService {
     return note
   }
 
-  async update(input: UpdateNoteInput): Promise<Note> {
+  async update(input: UpdateNoteInput, scope?: Scope): Promise<Note> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    const effectiveScope = this.scopeOf(scope)
+    await this.assertNoteInScope(noteID, effectiveScope)
     const expectedRevision = optionalRevision(input.expectedRevision)
     const spaceID =
       input.spaceID === undefined
@@ -500,7 +569,7 @@ export class NotesService {
         throw new NotesError("note_not_found", "Note not found", { noteID })
       checkRevision("note", noteID, expectedRevision, existing.revision)
       if (spaceID !== undefined && spaceID !== null)
-        await this.requireSpace(spaceID)
+        await this.assertSpaceInScope(spaceID, effectiveScope)
       const changed =
         (spaceID !== undefined && spaceID !== existing.spaceID) ||
         (title !== undefined && title !== existing.title) ||
@@ -537,9 +606,10 @@ export class NotesService {
     return result.note
   }
 
-  async delete(input: DeleteNoteInput): Promise<DeleteNoteOutput> {
+  async delete(input: DeleteNoteInput, scope?: Scope): Promise<DeleteNoteOutput> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const expectedRevision = optionalRevision(input.expectedRevision)
     const deleted = await this.store.transaction(
       `note:${noteID}`,
@@ -566,10 +636,12 @@ export class NotesService {
   }
 
   async createAttachment(
-    input: CreateAttachmentInput
+    input: CreateAttachmentInput,
+    scope?: Scope
   ): Promise<{ note: Note; attachment: NoteAttachment }> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const expectedRevision = optionalRevision(input.expectedRevision)
     const name = attachmentName(input.name)
     const mime = attachmentMime(input.mime)
@@ -650,10 +722,12 @@ export class NotesService {
   }
 
   async readAttachment(
-    input: ReadAttachmentInput
+    input: ReadAttachmentInput,
+    scope?: Scope
   ): Promise<ReadAttachmentOutput> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const attachmentID = requiredText(
       input.attachmentID,
       "attachmentID",
@@ -682,10 +756,12 @@ export class NotesService {
   }
 
   async deleteAttachment(
-    input: DeleteAttachmentInput
+    input: DeleteAttachmentInput,
+    scope?: Scope
   ): Promise<DeleteAttachmentOutput> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const attachmentID = requiredText(
       input.attachmentID,
       "attachmentID",
@@ -728,25 +804,35 @@ export class NotesService {
     return { note }
   }
 
-  async spaces(input: SpacesInput = {}): Promise<SpacesOutput> {
+  async spaces(input: SpacesInput = {}, scope?: Scope): Promise<SpacesOutput> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const directory = optionalDirectory(input.directory)
     const includeGlobal = optionalBoolean(
       input.includeGlobal,
       "includeGlobal"
     )
+    const includeLegacy = input.includeLegacy === true
     const spaces = await this.store.listSpaces()
-    const filtered = spaces.filter((space) =>
-      matchesDirectory(space.projectDir, directory, includeGlobal)
-    )
+    const filtered = spaces.filter((space) => {
+      if (!matchesDirectory(space.projectDir, directory, includeGlobal))
+        return false
+      return includeLegacy || matchesScope(space, effectiveScope)
+    })
     filtered.sort(compareSpaces)
     return { spaces: filtered, total: filtered.length }
   }
 
-  async createSpace(input: CreateSpaceInput): Promise<Space> {
+  async createSpace(input: CreateSpaceInput, scope?: Scope): Promise<Space> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const name = requiredText(input.name, "name", LIMITS.name)
     const projectDir = projectDirectory(input.projectDir) ?? null
+    // Global spaces ignore the owner. A linked space created without an active
+    // connection becomes legacy/pending rather than failing; the migration UI
+    // can assign it later.
+    const connectionId =
+      projectDir === null ? null : (effectiveScope?.connectionId ?? null)
     const pinned = optionalBoolean(input.pinned, "pinned") ?? false
     const spaceID = this.store.createID("space")
     const space = await this.store.transaction(`space:${spaceID}`, async () => {
@@ -756,6 +842,7 @@ export class NotesService {
         name,
         projectDir,
         pinned,
+        connectionId,
         revision: 1,
         createdAt: now,
         updatedAt: now,
@@ -767,8 +854,9 @@ export class NotesService {
     return space
   }
 
-  async updateSpace(input: UpdateSpaceInput): Promise<Space> {
+  async updateSpace(input: UpdateSpaceInput, scope?: Scope): Promise<Space> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const spaceID = requiredText(input.spaceID, "spaceID", LIMITS.projectID)
     const expectedRevision = optionalRevision(input.expectedRevision)
     const name =
@@ -777,21 +865,32 @@ export class NotesService {
         : requiredText(input.name, "name", LIMITS.name)
     const projectDir = projectDirectory(input.projectDir)
     const pinned = optionalBoolean(input.pinned, "pinned")
+    // Supplying connectionId is an explicit migration assignment: it bypasses
+    // the normal scope guard so a legacy space can be adopted.
+    const hasExplicitConnection = input.connectionId !== undefined
+    const explicitConnectionId = optionalConnectionId(input.connectionId)
     const result = await this.store.transaction(`space:${spaceID}`, async () => {
-      const existing = await this.store.getSpace(spaceID)
-      if (!existing)
-        throw new NotesError("space_not_found", "Space not found", { spaceID })
+      const existing = hasExplicitConnection
+        ? await this.requireSpace(spaceID)
+        : await this.assertSpaceInScope(spaceID, effectiveScope)
       checkRevision("space", spaceID, expectedRevision, existing.revision)
+      const nextConnectionId = hasExplicitConnection
+        ? (explicitConnectionId ?? null)
+        : projectDir === null
+          ? null
+          : existing.connectionId
       const changed =
         (name !== undefined && name !== existing.name) ||
         (projectDir !== undefined && projectDir !== existing.projectDir) ||
-        (pinned !== undefined && pinned !== existing.pinned)
+        (pinned !== undefined && pinned !== existing.pinned) ||
+        nextConnectionId !== existing.connectionId
       if (!changed) return { space: existing, changed: false }
       const next: Space = {
         ...existing,
         name: name ?? existing.name,
         projectDir: projectDir === undefined ? existing.projectDir : projectDir,
         pinned: pinned ?? existing.pinned,
+        connectionId: nextConnectionId,
         revision: existing.revision + 1,
         updatedAt: this.store.now(),
       }
@@ -804,8 +903,12 @@ export class NotesService {
     return result.space
   }
 
-  async deleteSpace(input: DeleteSpaceInput): Promise<DeleteSpaceOutput> {
+  async deleteSpace(
+    input: DeleteSpaceInput,
+    scope?: Scope
+  ): Promise<DeleteSpaceOutput> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const spaceID = requiredText(input.spaceID, "spaceID", LIMITS.projectID)
     const expectedRevision = optionalRevision(input.expectedRevision)
     // Accepted for wire compatibility, but never honored: there is no
@@ -816,6 +919,8 @@ export class NotesService {
       async () => {
         const existing = await this.store.getSpace(spaceID)
         if (!existing) return false
+        if (!matchesScope(existing, effectiveScope))
+          throw new NotesError("space_not_found", "Space not found", { spaceID })
         // Check the version before inspecting or touching notes. A stale client
         // must not remove a space that changed since it listed it.
         checkRevision("space", spaceID, expectedRevision, existing.revision)
@@ -836,8 +941,9 @@ export class NotesService {
     return { deleted, deletedNotes: 0 }
   }
 
-  async search(input: SearchInput): Promise<SearchOutput> {
+  async search(input: SearchInput, scope?: Scope): Promise<SearchOutput> {
     await this.ready()
+    const effectiveScope = this.scopeOf(scope)
     const query = collapseWhitespace(
       requiredText(input.query, "query", LIMITS.query)
     )
@@ -869,11 +975,16 @@ export class NotesService {
         continue
       if (statuses && !statuses.includes(note.status)) continue
       if (pinned !== undefined && note.pinned !== pinned) continue
-      if (directory && note.spaceID !== null) {
+      if (note.spaceID !== null) {
         const space = spaceByID.get(note.spaceID)
-        if (!space) continue
-        if (!matchesDirectory(space.projectDir, directory, includeGlobal))
-          continue
+        if (effectiveScope !== undefined) {
+          if (!space || !matchesScope(space, effectiveScope)) continue
+        }
+        if (directory) {
+          if (!space) continue
+          if (!matchesDirectory(space.projectDir, directory, includeGlobal))
+            continue
+        }
       }
       const titleMatch = note.title.toLowerCase().includes(lowerQuery)
       const collapsedBody = collapseWhitespace(note.body)
@@ -896,9 +1007,10 @@ export class NotesService {
     }
   }
 
-  async history(input: HistoryInput): Promise<HistoryOutput> {
+  async history(input: HistoryInput, scope?: Scope): Promise<HistoryOutput> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const limit =
       input.limit === undefined ? DEFAULT_HISTORY_LIMIT : input.limit
     if (
@@ -928,9 +1040,10 @@ export class NotesService {
     }
   }
 
-  async restore(input: RestoreInput): Promise<RestoreOutput> {
+  async restore(input: RestoreInput, scope?: Scope): Promise<RestoreOutput> {
     await this.ready()
     const noteID = requiredText(input.noteID, "noteID", LIMITS.projectID)
+    await this.assertNoteInScope(noteID, this.scopeOf(scope))
     const revision = requiredRevision(input.revision)
     const expectedRevision = optionalRevision(input.expectedRevision)
     const note = await this.store.transaction(`note:${noteID}`, async () => {

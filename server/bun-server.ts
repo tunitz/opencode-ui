@@ -5,7 +5,7 @@ import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-deliv
 import { createAuthService } from "./auth.ts"
 import { createEngineConnectionsService } from "./engine-connections.ts"
 import { createNotesApi } from "./notes-api.ts"
-import { createPluginsApi } from "./plugins-api.ts"
+import { createPluginsApi, NOTES_PLUGIN_ID } from "./plugins-api.ts"
 import { createSessionShortcutsService } from "./session-shortcuts.ts"
 import { createNotificationService } from "./notifications.ts"
 import { createBunApplication } from "./bun-application.ts"
@@ -210,11 +210,14 @@ export async function startBunServer(options: BunServerOptions = {}) {
   const notifications = createNotificationService({
     ...upstream(),
   })
-  const notes = createNotesApi()
+  const notes = createNotesApi({
+    getConnectionId: () => connections.getActiveTarget()?.id ?? null,
+  })
   const plugins = createPluginsApi({
     engineUrl: "",
     authorization: "",
     getTarget: () => activeEngine() ?? { engineUrl: "", authorization: "" },
+    getConnectionId: () => activeEngine()?.id ?? null,
     repoRoot: resolve(import.meta.dirname, ".."),
   })
   const sessionShortcuts = createSessionShortcutsService()
@@ -234,9 +237,13 @@ export async function startBunServer(options: BunServerOptions = {}) {
     sessionShortcuts,
     security,
   })
-  const unsubscribeConnections = connections.onChange(() => {
+  const unsubscribeConnections = connections.onChange((target) => {
     application.resetEngineConnections()
     notifications.reconfigure(upstream())
+    // The Notes MCP entry carries the owning connection id in its env. Rewrite
+    // it on every switch so agent tools see the same scope as the browser UI.
+    // A no-op when Notes is not enabled or no connection is active.
+    if (target?.id) void plugins.refreshScope(NOTES_PLUGIN_ID).catch(() => undefined)
   })
   const bun = (globalThis as unknown as { Bun: { serve: (options: {
     hostname: string; port: number; fetch: typeof application.fetch; websocket: typeof application.websocket

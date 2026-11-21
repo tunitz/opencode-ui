@@ -23,6 +23,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { ConnectionDataMigration } from "@/components/connection-data-migration"
 import { EngineConnectionForm, TestFeedback } from "@/components/engine-connection-form"
 import { Switch } from "@/components/ui/switch"
 import {
@@ -372,6 +373,11 @@ export function SettingsConnectionSection({ nav }: { nav: OpenCodeController }) 
           {actionError}
         </p>
       ) : null}
+
+      <ConnectionDataMigration
+        profiles={state.profiles}
+        activeId={state.active?.id ?? null}
+      />
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

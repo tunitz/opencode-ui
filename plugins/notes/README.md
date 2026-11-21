@@ -104,8 +104,8 @@ interface Space {
 }
 ```
 
-- `projectDir === null` is a **Global** space, visible in every project.
-- A non-null `projectDir` is a canonical project directory.
+- `projectDir === null` is a **Global** space, visible in every project and every saved connection.
+- A non-null `projectDir` is a canonical project directory. Such a space also carries a `connectionId`: it is visible only on the saved OpenCode connection that owns it, so two connections with the same directory path never share its notes. A linked space without a `connectionId` is legacy data: it is preserved but hidden from normal listings until it is explicitly assigned from Settings → Connections. Unassigned notes (`spaceID: null`) stay shared across connections.
 - The v1 `kind` / `project` vocabulary is gone. Legacy parsing/migration maps a
   global or unlinked space to `null`, and a linked planning space to
   `project.canonical ?? project.directory ?? null`.
@@ -119,8 +119,10 @@ interface Space {
 The two callers apply different defaults on top of these rules:
 
 - The browser adapter (`src/lib/notes-api.ts`, `createNotesAdapter`) passes `target = null` to its
-  list and spaces calls, so it deliberately lists **all** notes and spaces across every project
-  and Global. Drafts stay cached per project directory.
+  list and spaces calls, so it lists notes and spaces across every project of the **current
+  connection**. The UI server injects that connection scope into every service call, including
+  direct note and attachment access; Global spaces and unassigned notes remain shared. Drafts stay
+  cached per connection and project directory.
 - MCP tools default to a project scope. `notes_list`, `notes_search`, and `notes_spaces` resolve
   `directory` with `scopingDirectory(input.directory, context.defaultDirectory)`: an explicit
   `directory` wins, otherwise the server process's working directory is used. Global records are

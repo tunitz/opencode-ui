@@ -1,6 +1,8 @@
 /** Browser-only session organization; no native session data is changed. */
 export type SessionShortcut = { pinned: boolean; label: string }
 export type SessionShortcuts = Record<string, SessionShortcut>
+/** The connection-scoped view returned by the session shortcuts API. */
+export type ShortcutState = { shortcuts: SessionShortcuts; legacyCount: number }
 const MAX_ENTRIES = 500
 
 export function shortcutStorageKey(origin: string, version: string) {

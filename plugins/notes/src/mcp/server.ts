@@ -12,7 +12,8 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { NotesService, type NotesServiceOptions } from "../service.js"
-import { NotesError, PACKAGE_NAME, PACKAGE_VERSION } from "../types.js"
+import type { Scope } from "../types.js"
+import { LIMITS, NotesError, PACKAGE_NAME, PACKAGE_VERSION } from "../types.js"
 import { NOTES_PROMPTS } from "./prompts.js"
 import {
   NOTE_RESOURCE_TEMPLATE,
@@ -43,6 +44,8 @@ export interface NotesMcpOptions extends NotesServiceOptions {
   /** Directory used when a tool omits `directory`. Defaults to process.cwd(). */
   readonly defaultDirectory?: string
   readonly serverInfo?: { readonly name: string; readonly version: string }
+  /** Saved connection this MCP server acts for; inherited by every service call. */
+  readonly scope?: Scope
 }
 
 const INSTRUCTIONS = [
@@ -93,7 +96,7 @@ function resourceError(error: unknown): never {
 export function createNotesMcpServer(
   options: NotesMcpOptions = {}
 ): NotesMcpServer {
-  const service = new NotesService(options)
+  const service = new NotesService({ ...options, scope: options.scope })
   const defaultDirectory = options.defaultDirectory ?? process.cwd()
   const server = new Server(
     options.serverInfo ?? { name: PACKAGE_NAME, version: PACKAGE_VERSION },
@@ -172,7 +175,7 @@ export function createNotesMcpServer(
   })
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-    resources: await listResources(service),
+    resources: await listResources(service, options.scope),
   }))
 
   server.setRequestHandler(
@@ -186,17 +189,16 @@ export function createNotesMcpServer(
     const uri = request.params.uri
     if (uri === SPACES_RESOURCE_URI) {
       try {
-        await service.ready()
-        const [spaces, notes] = await Promise.all([
-          service.store.listSpaces(),
-          service.store.listNotes(),
+        const [listedSpaces, listedNotes] = await Promise.all([
+          service.spaces({}, options.scope),
+          service.list({ limit: LIMITS.list }, options.scope),
         ])
         return {
           contents: [
             {
               uri,
               mimeType: "text/plain",
-              text: spacesInventory(spaces, notes),
+              text: spacesInventory(listedSpaces.spaces, listedNotes.notes),
             },
           ],
         }

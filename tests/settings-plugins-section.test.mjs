@@ -231,6 +231,46 @@ test("configured and installed metadata keeps the registered action", async () =
   }
 })
 
+test("refresh scope posts the dedicated endpoint and re-reads engine state", async () => {
+  let state = {
+    engineAvailable: true,
+    plugins: [
+      {
+        id: "notes",
+        name: "Notes",
+        description: "Notes",
+        configured: true,
+        installed: true,
+        registered: true,
+        connected: true,
+        restartRequired: false,
+      },
+    ],
+  }
+  const env = setup(async (url) => {
+    if (url.endsWith("/refresh-scope")) return json({ registered: true, connected: true, restartRequired: false })
+    return json(state)
+  })
+  let root
+  try {
+    const { SettingsPluginsSection } = await import("../src/components/settings-plugins-section")
+    await act(async () => { root = create(React.createElement(SettingsPluginsSection)) })
+    await flush()
+    const refresh = button(root, "Refresh Notes connection scope")
+    expect(refresh).toBeDefined()
+    await act(async () => refresh.props.onClick())
+    await flush()
+    expect(env.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "GET /api/ui/plugins",
+      "POST /api/ui/plugins/notes/refresh-scope",
+      "GET /api/ui/plugins",
+    ])
+  } finally {
+    if (root) await act(async () => root.unmount())
+    env.restore()
+  }
+})
+
 test("enabling a plugin posts once and re-reads the engine state", async () => {
   let state = {
     engineAvailable: true,

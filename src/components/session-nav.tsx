@@ -99,6 +99,7 @@ import { DESKTOP_SIDEBAR_RAIL_WIDTH, DESKTOP_SIDEBAR_WIDTH } from "@/lib/sidebar
 import { recordPerfRender } from "@/lib/perf-probe"
 import { fullActivityTime, relativeActivityTime } from "@/lib/relative-time"
 import type { SessionShortcuts, SessionShortcut } from "@/lib/session-shortcuts"
+import { useActiveConnection } from "@/lib/use-active-connection"
 import { useSessionShortcuts } from "@/lib/use-session-shortcuts"
 import { worktreeNavigationProject } from "@/lib/worktree-navigation"
 
@@ -861,12 +862,15 @@ function SessionList({
     : notes.open
       ? null
       : nav.activeSessionID
-  const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts()
+  const { connectionId } = useActiveConnection()
+  const { shortcuts, update: updateShortcut, error: shortcutError } = useSessionShortcuts(connectionId)
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [archivedOpen, setArchivedOpen] = useState(false)
   const [pinnedExtras, setPinnedExtras] = useState<SessionInfo[]>([])
   const pinnedExtrasRef = useRef<SessionInfo[]>([])
+  const pinnedConnectionRef = useRef(connectionId)
+  const pinnedGeneration = useRef(0)
   const onSelectRef = useRef(onSelect)
   useEffect(() => {
     onSelectRef.current = onSelect
@@ -924,6 +928,16 @@ function SessionList({
     loadPinnedRef.current = nav.loadPinnedSessions
   }, [nav.searchSessionPage, nav.loadSubsessionPage, nav.loadPinnedSessions])
 
+  // Cached resolved pins belong to one connection; clear them as soon as the
+  // active connection changes so a previous connection's pins cannot render.
+  useEffect(() => {
+    if (pinnedConnectionRef.current === connectionId) return
+    pinnedConnectionRef.current = connectionId
+    pinnedGeneration.current += 1
+    pinnedExtrasRef.current = []
+    setPinnedExtras([])
+  }, [connectionId])
+
   // Pinned IDs are external server state; resolving them keeps the section
   // complete even when the pinned session is outside the current paged list.
   useEffect(() => {
@@ -937,8 +951,9 @@ function SessionList({
     const missing = ids.filter((id) => !known.has(id)).slice(0, 50)
     if (missing.length === 0) return
     let cancelled = false
+    const generation = pinnedGeneration.current
     void loadPinnedRef.current(missing).then((rows) => {
-      if (cancelled || rows.length === 0) return
+      if (cancelled || generation !== pinnedGeneration.current || rows.length === 0) return
       setPinnedExtras((current) => {
         const seen = new Set(current.map((session) => session.id))
         const next = [...current, ...rows.filter((session) => !seen.has(session.id))]

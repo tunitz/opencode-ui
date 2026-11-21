@@ -152,6 +152,7 @@ function apiFor(url, configDirectory, repoRoot = BASE_REPO, extra = {}) {
     beforeConfigCommit: extra.beforeConfigCommit,
     configLockTimeoutMs: extra.configLockTimeoutMs,
     hotApplyTimeoutMs: extra.hotApplyTimeoutMs,
+    getConnectionId: extra.getConnectionId,
   })
 }
 
@@ -531,11 +532,71 @@ describe("Plugins HTTP API", () => {
     expect(parseJsonc(await readFile(path, "utf8")).mcp.servers.notes).toBeUndefined()
   })
 
+  test("refresh-scope requires an active connection and an enabled plugin", async () => {
+    const dir = await configDir()
+    const engine = fakeEngine({ connectOnAdd: true })
+    const repoRoot = await repoRootWith(["notes"])
+    const path = await writeConfig(dir, EXISTING_CONFIG)
+    let activeId = null
+    const api = apiFor(engine.url, dir, repoRoot, {
+      getConnectionId: () => activeId,
+    })
+
+    const noConnection = await post(api, "/api/ui/plugins/notes/refresh-scope")
+    expect(noConnection.status).toBe(409)
+    expect((await noConnection.json()).error.code).toBe("no_connection")
+    expect(engine.state.calls.filter((call) => call.method === "PUT")).toHaveLength(0)
+
+    activeId = "connection-a"
+    const notEnabled = await post(api, "/api/ui/plugins/notes/refresh-scope")
+    expect(notEnabled.status).toBe(409)
+    expect((await notEnabled.json()).error.code).toBe("not_configured")
+    expect(parseJsonc(await readFile(path, "utf8")).mcp.servers.notes).toBeUndefined()
+  })
+
+  test("refresh-scope rewrites the MCP env scope for the active connection", async () => {
+    const dir = await configDir()
+    const engine = fakeEngine({ connectOnAdd: true })
+    const repoRoot = await repoRootWith(["notes"])
+    const path = await writeConfig(dir, EXISTING_CONFIG)
+    let activeId = "connection-a"
+    const api = apiFor(engine.url, dir, repoRoot, {
+      getConnectionId: () => activeId,
+    })
+
+    const enabled = await post(api, "/api/ui/plugins/notes/enable")
+    expect(enabled.status).toBe(200)
+    const scopedConfig = {
+      ...notesConfig(repoRoot),
+      env: { OPENCODE_UI_CONNECTION_SCOPE: "connection-a" },
+    }
+    expect(parseJsonc(await readFile(path, "utf8")).mcp.servers.notes).toEqual(scopedConfig)
+    expect(engine.state.calls.filter((call) => call.method === "PUT").at(-1).body).toEqual({ config: scopedConfig })
+
+    activeId = "connection-b"
+    const refreshed = await post(api, "/api/ui/plugins/notes/refresh-scope")
+    expect(refreshed.status).toBe(200)
+    expect(await refreshed.json()).toEqual(settlement({ registered: true, connected: true }))
+    const nextConfig = {
+      ...notesConfig(repoRoot),
+      env: { OPENCODE_UI_CONNECTION_SCOPE: "connection-b" },
+    }
+    expect(parseJsonc(await readFile(path, "utf8")).mcp.servers.notes).toEqual(nextConfig)
+    const puts = engine.state.calls.filter((call) => call.method === "PUT")
+    expect(puts).toHaveLength(2)
+    expect(puts[1].body).toEqual({ config: nextConfig })
+    expect(parseJsonc(await readFile(path, "utf8")).mcp.servers.healthvault).toEqual(HEALTHVAULT)
+  })
+
   test("rejects wrong verbs and unknown endpoints", async () => {
     const dir = await configDir()
     const engine = fakeEngine({})
     const api = apiFor(engine.url, dir)
-    for (const path of ["/api/ui/plugins/notes/enable", "/api/ui/plugins/notes/disable"]) {
+    for (const path of [
+      "/api/ui/plugins/notes/enable",
+      "/api/ui/plugins/notes/disable",
+      "/api/ui/plugins/notes/refresh-scope",
+    ]) {
       const response = await get(api, path)
       expect(response.status).toBe(405)
     }

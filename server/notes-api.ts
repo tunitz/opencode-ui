@@ -18,6 +18,7 @@ import {
   type NotesErrorType,
   type NotesService,
   type ReadAttachmentInput,
+  type Scope,
   type RestoreInput,
   type SearchInput,
   type SpacesInput,
@@ -42,35 +43,39 @@ const WATCH_DEBOUNCE_MS = 250
 const WATCH_DIRECTORIES = ["notes", "spaces", "attachments"] as const
 
 type Input = Record<string, unknown>
-type MethodHandler = (service: NotesService, input: Input) => Promise<unknown>
+type MethodHandler = (
+  service: NotesService,
+  input: Input,
+  scope?: Scope
+) => Promise<unknown>
 
 const METHODS: ReadonlyMap<string, { handler: MethodHandler; mutates: boolean }> = new Map<
   string,
   { handler: MethodHandler; mutates: boolean }
 >([
-  ["list", { handler: (service, input) => service.list(input as unknown as ListInput), mutates: false }],
-  ["get", { handler: (service, input) => service.get(input as unknown as GetNoteInput), mutates: false }],
-  ["create", { handler: (service, input) => service.create(input as unknown as CreateNoteInput), mutates: true }],
-  ["update", { handler: (service, input) => service.update(input as unknown as UpdateNoteInput), mutates: true }],
-  ["delete", { handler: (service, input) => service.delete(input as unknown as DeleteNoteInput), mutates: true }],
-  ["search", { handler: (service, input) => service.search(input as unknown as SearchInput), mutates: false }],
-  ["history", { handler: (service, input) => service.history(input as unknown as HistoryInput), mutates: false }],
-  ["restore", { handler: (service, input) => service.restore(input as unknown as RestoreInput), mutates: true }],
-  ["spaces", { handler: (service, input) => service.spaces(input as unknown as SpacesInput), mutates: false }],
-  ["createSpace", { handler: (service, input) => service.createSpace(input as unknown as CreateSpaceInput), mutates: true }],
-  ["updateSpace", { handler: (service, input) => service.updateSpace(input as unknown as UpdateSpaceInput), mutates: true }],
-  ["deleteSpace", { handler: (service, input) => service.deleteSpace(input as unknown as DeleteSpaceInput), mutates: true }],
+  ["list", { handler: (service, input, scope) => service.list(input as unknown as ListInput, scope), mutates: false }],
+  ["get", { handler: (service, input, scope) => service.get(input as unknown as GetNoteInput, scope), mutates: false }],
+  ["create", { handler: (service, input, scope) => service.create(input as unknown as CreateNoteInput, scope), mutates: true }],
+  ["update", { handler: (service, input, scope) => service.update(input as unknown as UpdateNoteInput, scope), mutates: true }],
+  ["delete", { handler: (service, input, scope) => service.delete(input as unknown as DeleteNoteInput, scope), mutates: true }],
+  ["search", { handler: (service, input, scope) => service.search(input as unknown as SearchInput, scope), mutates: false }],
+  ["history", { handler: (service, input, scope) => service.history(input as unknown as HistoryInput, scope), mutates: false }],
+  ["restore", { handler: (service, input, scope) => service.restore(input as unknown as RestoreInput, scope), mutates: true }],
+  ["spaces", { handler: (service, input, scope) => service.spaces(input as unknown as SpacesInput, scope), mutates: false }],
+  ["createSpace", { handler: (service, input, scope) => service.createSpace(input as unknown as CreateSpaceInput, scope), mutates: true }],
+  ["updateSpace", { handler: (service, input, scope) => service.updateSpace(input as unknown as UpdateSpaceInput, scope), mutates: true }],
+  ["deleteSpace", { handler: (service, input, scope) => service.deleteSpace(input as unknown as DeleteSpaceInput, scope), mutates: true }],
   [
     "createAttachment",
-    { handler: (service, input) => service.createAttachment(input as unknown as CreateAttachmentInput), mutates: true },
+    { handler: (service, input, scope) => service.createAttachment(input as unknown as CreateAttachmentInput, scope), mutates: true },
   ],
   [
     "readAttachment",
-    { handler: (service, input) => service.readAttachment(input as unknown as ReadAttachmentInput), mutates: false },
+    { handler: (service, input, scope) => service.readAttachment(input as unknown as ReadAttachmentInput, scope), mutates: false },
   ],
   [
     "deleteAttachment",
-    { handler: (service, input) => service.deleteAttachment(input as unknown as DeleteAttachmentInput), mutates: true },
+    { handler: (service, input, scope) => service.deleteAttachment(input as unknown as DeleteAttachmentInput, scope), mutates: true },
   ],
 ])
 
@@ -123,6 +128,8 @@ export type NotesApiOptions = {
   migrate?: boolean
   /** Set false to skip filesystem watching of external changes. */
   watch?: boolean
+  /** Active saved connection id used to scope every request. */
+  getConnectionId?: () => string | null
 }
 
 export type NotesApi = {
@@ -317,7 +324,10 @@ export function createNotesApi(options: NotesApiOptions = {}): NotesApi {
     }
     try {
       const input = await readInput(request)
-      const result = await entry.handler(getService(), input)
+      const scope = options.getConnectionId
+        ? { connectionId: options.getConnectionId() }
+        : undefined
+      const result = await entry.handler(getService(), input, scope)
       // An injected service cannot be given the change hook, so report its
       // successful mutations from here instead.
       if (entry.mutates && !ownsService) notifyChange()

@@ -291,6 +291,38 @@ test("mutations send the service input shape and expectedRevision", async () => 
   ])
 })
 
+test("adapter sends the active connection and honors explicit space reassignment", async () => {
+  const calls = captureFetch(async () => json({ ok: true }))
+  const adapter = createNotesAdapter("/work", "conn_a")
+  await adapter.createNote({
+    title: "T",
+    content: "C",
+    status: "todo",
+    pinned: false,
+    spaceID: null,
+  })
+  await adapter.updateSpace(
+    "s1",
+    { name: "S", projectDir: "/work", connectionId: "conn_b" },
+    1
+  )
+  expect(JSON.parse(calls[0].init.body)).toEqual({
+    title: "T",
+    body: "C",
+    status: "todo",
+    pinned: false,
+    spaceID: null,
+    connectionId: "conn_a",
+  })
+  expect(JSON.parse(calls[1].init.body)).toEqual({
+    spaceID: "s1",
+    name: "S",
+    projectDir: "/work",
+    connectionId: "conn_b",
+    expectedRevision: 1,
+  })
+})
+
 class FakeEventSource {
   static instances = []
   constructor(url) {

@@ -35,7 +35,11 @@ type PluginDescriptor = {
   /** Absolute MCP entry path inside the installation root. */
   entryPath: (repoRoot: string) => string
   /** Canonical `mcp.servers.<id>` entry; may throw when trusted launch env is invalid. */
-  mcpConfig: (entryPath: string, env: NodeJS.ProcessEnv) => Record<string, unknown>
+  mcpConfig: (
+    entryPath: string,
+    env: NodeJS.ProcessEnv,
+    connectionId: string | null
+  ) => Record<string, unknown>
   /**
    * Extra absolute files the entry needs at runtime, for descriptors whose
    * package does not guarantee them.
@@ -51,11 +55,14 @@ const PLUGINS: readonly PluginDescriptor[] = [
     name: "Notes",
     description: "Project notes, planning and daily logs for agents and humans.",
     entryPath: (repoRoot) => resolve(repoRoot, "plugins/notes/src/mcp/main.ts"),
-    mcpConfig: (entryPath) => ({
+    mcpConfig: (entryPath, _env, connectionId) => ({
       type: "local",
       command: [process.execPath, entryPath],
       disabled: false,
       codemode: false,
+      ...(connectionId
+        ? { env: { OPENCODE_UI_CONNECTION_SCOPE: connectionId } }
+        : {}),
     }),
     managesEnv: false,
   },
@@ -89,6 +96,8 @@ export type PluginsApiOptions = {
   authorization: string
   /** Optional live target provider when switching engines at runtime. */
   getTarget?: () => { engineUrl: string; authorization: string }
+  /** Active saved connection id injected into the Notes MCP server scope. */
+  getConnectionId?: () => string | null
   /** Repository root used to build the absolute MCP entry path. */
   repoRoot: string
   fetch?: typeof fetch
@@ -116,6 +125,8 @@ export type PluginsApiOptions = {
 
 export type PluginsApi = {
   handleRequest: (request: Request) => Promise<Response>
+  /** Re-apply an enabled plugin's MCP config with the active connection scope. */
+  refreshScope: (pluginId: string) => Promise<Response>
 }
 
 type EngineState = { engineAvailable: boolean; servers?: EngineServer[] }
@@ -984,7 +995,11 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
     }
     let config: Record<string, unknown>
     try {
-      config = plugin.mcpConfig(entryPath, env)
+      config = plugin.mcpConfig(
+        entryPath,
+        env,
+        options.getConnectionId?.() ?? null
+      )
     } catch (error) {
       return configFailure(error, "config_write_failed")
     }
@@ -1020,12 +1035,49 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
     }
   }
 
+  /**
+   * Rewrite an already-enabled plugin's MCP entry with the current connection.
+   * Never enables a plugin that is off, and never runs without an active
+   * connection, so a stale scope cannot be baked into a different engine.
+   */
+  async function refreshScope(pluginId: string): Promise<Response> {
+    const plugin = PLUGINS_BY_ID.get(pluginId)
+    if (!plugin) return errorResponse("not_found", 404, "Unknown plugin.")
+    const connectionId = options.getConnectionId?.() ?? null
+    if (!connectionId) {
+      return errorResponse("no_connection", 409, "No engine connection is active.")
+    }
+    let persisted: PersistedPluginState
+    try {
+      persisted = await readPersistedPlugin(plugin)
+    } catch (error) {
+      return configFailure(error, "config_read_failed")
+    }
+    if (!persisted.configured) {
+      return errorResponse(
+        "not_configured",
+        409,
+        `Enable ${plugin.name} before refreshing its connection scope.`
+      )
+    }
+    return enable(plugin, Date.now())
+  }
+
   async function handleRequest(request: Request): Promise<Response> {
     const receivedAt = Date.now()
     const path = new URL(request.url).pathname
     if (path === PLUGINS_ROUTE) {
       if (request.method !== "GET") return errorResponse("method_not_allowed", 405, "Use GET.")
       return list()
+    }
+    const refresh = /^\/api\/ui\/plugins\/([^/]+)\/refresh-scope$/.exec(path)
+    if (refresh) {
+      const plugin = PLUGINS_BY_ID.get(refresh[1])
+      if (!plugin) return errorResponse("not_found", 404, "Unknown plugin.")
+      if (request.method !== "POST") {
+        return errorResponse("method_not_allowed", 405, "Use POST.")
+      }
+      return refreshScope(refresh[1])
     }
     const route = /^\/api\/ui\/plugins\/([^/]+)\/(enable|disable)$/.exec(path)
     if (route) {
@@ -1043,5 +1095,5 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
     return errorResponse("not_found", 404, "Unknown plugins endpoint.")
   }
 
-  return { handleRequest }
+  return { handleRequest, refreshScope }
 }

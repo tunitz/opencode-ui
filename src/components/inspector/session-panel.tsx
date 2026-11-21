@@ -20,6 +20,7 @@ import {
   totalTokens,
 } from "@/lib/context-usage"
 import { projectName } from "@/components/project-select"
+import { useActiveConnection } from "@/lib/use-active-connection"
 import { useSessionShortcuts } from "@/lib/use-session-shortcuts"
 import { useUndoToast } from "@/lib/undo-toast"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -37,7 +38,8 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 export function SessionPanel({ nav }: { nav: OpenCodeController }) {
   const session = nav.activeSession
-  const { shortcuts, update, error: shortcutError } = useSessionShortcuts()
+  const { connectionId } = useActiveConnection()
+  const { shortcuts, update, error: shortcutError } = useSessionShortcuts(connectionId)
   const undo = useUndoToast()
   const [archiving, setArchiving] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)

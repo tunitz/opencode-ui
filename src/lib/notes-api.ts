@@ -279,6 +279,7 @@ type WireSpace = {
   name?: unknown
   projectDir?: unknown
   pinned?: unknown
+  connectionId?: unknown
   revision?: unknown
 }
 
@@ -325,11 +326,15 @@ function toSpace(value: WireSpace): NotesSpace | null {
     name: value.name,
     projectDir: typeof value.projectDir === "string" ? value.projectDir : null,
     pinned: value.pinned === true,
+    ...(typeof value.connectionId === "string" || value.connectionId === null
+      ? { connectionId: value.connectionId }
+      : {}),
     ...(typeof value.revision === "number" ? { revision: value.revision } : {}),
   }
 }
 
 export type ScopedListInput = {
+  connectionId?: string | null
   pinned?: boolean
   statuses?: readonly string[]
   spaceID?: string | null
@@ -353,6 +358,9 @@ export async function listNotesScoped(
     total?: unknown
   }>("list", {
     ...scope(directory),
+    ...(input.connectionId === undefined
+      ? {}
+      : { connectionId: input.connectionId }),
     ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
     ...(input.statuses ? { statuses: [...input.statuses] } : {}),
     ...(input.spaceID === undefined ? {} : { spaceID: input.spaceID }),
@@ -376,13 +384,23 @@ export async function listNotesScoped(
 /** Spaces visible in a project: its own project spaces plus Global spaces. */
 export async function listSpacesScoped(
   directory: string | null,
-  options: { includeGlobal?: boolean } = {}
+  options: {
+    connectionId?: string | null
+    includeGlobal?: boolean
+    includeLegacy?: boolean
+  } = {}
 ): Promise<NotesSpace[]> {
   const output = await notesRequest<{ spaces?: unknown }>("spaces", {
     ...scope(directory),
+    ...(options.connectionId === undefined
+      ? {}
+      : { connectionId: options.connectionId }),
     ...(options.includeGlobal === undefined
       ? {}
       : { includeGlobal: options.includeGlobal }),
+    ...(options.includeLegacy === undefined
+      ? {}
+      : { includeLegacy: options.includeLegacy }),
   })
   if (!Array.isArray(output?.spaces))
     throw new Error("The notes server returned an invalid spaces response.")
@@ -391,24 +409,44 @@ export async function listSpacesScoped(
     .filter((item): item is NotesSpace => item !== null)
 }
 
+/** Every space, including legacy linked ones, for the explicit migration UI. */
+export async function listLegacySpaces(): Promise<NotesSpace[]> {
+  return listSpacesScoped(null, { includeLegacy: true })
+}
+
 const LIST_PAGE_SIZE = 1_000
 
 /**
  * Workspace adapter cached per project directory so draft state survives
  * project switches. Note and space listings are global, not project-scoped.
  */
-export function createNotesAdapter(directory: string): NotesAdapter {
+export function createNotesAdapter(
+  directory: string,
+  connectionId: string | null
+): NotesAdapter {
   // Listing is global: show pinned notes and spaces from every project, not
-  // just the current session directory. Drafts stay keyed by `directory`.
+  // just the current session directory. Drafts stay keyed by `directory` and
+  // `connectionId` by the caller. Every request carries the active connection
+  // so the server applies the same scope to notes and spaces.
   const target = null
+  function scoped(input: Record<string, unknown>): Record<string, unknown> {
+    // An explicit owner assignment (migration UI) wins over the active scope.
+    if (Object.hasOwn(input, "connectionId")) return input
+    return connectionId === undefined ? input : { ...input, connectionId }
+  }
   async function list(): Promise<NotesSnapshot> {
     const [spaces, first] = await Promise.all([
-      listSpacesScoped(target),
-      listNotesScoped(target, { limit: LIST_PAGE_SIZE, offset: 0 }),
+      listSpacesScoped(target, { connectionId }),
+      listNotesScoped(target, {
+        connectionId,
+        limit: LIST_PAGE_SIZE,
+        offset: 0,
+      }),
     ])
     const notes = [...first.notes]
     while (notes.length < first.total) {
       const page = await listNotesScoped(target, {
+        connectionId,
         limit: LIST_PAGE_SIZE,
         offset: notes.length,
       })
@@ -437,66 +475,90 @@ export function createNotesAdapter(directory: string): NotesAdapter {
   return {
     list,
     createNote: (input: NoteInput) =>
-      notesRequest("create", {
-        title: input.title,
-        body: input.content,
-        status: input.status,
-        pinned: input.pinned,
-        spaceID: input.spaceID,
-      }),
+      notesRequest(
+        "create",
+        scoped({
+          title: input.title,
+          body: input.content,
+          status: input.status,
+          pinned: input.pinned,
+          spaceID: input.spaceID,
+        })
+      ),
     updateNote: (noteID, input, revision) =>
-      notesRequest("update", {
-        noteID,
-        title: input.title,
-        body: input.content,
-        status: input.status,
-        pinned: input.pinned,
-        spaceID: input.spaceID,
-        ...(typeof revision === "number"
-          ? { expectedRevision: revision }
-          : {}),
-      }),
+      notesRequest(
+        "update",
+        scoped({
+          noteID,
+          title: input.title,
+          body: input.content,
+          status: input.status,
+          pinned: input.pinned,
+          spaceID: input.spaceID,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })
+      ),
     deleteNote: (noteID, revision) =>
-      notesRequest("delete", {
-        noteID,
-        ...(typeof revision === "number"
-          ? { expectedRevision: revision }
-          : {}),
-      }),
+      notesRequest(
+        "delete",
+        scoped({
+          noteID,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })
+      ),
     createSpace: (input: SpaceInput) =>
-      notesRequest("createSpace", {
-        name: input.name,
-        projectDir: input.projectDir,
-      }),
+      notesRequest(
+        "createSpace",
+        scoped({
+          name: input.name,
+          projectDir: input.projectDir,
+        })
+      ),
     updateSpace: (spaceID, input: SpaceInput, revision) =>
-      notesRequest("updateSpace", {
-        spaceID,
-        name: input.name,
-        projectDir: input.projectDir,
-        ...(typeof revision === "number"
-          ? { expectedRevision: revision }
-          : {}),
-      }),
+      notesRequest(
+        "updateSpace",
+        scoped({
+          spaceID,
+          name: input.name,
+          projectDir: input.projectDir,
+          ...(input.connectionId === undefined
+            ? {}
+            : { connectionId: input.connectionId }),
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })
+      ),
     deleteSpace: (spaceID, revision) =>
-      notesRequest("deleteSpace", {
-        spaceID,
-        ...(typeof revision === "number"
-          ? { expectedRevision: revision }
-          : {}),
-      }),
+      notesRequest(
+        "deleteSpace",
+        scoped({
+          spaceID,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })
+      ),
     async createAttachment(noteID, input, revision) {
       const output = await notesRequest<{
         note?: WireNote
         attachment?: WireAttachment
-      }>("createAttachment", {
-        noteID,
-        name: input.name,
-        mime: input.mime,
-        data: input.data,
-        ...(typeof revision === "number"
-          ? { expectedRevision: revision }
-          : {}),
-      })
+      }>(
+        "createAttachment",
+        scoped({
+          noteID,
+          name: input.name,
+          mime: input.mime,
+          data: input.data,
+          ...(typeof revision === "number"
+            ? { expectedRevision: revision }
+            : {}),
+        })
+      )
       const note = output?.note ? toNote(output.note) : null
       const attachment = output?.attachment
         ? toAttachment(output.attachment)
@@ -509,7 +571,7 @@ export function createNotesAdapter(directory: string): NotesAdapter {
       const output = await notesRequest<{
         attachment?: WireAttachment
         data?: unknown
-      }>("readAttachment", { noteID, attachmentID })
+      }>("readAttachment", scoped({ noteID, attachmentID }))
       const attachment = output?.attachment
         ? toAttachment(output.attachment)
         : null
@@ -520,13 +582,13 @@ export function createNotesAdapter(directory: string): NotesAdapter {
     async deleteAttachment(noteID, attachmentID, revision) {
       const output = await notesRequest<{ note?: WireNote }>(
         "deleteAttachment",
-        {
+        scoped({
           noteID,
           attachmentID,
           ...(typeof revision === "number"
             ? { expectedRevision: revision }
             : {}),
-        }
+        })
       )
       const note = output?.note ? toNote(output.note) : null
       if (!note)

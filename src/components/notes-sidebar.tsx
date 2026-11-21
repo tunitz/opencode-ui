@@ -40,6 +40,7 @@ import {
   subscribeNotesEvents,
 } from "@/lib/notes-api"
 import { uniqueByID } from "@/lib/notes-types"
+import { useActiveConnection } from "@/lib/use-active-connection"
 import { useNotesPluginState } from "@/lib/notes-plugin-state"
 import { useOptionalWorkspace } from "@/components/workspace-context"
 import type { OpenCodeController } from "@/lib/use-opencode"
@@ -133,6 +134,7 @@ export function NotesProvider({
   const pluginState = useNotesPluginState()
   const notesEnabled = pluginState.registered !== false
   const workspace = useOptionalWorkspace()
+  const { connectionId } = useActiveConnection()
   const directory = nav.activeSession?.location.directory ?? nav.directory
   // Without an app-shell coordinator (isolated fixtures) Notes keeps its own
   // open flag; inside the shell the shared discriminator is authoritative.
@@ -151,17 +153,19 @@ export function NotesProvider({
   const [pinnedRequest, setPinnedRequest] = useState(0)
   const [pinnedExpanded, setPinnedExpanded] = useState(false)
 
-  // One adapter per directory. Drafts are kept in a map keyed by adapter, so a
-  // cached adapter is what lets drafts survive leaving a project and returning.
+  // One adapter per connection + directory. Drafts are kept in a map keyed by
+  // adapter, so a cached adapter lets drafts survive project switches within a
+  // connection without ever leaking into another connection.
   const [adapters] = useState(() => new Map<string, NotesAdapter>())
   const workspaceDirectory = editingDirectory ?? directory ?? ""
+  const adapterKey = `${connectionId ?? ""}:${workspaceDirectory}`
   const adapter = useMemo(() => {
-    const existing = adapters.get(workspaceDirectory)
+    const existing = adapters.get(adapterKey)
     if (existing) return existing
-    const created = createNotesAdapter(workspaceDirectory)
-    adapters.set(workspaceDirectory, created)
+    const created = createNotesAdapter(workspaceDirectory, connectionId)
+    adapters.set(adapterKey, created)
     return created
-  }, [adapters, workspaceDirectory])
+  }, [adapters, adapterKey, workspaceDirectory, connectionId])
 
   const refreshPinned = useCallback(
     () => setPinnedRequest((request) => request + 1),
@@ -177,10 +181,11 @@ export function NotesProvider({
       try {
         const [listResult, spacesResult] = await Promise.allSettled([
           listNotesScoped(null, {
+            connectionId,
             pinned: true,
             limit: pinnedExpanded ? PINNED_EXPANDED_LIMIT : PINNED_PREVIEW_LIMIT,
           }),
-          listSpacesScoped(null),
+          listSpacesScoped(null, { connectionId }),
         ])
         if (listResult.status === "rejected") throw listResult.reason
         if (!active || current !== token) return
@@ -222,7 +227,19 @@ export function NotesProvider({
       if (timer) clearTimeout(timer)
       stop()
     }
-  }, [pinnedRequest, notesEnabled, pinnedExpanded])
+  }, [pinnedRequest, notesEnabled, pinnedExpanded, connectionId])
+
+  // A connection switch invalidates everything tied to the previous scope.
+  // The pinned load effect above also depends on connectionId, so its cleanup
+  // bumps its local token and drops any in-flight response from the old scope.
+  const previousConnection = useRef(connectionId)
+  useEffect(() => {
+    if (previousConnection.current === connectionId) return
+    previousConnection.current = connectionId
+    setPinnedSnapshot(null)
+    setSelectedNoteID(null)
+    setPinnedRequest((request) => request + 1)
+  }, [connectionId])
 
   const available = notesEnabled && Boolean(directory)
   const showWorkspace = notesEnabled && (workspace

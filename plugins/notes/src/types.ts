@@ -60,12 +60,27 @@ export const MAX_HISTORY_SNAPSHOTS = 50
 export type NoteStatus = (typeof NOTE_STATUSES)[number]
 export type StatusCategory = keyof typeof STATUS_CATEGORIES
 
+/**
+ * The saved OpenCode connection a caller is acting for. `null` means no
+ * connection is active (only Global spaces and unassigned notes are visible).
+ */
+export interface Scope {
+  readonly connectionId: string | null
+}
+
 export interface Space {
   readonly id: string
   readonly name: string
   /** null is a Global space, visible in every project. */
   readonly projectDir: string | null
   readonly pinned: boolean
+  /**
+   * Owner of a linked (projectDir !== null) space. A string is a saved profile
+   * id; `undefined` or `null` is a legacy/unassigned space, hidden from normal
+   * views and preserved for an explicit migration surface. Global spaces ignore
+   * this value.
+   */
+  readonly connectionId?: string | null
   /** Per-item optimistic revision. Starts at 1 for new records; legacy records decode at 0. */
   readonly revision: number
   readonly createdAt: number
@@ -192,6 +207,8 @@ export interface SpacesInput {
   readonly directory?: string
   /** With directory, also include Global spaces. Defaults to true. */
   readonly includeGlobal?: boolean
+  /** Include legacy/unassigned linked spaces. Defaults to false. */
+  readonly includeLegacy?: boolean
 }
 
 export interface SpacesOutput {
@@ -214,6 +231,8 @@ export interface UpdateSpaceInput {
   /** null turns the space into a Global space. */
   readonly projectDir?: string | null
   readonly pinned?: boolean
+  /** Explicit owner assignment for migration. Omit to preserve the current owner. */
+  readonly connectionId?: string | null
 }
 
 export interface DeleteSpaceInput {

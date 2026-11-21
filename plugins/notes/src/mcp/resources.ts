@@ -1,6 +1,5 @@
 import type { NotesService } from "../service.js"
-import { compareNotes } from "../store.js"
-import type { Note, Space } from "../types.js"
+import { LIMITS, type Note, type Scope, type Space } from "../types.js"
 
 export const NOTE_RESOURCE_TEMPLATE = "notes://note/{noteID}"
 export const SPACES_RESOURCE_URI = "notes://spaces"
@@ -71,15 +70,18 @@ export function spacesInventory(
 
 /** Up to 50 pinned/most-recent note resources plus the two stable entries. */
 export async function listResources(
-  service: NotesService
+  service: NotesService,
+  scope?: Scope
 ): Promise<ResourceDescriptor[]> {
-  await service.ready()
-  const [notes, spaces] = await Promise.all([
-    service.store.listNotes(),
-    service.store.listSpaces(),
+  const [listed, listedSpaces] = await Promise.all([
+    service.list({ limit: LIMITS.list }, scope),
+    service.spaces({}, scope),
   ])
+  const notes = listed.notes
+  const spaces = listedSpaces.spaces
   const spaceByID = new Map(spaces.map((space) => [space.id, space]))
-  const recent = [...notes].sort(compareNotes).slice(0, MAX_NOTE_RESOURCES)
+  // service.list already sorts by pin then recency, like compareNotes did here.
+  const recent = notes.slice(0, MAX_NOTE_RESOURCES)
   return [
     {
       uri: NOTE_RESOURCE_TEMPLATE,

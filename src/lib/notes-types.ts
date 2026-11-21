@@ -78,6 +78,8 @@ export type NotesSpace = {
   /** null is a Global space, visible in every project. */
   projectDir: string | null
   pinned: boolean
+  /** Owner connection id for a linked space; undefined/null is legacy. */
+  connectionId?: string | null
   revision?: number
 }
 
@@ -95,6 +97,8 @@ export type NoteInput = Pick<
 export type SpaceInput = {
   name: string
   projectDir: string | null
+  /** Explicit owner assignment for the migration UI. Omit to preserve the owner. */
+  connectionId?: string | null
 }
 
 /** Mutations resolve only after they succeed. list returns the authoritative current snapshot. */

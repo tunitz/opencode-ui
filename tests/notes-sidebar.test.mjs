@@ -371,6 +371,7 @@ test("unpinning from the sidebar confirms without opening the note and updates i
       pinned: false,
       spaceID: "space-1",
       expectedRevision: 1,
+      connectionId: null,
     })
     expect(action().props.disabled).toBe(true)
     expect(cancel().props.disabled).toBe(true)

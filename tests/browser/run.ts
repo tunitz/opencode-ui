@@ -516,8 +516,22 @@ const server = Bun.serve({
       notesRequests.push({ method, input })
       return notesMethodResponse(method, input)
     }
+    if (pathname === "/api/ui/connections") {
+      const active = {
+        id: "synthetic-connection",
+        name: "Synthetic engine",
+        engineUrl: "http://localhost:4096",
+        hasPassword: true,
+        isRemote: false,
+        unencryptedRemote: false,
+        isActive: true,
+        createdAt: 0,
+        updatedAt: 0,
+      }
+      return json({ activeId: active.id, active, profiles: [active] })
+    }
     if (pathname === "/api/ui/session-shortcuts") {
-      if (request.method === "GET") return json({ shortcuts: fixtureShortcuts })
+      if (request.method === "GET") return json({ shortcuts: fixtureShortcuts, legacyCount: 0 })
       if (request.method !== "POST") return json({ error: { code: "method_not_allowed" } }, 405)
       const body = (await request.json().catch(() => ({}))) as {
         id?: string
@@ -534,7 +548,7 @@ const server = Bun.serve({
       } catch {
         return json({ error: { code: "invalid" } }, 400)
       }
-      return json({ shortcuts: fixtureShortcuts })
+      return json({ shortcuts: fixtureShortcuts, legacyCount: 0 })
     }
     if (pathname === "/api/ui/plugins") {
       return json({

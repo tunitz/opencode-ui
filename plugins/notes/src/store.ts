@@ -70,11 +70,16 @@ export function parseSpace(value: unknown): Space | undefined {
     projectDir = null
   }
 
+  const connectionId =
+    value.connectionId === null || typeof value.connectionId === "string"
+      ? value.connectionId
+      : undefined
   return {
     id: value.id,
     name: value.name,
     projectDir,
     pinned: value.pinned,
+    ...(connectionId === undefined ? {} : { connectionId }),
     revision,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
