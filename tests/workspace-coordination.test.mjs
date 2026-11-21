@@ -19,25 +19,6 @@ const React = await import("react")
 const { act } = React
 const { create } = await import("react-test-renderer")
 
-// The Base UI dialog needs a real DOM; this suite exercises the transition
-// state machine, and the production AlertDialog is covered by Settings tests.
-mock.module("@/components/ui/alert-dialog", () => {
-  const Pass = ({ children }) => React.createElement(React.Fragment, null, children)
-  return {
-    AlertDialog: ({ open, children }) =>
-      open ? React.createElement("div", { role: "alertdialog" }, children) : null,
-    AlertDialogAction: ({ children }) =>
-      React.createElement("button", { type: "button" }, children),
-    AlertDialogCancel: ({ children }) =>
-      React.createElement("button", { type: "button" }, children),
-    AlertDialogContent: Pass,
-    AlertDialogDescription: Pass,
-    AlertDialogFooter: Pass,
-    AlertDialogHeader: Pass,
-    AlertDialogTitle: Pass,
-  }
-})
-
 const { WorkspaceProvider, useWorkspace } = await import(
   "../src/components/workspace-context"
 )
@@ -80,12 +61,8 @@ const click = async (root, id) => {
 }
 const state = (root, id) => text(root.root.findByProps({ id }))
 
-function Harness({ dirtyRef, log }) {
+function Harness({ log, returnFocusTarget }) {
   const workspace = useWorkspace()
-  React.useEffect(
-    () => workspace.registerGuard("settings", () => dirtyRef.current),
-    [workspace]
-  )
   const transition = (id) =>
     workspace.requestWorkspace(id, {
       onCommit: () => log.push(`${id}:commit`),
@@ -95,13 +72,24 @@ function Harness({ dirtyRef, log }) {
     React.Fragment,
     null,
     React.createElement("span", { id: "active" }, workspace.active),
-    React.createElement("span", { id: "pending" }, workspace.pendingTarget ?? "none"),
     ["notes", "settings"].map((id) =>
       React.createElement(
         "button",
         { key: id, id, type: "button", onClick: () => transition(id) },
         id
       )
+    ),
+    React.createElement(
+      "button",
+      {
+        id: "settings-with-return",
+        type: "button",
+        onClick: () =>
+          workspace.requestWorkspace("settings", {
+            returnFocus: returnFocusTarget,
+          }),
+      },
+      "settings with return focus"
     ),
     React.createElement(
       "button",
@@ -112,22 +100,11 @@ function Harness({ dirtyRef, log }) {
       "button",
       { id: "force-chat", type: "button", onClick: () => workspace.forceWorkspace("chat") },
       "force chat"
-    ),
-    React.createElement(
-      "button",
-      { id: "confirm", type: "button", onClick: workspace.confirmLeave },
-      "Leave anyway"
-    ),
-    React.createElement(
-      "button",
-      { id: "keep", type: "button", onClick: workspace.keepEditing },
-      "Keep editing"
     )
   )
 }
 
-async function mount(dirty = false) {
-  const dirtyRef = { current: dirty }
+async function mount(options = {}) {
   const log = []
   let root
   await act(async () => {
@@ -135,18 +112,17 @@ async function mount(dirty = false) {
       React.createElement(
         WorkspaceProvider,
         null,
-        React.createElement(Harness, { dirtyRef, log })
+        React.createElement(Harness, { log, ...options })
       )
     )
   })
-  return { root, dirtyRef, log }
+  return { root, log }
 }
 
-test("chat is the initial workspace and clean transitions commit immediately", async () => {
+test("chat is the initial workspace and transitions commit callbacks in order", async () => {
   const { root, log } = await mount()
   try {
     expect(state(root, "active")).toBe("chat")
-    expect(state(root, "pending")).toBe("none")
 
     await click(root, "notes")
     expect(state(root, "active")).toBe("notes")
@@ -154,9 +130,14 @@ test("chat is the initial workspace and clean transitions commit immediately", a
 
     await click(root, "settings")
     expect(state(root, "active")).toBe("settings")
+    expect(log.at(-2)).toBe("settings:commit")
+    expect(log.at(-1)).toBe("settings:run")
 
+    // Re-requesting the active workspace still runs its callbacks.
+    log.length = 0
     await click(root, "settings")
     expect(state(root, "active")).toBe("settings")
+    expect(log).toEqual(["settings:commit", "settings:run"])
 
     await click(root, "back")
     expect(state(root, "active")).toBe("chat")
@@ -167,56 +148,14 @@ test("chat is the initial workspace and clean transitions commit immediately", a
   }
 })
 
-test("a dirty workspace queues exactly one transition and runs nothing yet", async () => {
-  const { root, dirtyRef, log } = await mount()
+test("forceWorkspace commits directly without running transition callbacks", async () => {
+  const { root, log } = await mount()
   try {
     await click(root, "settings")
     log.length = 0
-    dirtyRef.current = true
-
-    await click(root, "notes")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("notes")
-    expect(log).toEqual([])
-
-    await click(root, "keep")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("none")
-    expect(log).toEqual([])
-
-    await click(root, "notes")
-    await click(root, "confirm")
-    expect(state(root, "active")).toBe("notes")
-    expect(state(root, "pending")).toBe("none")
-    expect(log).toEqual(["notes:commit", "notes:run"])
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
-test("the guard belongs to the active workspace only", async () => {
-  const { root, dirtyRef, log } = await mount(true)
-  try {
-    // Dirty Settings left behind: moving from Notes must not prompt.
-    await click(root, "notes")
-    await click(root, "settings")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("none")
-    expect(log).toContain("settings:commit")
-    dirtyRef.current = false
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
-test("forceWorkspace bypasses the guard for a surface that ceased to exist", async () => {
-  const { root, dirtyRef } = await mount()
-  try {
-    await click(root, "settings")
-    dirtyRef.current = true
     await click(root, "force-chat")
     expect(state(root, "active")).toBe("chat")
-    expect(state(root, "pending")).toBe("none")
+    expect(log).toEqual([])
   } finally {
     await act(async () => root.unmount())
   }
@@ -246,31 +185,26 @@ test("focus enters the workspace pane and returns to the originating trigger", a
   }
 })
 
-test("a pending confirmation refuses retargeting and same-target work", async () => {
-  const { root, dirtyRef, log } = await mount()
+test("an explicit returnFocus overrides the captured trigger", async () => {
+  const trigger = { isConnected: true, focus: mock(() => {}) }
+  const explicit = { isConnected: true, focus: mock(() => {}) }
+  const pane = { isConnected: true, focus: mock(() => {}) }
+  globalThis.document = {
+    activeElement: trigger,
+    addEventListener() {},
+    removeEventListener() {},
+    getElementById: () => null,
+    querySelector: (selector) =>
+      selector === '[data-workspace-focus="settings"]' ? pane : null,
+  }
+  const { root } = await mount({ returnFocusTarget: explicit })
   try {
-    await click(root, "settings")
-    log.length = 0
-    dirtyRef.current = true
+    await click(root, "settings-with-return")
+    expect(pane.focus).toHaveBeenCalledTimes(1)
 
-    await click(root, "notes")
-    expect(state(root, "pending")).toBe("notes")
-
-    // Another destination must not silently replace the queued choice.
-    await click(root, "settings")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("notes")
-    expect(log).toEqual([])
-
-    // Re-requesting the current workspace must not run its callbacks either.
-    await click(root, "settings")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("notes")
-    expect(log).toEqual([])
-
-    await click(root, "confirm")
-    expect(state(root, "active")).toBe("notes")
-    expect(log).toEqual(["notes:commit", "notes:run"])
+    await click(root, "back")
+    expect(explicit.focus).toHaveBeenCalledTimes(1)
+    expect(trigger.focus).toHaveBeenCalledTimes(0)
   } finally {
     await act(async () => root.unmount())
   }
@@ -296,19 +230,6 @@ test("returning from a workspace ignores body as the return target", async () =>
     await click(root, "back")
     expect(chatMain.focus).toHaveBeenCalledTimes(1)
     expect(body.focus).toHaveBeenCalledTimes(0)
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
-test("the confirmation dialog names the workspace being left", async () => {
-  const { root, dirtyRef } = await mount()
-  try {
-    await click(root, "settings")
-    dirtyRef.current = true
-    await click(root, "notes")
-    const dialog = root.root.findByProps({ role: "alertdialog" })
-    expect(text(dialog)).toContain("Leave Settings anyway?")
   } finally {
     await act(async () => root.unmount())
   }

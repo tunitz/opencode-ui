@@ -38,7 +38,6 @@ async function serve(auth) {
     authorization: "Basic test-value",
     directory,
     security: { allowedHosts: ["127.0.0.1"], allowedOrigins: [ORIGIN] },
-    agents: stub,
     artifacts: stub,
     notifications,
     auth,
@@ -204,7 +203,7 @@ describe("WebSocket upgrades", () => {
     const gateway = createWebGateway({
       authGate: createAuthGate(auth),
       auth: createAuthApiHandler(auth),
-      agents: handler("agents"), artifacts: handler("artifacts"), notifications: handler("notifications"),
+      artifacts: handler("artifacts"), notifications: handler("notifications"),
       engine: handler("engine"), frontend: handler("frontend"),
       bridge: { upgrade: async () => { upgraded = true; return new Response(null, { status: 400 }) } },
     })

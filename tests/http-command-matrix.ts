@@ -170,7 +170,6 @@ const server = Bun.serve({
       return json({ configured: true, required: false, authenticated: true })
     }
     if (pathname === "/api/ui/plugins") return json({ plugins: [], engineAvailable: true })
-    if (pathname === "/api/ui/agents") return json({ agents: [] })
     if (pathname === "/api/location") {
       return json({ project: { id: "p-alpha" }, directory: "/synthetic/alpha" })
     }

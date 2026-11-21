@@ -56,7 +56,7 @@ added. Unsupported or TUI-only behavior stays visible rather than being faked.
 | `/clear` | Session | Returns to the empty client view without deleting or stopping the session | none |
 | `/open`, `/projects`, `/project` | Session | Opens the session/project navigator | none |
 | `/models` | Agent | Opens the current-session model settings | none |
-| `/agents` | Agent | Opens the current-session Agent setting | none |
+| `/agents` | Agent | Opens the current-session agent picker | none |
 | `/variants`, `/thinking`, `/effort` | Agent | Opens the current-session Thinking Level setting | none |
 | `/mcps` | Integration | Native MCP status/resources plus add/remove/connect/disconnect | none |
 | `/connect` | Integration | Native provider connect with key, OAuth, external, and command methods over plain HTTP | none |
@@ -80,13 +80,14 @@ added. Unsupported or TUI-only behavior stays visible rather than being faked.
 | `/plugins` | System | Native installed plugin metadata with check and update | none |
 | `/stats` | System | Native experimental usage/session/tool/model statistics | none |
 | `/usage` | System | Native usage limits when the engine is at least 2.3.2 | none |
-| `/highlights` | System | Real public changelog highlights for the running release, or an honest empty state | none |
+| `/highlights` | System | Real public changelog highlights from GitHub for the running release, or an honest empty state | none |
 | `/pair`, `/web` | System | Native pairing code issued through the paired server | none |
 | `/reload` | System | Native location reload with confirmation and catalog refresh | none |
 | `/debug` | System | Sanitized client and native server diagnostics; heap dumps denied | none |
 
 Every entry above is **supported**; model-triggering commands (`/btw`, `/compact`) and destructive
-commands (`/undo`, `/redo`) keep their explicit confirmations.
+commands (`/undo`, `/redo`) keep their explicit confirmations. The `/agents` command opens the
+session-level agent picker; it is not the retired Settings Agents section or its file editor.
 
 ## Skipped commands (visible, not in parity scope)
 
@@ -133,7 +134,7 @@ These are exact native contracts, not browser-local simulations:
 | `/reload` | `POST /api/location/reload` | Confirmed global location rebuild; catalogs refresh on success. Not an OS service restart. |
 | `/debug` | Sanitized client data + `openCode.server.info()` | Fixed diagnostics whitelist for client and native server details; `/api/debug` is not exposed through the browser and heap dumps remain denied. |
 | `/pair` | `openCode.server.pair()` | Issues a native pairing code through the server. |
-| `/highlights` | Public upstream `CHANGELOG.md` for the running release | Fetches and parses real public changelog highlights (capped at five) with credential-free, bounded requests; an empty list is reported honestly, never invented. |
+| `/highlights` | Public upstream `CHANGELOG.md` on GitHub for the running release | Fetches and parses real public changelog highlights (capped at five) with credential-free, bounded requests; an empty list is reported honestly, never invented. |
 | `/usage` | `GET /api/experimental/usage/limits?location[directory]=…` | Native usage limits, gated at engine version `>= 2.3.2`; unavailable below that version. Sensitive payload keys are dropped. |
 | `/terminal` | Native PTY APIs + same-origin `/api/pty/{id}/connect` WebSocket bridge | See [Terminal](#terminal). |
 

@@ -173,7 +173,9 @@ function useModelSettingsState(
   async function handleAgentChange(next: string) {
     if (next === (agentID ?? "")) return
     setSelectorError(null)
-    const failure = await nav.switchAgentWithDefaults(next)
+    // Engine semantics: switching the agent does not switch the session model.
+    // Model and variant are changed only through their own selectors.
+    const failure = await nav.switchAgent(next)
     if (failure) setSelectorError(failure)
     else setStatusMessage(`Agent ${next} selected`)
   }

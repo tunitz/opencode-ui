@@ -14,7 +14,7 @@ established. Do not upgrade either pin without checking the native contracts and
 | Path | Purpose |
 | --- | --- |
 | `src/` | React application, components, hooks, and browser-local state. |
-| `server/` | Bun server, engine proxy, access gate, request security, artifacts, notifications, agent config, and the Notes/Plugins APIs. |
+| `server/` | Bun server, engine proxy, access gate, request security, artifacts, notifications, and the Notes/Plugins APIs. |
 | `bin/` | `opencode-ui` CLI entry point and option validation. |
 | `scripts/` | Bun build and development tooling. |
 | `plugins/notes/` | Standalone notes core (`src/`), MCP stdio server (`src/mcp/`), its own tests, and README. |
@@ -29,8 +29,9 @@ established. Do not upgrade either pin without checking the native contracts and
 - A separately installed and running OpenCode V2 engine compatible with `@opencode/client` 2.1.4.
 - A connection profile configured through the UI with the engine password.
 
-The UI does not install, start, or reconfigure the engine. Never return saved engine passwords
-to the browser or expose them in logs, command-line flags, or version control.
+The UI does not install or start the engine, and does not reconfigure it except for the Notes MCP
+registration described in [README.md](README.md). Never return saved engine passwords to the
+browser or expose them in logs, command-line flags, or version control.
 
 ## Local development
 
@@ -149,16 +150,20 @@ ships the UI server modules together with the internal `plugins/notes` sources d
   actual component capabilities and restrictions in [docs/components.md](docs/components.md).
 - Preserve mobile and desktop accessibility: Light, Dark, and System themes, 44px targets,
   keyboard and focus behavior, RTL, reduced motion, and accessible names.
-- Settings is a full workspace, not a dialog: sticky horizontal section tabs above the active
-  section pane, with the Back-to-conversation control on the left of the app header. Notes and
-  Settings are mutually exclusive main panes, and the desktop Session Inspector hides while either
-  is active. Appearance controls live only in Settings → Appearance; do not reintroduce sidebar
-  theme triggers or appearance dialogs.
+- Settings is a full workspace (Appearance, Alerts, Plugins, Connections, Access), not a dialog:
+  sticky horizontal section tabs above the active section pane, with the Back-to-conversation
+  control on the left of the app header. Notes and Settings are mutually exclusive main panes, and
+  the desktop Session Inspector hides while either is active. Appearance controls live only in
+  Settings → Appearance; do not reintroduce sidebar theme triggers or appearance dialogs.
 - Never use `window.confirm`, `window.alert`, or `window.prompt`. Confirm destructive or
   draft-losing actions with the app `AlertDialog` pattern, and keep focus return explicit.
 - Preserve composer behavior: on touch, Enter inserts a newline and only Send submits; on a
   fine-pointer desktop, Enter sends and Shift+Enter inserts a newline. Never submit during IME
   composition. Preserve browser-local drafts and preferences.
+- Agent/model/variant choices for New Session and the composer come from the engine API at the
+  destination/session location; there is no local agent catalog or Settings Agents editor.
+  `OPENCODE_CONFIG_DIR` still selects the engine config directory used by the Notes MCP
+  registration.
 - Notes run on the local UI server (`/api/ui/notes/*` plus the change SSE), not an engine plugin.
   Keep drafts in the per-directory adapter cache so they survive project switches.
 - Do not reintroduce removed surfaces or claim unsupported native behavior. `/terminal` is shipped
@@ -191,9 +196,9 @@ ships the UI server modules together with the internal `plugins/notes` sources d
   provenance or file safety checks. LAN setup derives exact local-IP trusts instead of requiring
   user-supplied allowlists; never replace the checks with wildcards or CIDRs. See
   [docs/contract.md](docs/contract.md) for relevant details.
-- Ask before mutating live sessions, PTYs, providers, notifications, credentials, engine or agent
-  configuration, permission policies, or other live state. Do not stage, commit, or push unless
-  requested.
+- Ask before mutating live sessions, PTYs, providers, notifications, credentials, engine
+  configuration (including the Notes MCP registration), permission policies, or other live state.
+  Do not stage, commit, or push unless requested.
 
 ## References
 

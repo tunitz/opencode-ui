@@ -18,7 +18,9 @@ import { newSessionProjectError } from "@/lib/new-session-target"
 import {
   agentModelDefaults,
   buildModelRef,
+  isModelRefSelectable,
   modelKey,
+  modelRefKey,
   selectableModels,
   variantsForModel,
 } from "@/lib/session-selection"
@@ -27,6 +29,7 @@ import { openCode } from "@/lib/opencode"
 import { useModelFavorites } from "@/lib/model-favorites"
 import { createAsyncCache } from "@/lib/async-cache"
 import { fetchSessionHome } from "@/lib/ui-environment"
+import { catalogCacheKey, useTargetCatalog } from "@/lib/use-target-catalog"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 const CREATE_REASON_ID = "new-session-create-reason"
@@ -40,7 +43,12 @@ type ResolvedLocation = {
   }
   directory?: string | null
 }
+
+// Location reads are keyed by the same connection-scoped namespace as the
+// catalogs so two profiles with the same folder cannot share a resolution.
 const locationCache = createAsyncCache<ResolvedLocation>(30_000)
+const locationKey = (directory: string) =>
+  `location:${catalogCacheKey(directory)}`
 
 function loadLocation(directory: string): Promise<ResolvedLocation> {
   return openCode
@@ -61,12 +69,22 @@ type SessionDraft = {
 // results are applied as a single batched update instead of a render cascade.
 type TargetState = {
   directory: string
-  selected: { directory: string; id: string | null } | null
+  selected: { directory: string; location: ResolvedLocation | null } | null
   probe: FolderProbe | null
 }
 
 function initialTarget(directory: string): TargetState {
   return { directory, selected: null, probe: null }
+}
+
+function draftForModel(
+  ref: ModelRef | null
+): { model: ModelRef | null; variant: string | null } {
+  if (!ref) return { model: null, variant: null }
+  // Preserve the engine/configured reference verbatim, including an
+  // unsupported variant. Availability is checked separately so an unavailable
+  // default is shown and blocks creation instead of being silently rewritten.
+  return { model: { ...ref }, variant: ref.variant ?? null }
 }
 
 export type NewSessionButtonProps = {
@@ -103,84 +121,108 @@ export function NewSessionDialog({
     })
   }, [])
   const { directory, selected, probe } = target
-  // Key the selection to its directory so changing folders immediately
-  // invalidates the previous project.
-  const selectedID = selected?.directory === directory ? selected.id : null
 
   const { createSession } = nav
-  const [draft, setDraft] = useState<SessionDraft | null>(null)
-  const userModifiedRef = useRef(false)
+  const [userDraft, setUserDraft] = useState<SessionDraft | null>(null)
+  const [modified, setModified] = useState(false)
+  const [modelModified, setModelModified] = useState(false)
 
   // Reset transient state on the open transition instead of remounting the
   // whole dialog. The selection draft is intentionally not directory-scoped:
   // browsing must never overwrite a user's agent/model choices.
   const wasOpenRef = useRef(false)
+  const [lastResolved, setLastResolved] = useState<ResolvedLocation | null>(null)
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current
     wasOpenRef.current = open
     if (justOpened) {
-      userModifiedRef.current = false
-      setDraft(null)
+      setModified(false)
+      setModelModified(false)
+      setUserDraft(null)
       setTarget(initialTarget(homeDirectoryRef.current ?? initialDirectory))
     }
   }, [open, initialDirectory])
 
-  // Defaults come from the engine catalogs currently shown in Settings →
-  // Agents, not from a project-scoped catalog discovered while browsing.
+  // Resolve the destination before reading catalogs. Agent/model/config are
+  // LOCATION scoped: a nested folder can carry its own .opencode overrides even
+  // inside the same project. Use the exact resolved destination directory that
+  // session.create will receive, never the project's canonical folder.
+  const selectedID = selected?.directory === directory
+    ? (selected.location?.project.id ?? null)
+    : null
+  // Keep the last resolved catalog as a preview while a new folder is probed,
+  // but creation requires a catalog read from the exact submitted directory.
+  const resolved = selected?.location ?? lastResolved
+  const catalogDirectory = resolved?.directory ?? null
+  const catalog = useTargetCatalog(catalogDirectory)
+
   const primaryAgentCatalog = useMemo(
-    () => primaryAgents(nav.agents),
-    [nav.agents]
+    () => primaryAgents(catalog.agents),
+    [catalog.agents]
   )
   const modelCatalog = useMemo(
-    () => selectableModels(nav.models),
-    [nav.models]
+    () => selectableModels(catalog.models),
+    [catalog.models]
   )
   const defaults = useMemo(
     () =>
       resolveNewSessionDefaults({
-        agents: primaryAgentCatalog,
-        models: nav.models,
-        configEntries: nav.configEntries,
+        agents: catalog.agents,
+        models: catalog.models,
+        configEntries: catalog.configEntries,
+        defaultModel: catalog.defaultModel,
       }),
-    [primaryAgentCatalog, nav.models, nav.configEntries]
+    [catalog.agents, catalog.models, catalog.configEntries, catalog.defaultModel]
   )
-  useEffect(() => {
-    if (!open || userModifiedRef.current) return
-    const next: SessionDraft = {
-      agentID: defaults.agentID,
-      model: defaults.model,
-      variant: defaults.model?.variant ?? null,
-    }
-    setDraft((current) => {
-      if (
-        current &&
-        current.agentID === next.agentID &&
-        current.model?.providerID === next.model?.providerID &&
-        current.model?.id === next.model?.id &&
-        current.model?.variant === next.model?.variant &&
-        current.variant === next.variant
-      ) {
-        return current
-      }
-      return next
-    })
-  }, [open, defaults])
 
-  const agentOptions = useMemo<PickerOption[]>(
-    () =>
-      primaryAgentCatalog.map((agent) => ({
-        value: agent.id,
-        label: agent.id,
-        detail:
-          agent.name && agent.name !== agent.id ? agent.name : undefined,
-      })),
-    [primaryAgentCatalog]
+  // Defaults are derived, never written in an effect: changing folders or
+  // engines can resolve a new destination catalog while the dialog is open.
+  const defaultsDraft = useMemo<SessionDraft>(
+    () => ({
+      agentID: defaults.agentID,
+      ...draftForModel(defaults.model),
+    }),
+    [defaults]
   )
+  const draft: SessionDraft | null =
+    catalog.status === "ready"
+      ? modified && userDraft
+        ? userDraft
+        : defaultsDraft
+      : null
+
+  const agentOptions = useMemo<PickerOption[]>(() => {
+    const options = primaryAgentCatalog.map((agent) => ({
+      value: agent.id,
+      label: agent.id,
+      detail: agent.name && agent.name !== agent.id ? agent.name : undefined,
+    }))
+    // The engine may default to a primary-capable `all` agent that the primary
+    // picker would otherwise hide. Show it explicitly rather than silently
+    // choosing a different agent.
+    const defaultAgent = defaults.agentID
+      ? (catalog.agents.find((agent) => agent.id === defaults.agentID) ?? null)
+      : null
+    if (
+      defaultAgent &&
+      !options.some((option) => option.value === defaultAgent.id)
+    ) {
+      options.push({
+        value: defaultAgent.id,
+        label: defaultAgent.id,
+        detail:
+          defaultAgent.name && defaultAgent.name !== defaultAgent.id
+            ? `${defaultAgent.name} · engine default`
+            : "Engine default",
+      })
+    }
+    return options
+  }, [primaryAgentCatalog, defaults.agentID, catalog.agents])
+
   const { favorites, toggle: toggleFavorite } = useModelFavorites()
   // Option objects are built once per catalog identity and reused afterwards;
   // only their *order* changes when a favorite toggles. Favorites stay ranked
-  // first (the behaviour restored in the prior picker pass) without rebuilding
-  // option objects or recomputing modelKey on every toggle.
+  // first without rebuilding option objects or recomputing modelKey on a toggle.
   const stableModelOptions = useMemo(
     () =>
       modelCatalog.map((model) => {
@@ -211,13 +253,13 @@ export function NewSessionDialog({
   const selectedModelInfo = useMemo(
     () =>
       selectedModel
-        ? (nav.models.find(
+        ? (catalog.models.find(
             (candidate) =>
               candidate.providerID === selectedModel.providerID &&
               candidate.id === selectedModel.id
           ) ?? null)
         : null,
-    [nav.models, selectedModel]
+    [catalog.models, selectedModel]
   )
   const variantOptions = useMemo(
     () => [
@@ -230,22 +272,29 @@ export function NewSessionDialog({
     [selectedModelInfo]
   )
 
+  const locationConnectionRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     if (!open) {
       return
     }
 
+    if (locationConnectionRef.current !== catalog.connection) {
+      locationConnectionRef.current = catalog.connection
+      locationCache.invalidate()
+    }
+
     let cancelled = false
 
     void locationCache
-      .get(directory, () => loadLocation(directory))
+      .get(locationKey(directory), () => loadLocation(directory))
       .then((location) => {
         if (!cancelled) {
+          setLastResolved(location)
           setTarget((current) =>
             current.directory === directory
               ? {
                   ...current,
-                  selected: { directory, id: location.project.id },
+                  selected: { directory, location },
                   probe: { directory, available: true },
                 }
               : current
@@ -258,7 +307,7 @@ export function NewSessionDialog({
             current.directory === directory
               ? {
                   ...current,
-                  selected: { directory, id: null },
+                  selected: { directory, location: null },
                   probe: { directory, available: false },
                 }
               : current
@@ -269,7 +318,7 @@ export function NewSessionDialog({
     return () => {
       cancelled = true
     }
-  }, [open, directory])
+  }, [open, directory, catalog.connection])
 
   const folder: FolderState =
     !probe || probe.directory !== directory
@@ -278,6 +327,43 @@ export function NewSessionDialog({
 
   const projectError = newSessionProjectError(selectedID, expectedProjectID)
   const modelUnavailable = Boolean(draft?.model) && !selectedModelInfo
+  // Applies to derived engine defaults as well as explicit choices: a default
+  // with an unsupported variant is never silently rewritten into another ref.
+  const draftUnavailable = useMemo(() => {
+    if (!draft || catalog.status !== "ready") {
+      return false
+    }
+    if (
+      draft.agentID &&
+      !catalog.agents.some(
+        (agent) =>
+          agent.id === draft.agentID && !agent.hidden && agent.mode !== "subagent"
+      )
+    ) {
+      return true
+    }
+    return !isModelRefSelectable(draft.model, catalog.models)
+  }, [draft, catalog.agents, catalog.models, catalog.status])
+  const variantUnavailable = Boolean(
+    draft?.model?.variant &&
+      selectedModelInfo &&
+      !variantsForModel(selectedModelInfo).includes(draft.model.variant)
+  )
+
+  // A preview from a previous folder/profile must never authorize creation.
+  // The selected location has to belong to the raw input, and the ready catalog
+  // has to belong to the engine-resolved directory (which may canonicalize a
+  // trailing slash or symlink). Comparing the catalog to raw input would block
+  // perfectly valid, engine-normalized paths.
+  const catalogMatchesTarget =
+    selected?.directory === directory &&
+    Boolean(selected.location) &&
+    catalog.directory === selected?.location?.directory
+  const catalogLoading =
+    catalog.status === "idle" ||
+    catalog.status === "loading" ||
+    !catalogMatchesTarget
+  const catalogError = catalog.status === "error" && catalogMatchesTarget
 
   const reason =
     nav.connection !== "connected"
@@ -288,53 +374,82 @@ export function NewSessionDialog({
           ? "Selected session folder unavailable."
           : projectError
             ? projectError
-            : nav.agentsStatus === "loading" || nav.modelsStatus === "loading"
-              ? "Loading the Agent and Model catalog…"
-              : nav.agentsStatus === "error" || nav.modelsStatus === "error"
-                ? "The Agent and Model catalog could not be loaded."
-                : modelUnavailable
-                  ? "The selected model is unavailable in this project."
-                  : !draft?.model
-                    ? "Choose an available model for the new session."
-                    : null
+            : catalogLoading
+              ? "Loading the Agent and Model catalog for this folder…"
+              : catalogError
+                ? (catalog.error ??
+                  "The Agent and Model catalog for this folder could not be loaded.")
+                : variantUnavailable
+                  ? "The selected thinking level is unavailable for this model. Choose another."
+                  : draftUnavailable
+                    ? "Your Agent or Model choice is unavailable in this folder. Choose another."
+                  : modelUnavailable
+                    ? "The selected model is unavailable in this folder."
+                    : !draft?.model
+                      ? (defaults.error ??
+                        "Choose an available model for the new session.")
+                      : null
 
   const canCreate =
     nav.connection === "connected" &&
     Boolean(selectedID) &&
     !projectError &&
     folder === "available" &&
+    catalog.status === "ready" &&
+    catalogMatchesTarget &&
+    !draftUnavailable &&
     Boolean(draft?.model) &&
     Boolean(selectedModelInfo) &&
     !nav.creating
 
-  async function handleAgentChange(next: string) {
+  function handleAgentChange(next: string) {
     const agent =
-      nav.agents.find((candidate) => candidate.id === next) ?? null
-    const model = agentModelDefaults(agent, nav.models)
-    userModifiedRef.current = true
-    setDraft({
-      agentID: next,
-      model: model ?? draft?.model ?? null,
-      variant: model?.variant ?? draft?.variant ?? null,
+      catalog.agents.find((candidate) => candidate.id === next) ?? null
+    setModified(true)
+    setUserDraft((current) => {
+      if (
+        modelModified &&
+        current &&
+        isModelRefSelectable(current.model, catalog.models)
+      ) {
+        return { ...current, agentID: next }
+      }
+      const fromAgent = draftForModel(agentModelDefaults(agent))
+      if (fromAgent.model) return { agentID: next, ...fromAgent }
+      const kept =
+        current && isModelRefSelectable(current.model, catalog.models)
+          ? draftForModel(current.model)
+          : null
+      return {
+        agentID: next,
+        model: kept?.model ?? null,
+        variant: kept?.variant ?? null,
+      }
     })
   }
 
-  async function handleModelChange(next: string) {
+  function handleModelChange(next: string) {
     const info = modelCatalog.find((candidate) => modelKey(candidate) === next)
     if (!info) return
     const variant =
       draft?.variant && variantsForModel(info).includes(draft.variant)
         ? draft.variant
         : null
-    userModifiedRef.current = true
-    setDraft({ agentID: draft?.agentID ?? null, model: buildModelRef(info, variant), variant })
+    setModified(true)
+    setModelModified(true)
+    setUserDraft({
+      agentID: draft?.agentID ?? null,
+      model: buildModelRef(info, variant),
+      variant,
+    })
   }
 
   function handleVariantChange(next: string) {
     if (!selectedModelInfo) return
     const variant = next === DEFAULT_VARIANT ? null : next
-    userModifiedRef.current = true
-    setDraft({
+    setModified(true)
+    setModelModified(true)
+    setUserDraft({
       agentID: draft?.agentID ?? null,
       model: buildModelRef(selectedModelInfo, variant),
       variant,
@@ -346,6 +461,8 @@ export function NewSessionDialog({
       return
     }
 
+    // Exactly one session.create request, with the destination folder and the
+    // user-visible agent/model/variant choices.
     const created = await createSession(
       selectedID,
       { agentID: draft.agentID, model: draft.model },
@@ -359,6 +476,13 @@ export function NewSessionDialog({
     onOpenChange(false)
     onCreated?.()
   }
+
+  const usingEngineDefault =
+    defaults.modelSource === "engine-default" &&
+    !modelModified &&
+    Boolean(draft?.model) &&
+    Boolean(defaults.model) &&
+    modelRefKey(draft?.model) === modelRefKey(defaults.model)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -415,7 +539,7 @@ export function NewSessionDialog({
                   options={agentOptions}
                   placeholder="Backend default"
                   disabled={nav.creating}
-                  onValueChange={(value) => void handleAgentChange(value)}
+                  onValueChange={handleAgentChange}
                 />
               </div>
               <div className="grid gap-1.5">
@@ -436,8 +560,13 @@ export function NewSessionDialog({
                   disabled={nav.creating}
                   favorites={favorites}
                   onToggleFavorite={toggleFavorite}
-                  onValueChange={(value) => void handleModelChange(value)}
+                  onValueChange={handleModelChange}
                 />
+                {usingEngineDefault ? (
+                  <p className="px-1 text-[11px] leading-5 text-muted-foreground">
+                    Engine default model: {draft.model?.providerID}/{draft.model?.id}. It may incur costs.
+                  </p>
+                ) : null}
               </div>
               <div className="grid gap-1.5">
                 <span className="px-1 text-xs font-medium text-muted-foreground">
@@ -462,9 +591,10 @@ export function NewSessionDialog({
             className={
               folder === "unavailable" ||
               Boolean(projectError) ||
-              nav.agentsStatus === "error" ||
-              nav.modelsStatus === "error" ||
-              modelUnavailable || !draft?.model
+              catalogError ||
+              modelUnavailable ||
+              draftUnavailable ||
+              !draft?.model
                 ? "text-xs break-words text-destructive"
                 : "text-xs break-words text-muted-foreground"
             }
@@ -509,12 +639,13 @@ export function NewSessionButton({ nav, onCreated, compact = false }: NewSession
   const [open, setOpen] = useState(false)
 
   function handleOpen() {
-    // Warm the location cache the dialog reads, so its first render is not the
-    // first location read. Agent/model catalogs come from the loaded Settings
-    // state, not from the folder being browsed.
+    // Warm the connection-scoped destination cache so the dialog's first
+    // catalog read is not the first native call.
     const directory = nav.location?.directory ?? ""
     if (directory) {
-      void locationCache.get(directory, () => loadLocation(directory)).catch(() => {})
+      void locationCache
+        .get(locationKey(directory), () => loadLocation(directory))
+        .catch(() => {})
     }
     setOpen(true)
   }

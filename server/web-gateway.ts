@@ -21,7 +21,6 @@ type GatewayOptions = {
   sessionShortcuts?: Handler
   /** Read-only UI host environment mounted at /api/ui/environment. */
   environment?: Handler
-  agents: Handler
   notifications: Handler
   artifacts: Handler
   engine: Handler

@@ -24,7 +24,6 @@ type DispatcherOptions = {
   plugins?: Handler
   sessionShortcuts?: Handler
   environment?: Handler
-  agents: Handler
   notifications: Handler
   artifacts: Handler
   engine: Handler
@@ -91,8 +90,9 @@ export function createWebDispatcher(options: DispatcherOptions): (request: Reque
       handler = options.environment
       limit = 8 * 1024
     } else if (path === "/api/ui/agents" || path === "/api/ui/agents/default") {
-      handler = options.agents
-      limit = 64 * 1024
+      // The Settings Agents editor was removed. Keep an explicit tombstone so
+      // these paths never fall through to artifacts or forward to the engine.
+      return secureWebResponse(request, new Response("Not Found\n", { status: 404 }))
     } else if (path === "/api/ui/notifications" || path.startsWith("/api/ui/notifications/")) {
       handler = options.notifications
       limit = 32 * 1024

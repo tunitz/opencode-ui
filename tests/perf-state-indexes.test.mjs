@@ -4,6 +4,7 @@ import {
   agentModelDefaults,
   isAgentInCatalog,
   isModelInCatalog,
+  isModelRefSelectable,
   modelKey,
 } from "../src/lib/session-selection.ts"
 
@@ -41,17 +42,17 @@ test("catalog indexes keep model and agent lookups correct across catalogs", () 
   expect(modelKey(second[0])).toBe("p/b")
 
   expect(
-    agentModelDefaults(
-      { id: "build", model: { providerID: "p", id: "a", variant: "low" } },
-      first
-    )
+    agentModelDefaults({
+      id: "build",
+      model: { providerID: "p", id: "a", variant: "low" },
+    })
   ).toEqual({ providerID: "p", id: "a", variant: "low" })
+  const unavailableRef = { providerID: "p", id: "b" }
   expect(
-    agentModelDefaults(
-      { id: "build", model: { providerID: "p", id: "b" } },
-      first
-    )
-  ).toBeNull()
+    agentModelDefaults({ id: "build", model: unavailableRef })
+  ).toEqual(unavailableRef)
+  expect(isModelRefSelectable(unavailableRef, first)).toBe(false)
+  expect(isModelRefSelectable(unavailableRef, second)).toBe(true)
 
   expect(isAgentInCatalog("build", [{ id: "build" }])).toBe(true)
   expect(isAgentInCatalog("missing", [{ id: "build" }])).toBe(false)

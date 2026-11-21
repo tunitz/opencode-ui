@@ -256,8 +256,8 @@ export function NotesProvider({
         if (!workspace) setLocalOpen(true)
       }
       if (workspace) {
-        // A dirty Settings workspace may hold this transition until confirmed;
-        // the caller can still close its own menu because the request queued.
+        // Apply the Notes state with the transition, so the caller can close
+        // its own menu immediately while the coordinator moves focus.
         return workspace.requestWorkspace("notes", { onCommit: commit })
       }
       commit()

@@ -42,8 +42,56 @@ type Result = {
 }
 
 const requests: ApiRequest[] = []
+type CatalogRequest = { method: string; path: string; directory: string | null }
+const catalogRequests: CatalogRequest[] = []
 const fsListRequests: string[] = []
 const notFound: string[] = []
+
+// Native reads made while previewing and confirming a worktree session. Every
+// request records its `location[directory]` so the fixture can prove the calls
+// target the destination worktree, never the source session project. Catalog
+// shapes mirror @opencode/client 2.1.4: list/default wrap their payload in
+// `data`, while config.get is a bare ConfigEntry[]. The agent's model is present
+// in the model catalog so new-session resolution picks a real, named default.
+const catalogPaths = [
+  "/api/agent",
+  "/api/config",
+  "/api/model",
+  "/api/model/default",
+] as const
+const syntheticCatalog = {
+  agents: [
+    {
+      id: "build",
+      name: "Build",
+      mode: "primary",
+      hidden: false,
+      model: { providerID: "synthetic", id: "synthetic-model" },
+    },
+  ],
+  config: [
+    {
+      type: "document",
+      path: "/synthetic/opencode.json",
+      info: { default_agent: "build" },
+    },
+  ],
+  models: [
+    {
+      id: "synthetic-model",
+      modelID: "synthetic-model",
+      providerID: "synthetic",
+      name: "Synthetic Model",
+      capabilities: {},
+      variants: [],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: { context: 100000, output: 10000 },
+    },
+  ],
+}
 let fixtureShortcuts = parseSessionShortcuts(null)
 const shortcutRequests: Array<{ id: string; change: Record<string, unknown> }> = []
 const results: Result[] = []
@@ -376,109 +424,6 @@ const syntheticDiff = {
   ],
 }
 
-// Long agent identifiers, descriptions, and model slugs mirror a real global
-// catalog closely enough to stress the Settings workspace's layout without
-// reading anything from the machine running the test.
-const syntheticAgentName =
-  "Orchestrator with an extremely long multi-word identifier for mobile layouts that keeps going"
-const syntheticAgentID =
-  "orchestrator-with-an-extremely-long-multi-word-identifier-for-mobile-layouts-and-then-some-more"
-const syntheticAgentDescription =
-  "Coordinates repository-wide refactors, reviews every generated patch, verifies command output, " +
-  "and keeps synthetic browser fixtures aligned with the production Settings workspace layout across " +
-  "320px, 390px, and desktop widths without truncating important model selection context. ".repeat(
-    3
-  )
-
-function syntheticAgentSource(values: Record<string, unknown> = {}) {
-  return {
-    kind: "markdown",
-    relativePath: `agents/${syntheticAgentID}.md`,
-    label: `Global agents/${syntheticAgentID}.md`,
-    exists: true,
-    hash: "hash-source",
-    values,
-  }
-}
-
-function syntheticAgentEffective(overrides: Record<string, unknown> = {}) {
-  return {
-    model: {
-      providerID: "commandcode",
-      id: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
-    },
-    description: syntheticAgentDescription,
-    mode: "primary",
-    hidden: false,
-    steps: null,
-    disabled: null,
-    ...overrides,
-  }
-}
-
-const syntheticAgentCatalog = {
-  scope: "global",
-  project: null,
-  sourceLabel: "~/.config/opencode",
-  agents: [
-    {
-      id: syntheticAgentID,
-      name: syntheticAgentName,
-      effective: syntheticAgentEffective(),
-      source: syntheticAgentSource({
-        model: {
-          providerID: "commandcode",
-          id: "deepseek-v4.1-flash-extended-context-preview-2026-11-01",
-        },
-        description: syntheticAgentDescription,
-      }),
-      target: {
-        ...syntheticAgentSource(),
-        label: `Editable agents/${syntheticAgentID}.md`,
-      },
-      readonly: false,
-      permissionsReadOnly: false,
-      warnings: [],
-    },
-    {
-      id: "build",
-      name: "Build",
-      effective: syntheticAgentEffective({
-        description: "Implements changes and runs verification.",
-        mode: "primary",
-      }),
-      source: syntheticAgentSource({
-        description: "Implements changes and runs verification.",
-      }),
-      target: syntheticAgentSource(),
-      readonly: false,
-      permissionsReadOnly: false,
-      warnings: [],
-    },
-    {
-      id: "subagent-with-a-long-identifier-for-command-review-and-diff-analysis",
-      name: "Command review and diff analysis subagent with a long name",
-      effective: syntheticAgentEffective({
-        description:
-          "Reviews shell commands and diffs, then reports risk with file-level evidence. ".repeat(
-            4
-          ),
-        mode: "subagent",
-        model: {
-          providerID: "anthropic",
-          id: "claude-sonnet-4-5-20250929-thinking-extended-context",
-        },
-      }),
-      source: null,
-      target: null,
-      readonly: true,
-      permissionsReadOnly: false,
-      warnings: [],
-    },
-  ],
-  warnings: [],
-}
-
 function json(body: unknown, status = 200) {
   return Response.json(body, {
     status,
@@ -563,19 +508,6 @@ const server = Bun.serve({
         ],
       })
     }
-    if (pathname === "/api/ui/agents") {
-      return request.method === "GET"
-        ? json(syntheticAgentCatalog)
-        : json(
-            {
-              error: {
-                code: "read_only",
-                message: "Synthetic agent catalog is read-only.",
-              },
-            },
-            405
-          )
-    }
     if (pathname === "/api/ui/auth/status") {
       return json({ configured: true, required: true, authenticated: true })
     }
@@ -587,6 +519,11 @@ const server = Bun.serve({
         url.searchParams.get("location[directory]") ??
         url.searchParams.get("location") ??
         ""
+      catalogRequests.push({
+        method: request.method,
+        path: pathname,
+        directory: requested || null,
+      })
       const project = requested.startsWith("/synthetic/worktrees/alpha")
         ? "p-alpha"
         : requested.startsWith("/synthetic/alpha")
@@ -680,6 +617,23 @@ const server = Bun.serve({
         { id: "p-notes", canonical: "/synthetic/notes" },
         { id: "p-location", canonical: "/synthetic/location" },
       ])
+    }
+    if ((catalogPaths as readonly string[]).includes(pathname)) {
+      const directory =
+        url.searchParams.get("location[directory]") ??
+        url.searchParams.get("location") ??
+        null
+      catalogRequests.push({
+        method: request.method,
+        path: pathname,
+        directory,
+      })
+      if (request.method !== "GET")
+        return json({ message: "Synthetic read-only route." }, 405)
+      if (pathname === "/api/agent") return json({ data: syntheticCatalog.agents })
+      if (pathname === "/api/config") return json(syntheticCatalog.config)
+      if (pathname === "/api/model") return json({ data: syntheticCatalog.models })
+      return json({ data: syntheticCatalog.models[0] })
     }
     if (pathname.startsWith("/api/")) {
       notFound.push(pathname)
@@ -1258,6 +1212,7 @@ if (browser) {
         )
 
         requests.length = 0
+        catalogRequests.length = 0
         await page.getByRole("button", { name: "Set project scope" }).click()
         await page.getByText("Active: s-alpha").waitFor({ state: "visible" })
         await page.getByRole("button", { name: "Project worktrees" }).click()
@@ -1281,6 +1236,11 @@ if (browser) {
           .filter({
             has: page.getByRole("heading", { name: "Worktrees", level: 2 }),
           })
+        // Base UI hides the underlying dialog from the accessibility tree while
+        // the confirmation alert is open, so use a text-based DOM locator here.
+        const worktreeSurface = page
+          .locator('[data-slot="dialog-content"]')
+          .filter({ hasText: "Worktrees" })
         check(
           "project scope prefills its canonical directory",
           (await page
@@ -1288,13 +1248,126 @@ if (browser) {
             .inputValue()) === "/synthetic/location"
         )
         await page.getByRole("button", { name: "New session here" }).click()
+        const confirm = page.getByRole("alertdialog")
+        await confirm.waitFor({ state: "visible" })
+        const confirmText = (await confirm.textContent()) ?? ""
+        check(
+          "the worktree preview names the catalog agent, model and cost",
+          confirmText.includes("Agent: build") &&
+            confirmText.includes("Model: synthetic/synthetic-model") &&
+            confirmText.includes("may incur costs"),
+          confirmText
+        )
+        const callsBeforeConfirm = await qaCalls(page)
+        const surfaceVisibleBeforeConfirm = await worktreeSurface.isVisible()
+        check(
+          "the preview keeps the worktree dialog open and creates no session",
+          surfaceVisibleBeforeConfirm &&
+            !callsBeforeConfirm.some((call) => call.kind === "createSession"),
+          `visible=${surfaceVisibleBeforeConfirm} count=${await worktreeSurface.count()} calls=${JSON.stringify(callsBeforeConfirm)}`
+        )
+        const locationReads = () =>
+          catalogRequests.filter(
+            (catalogCall) =>
+              catalogCall.path === "/api/location" &&
+              catalogCall.directory === "/synthetic/location"
+          ).length
+        const locationBeforeConfirm = locationReads()
+        // The destination catalogs must be read at the clicked worktree, not at
+        // the source project shown in the sidebar, and must not fall through to
+        // the synthetic 404 handler.
+        for (const catalogPath of catalogPaths) {
+          check(
+            `${catalogPath} reads the destination directory catalog before confirming`,
+            catalogRequests.some(
+              (catalogCall) =>
+                catalogCall.path === catalogPath &&
+                catalogCall.method === "GET" &&
+                catalogCall.directory === "/synthetic/location"
+            ),
+            JSON.stringify(catalogRequests)
+          )
+          check(
+            `${catalogPath} is not an unconfigured synthetic route`,
+            !notFound.includes(catalogPath),
+            JSON.stringify(notFound)
+          )
+        }
+        check(
+          "destination catalogs are not read from the source session project",
+          catalogRequests.every(
+            (catalogCall) => catalogCall.directory !== "/synthetic/alpha"
+          ),
+          JSON.stringify(catalogRequests)
+        )
+        check(
+          "the destination project is resolved at the worktree before preview",
+          locationBeforeConfirm >= 1,
+          JSON.stringify(catalogRequests)
+        )
+
+        await confirm.getByRole("button", { name: "Start session" }).click()
         await scopedDialog.waitFor({ state: "detached" })
         const sessionCalls = await qaCalls(page)
         check(
-          "New session here creates a session in the chosen directory",
-          sessionCalls.some((call) => call.kind === "createSession"),
+          "explicit confirmation creates one session in the chosen directory",
+          sessionCalls.filter((call) => call.kind === "createSession").length ===
+            1,
           JSON.stringify(sessionCalls)
         )
+        check(
+          "confirming rechecks the destination project through the native API",
+          locationReads() === locationBeforeConfirm + 1,
+          `before=${locationBeforeConfirm} after=${locationReads()}`
+        )
+        const createCall = sessionCalls.find(
+          (call) => call.kind === "createSession"
+        )
+        let createArgs: {
+          projectID?: string
+          directory?: string
+          selection?: {
+            agentID?: string
+            model?: { providerID?: string; id?: string }
+          }
+        } = {}
+        try {
+          createArgs = createCall?.value ? JSON.parse(createCall.value) : {}
+        } catch {
+          // Leave the parsed args empty so the assertions below fail with detail.
+        }
+        check(
+          "confirmation uses the destination project and catalog-resolved defaults",
+          createArgs.projectID === "p-location" &&
+            createArgs.directory === "/synthetic/location" &&
+            createArgs.selection?.agentID === "build" &&
+            createArgs.selection?.model?.providerID === "synthetic" &&
+            createArgs.selection?.model?.id === "synthetic-model",
+          JSON.stringify(createArgs)
+        )
+
+        // Cancelling a fresh preview must dismiss it without creating anything.
+        await page.getByRole("button", { name: "Project worktrees" }).click()
+        await page
+          .getByRole("heading", { name: "Worktrees", level: 2 })
+          .waitFor({ state: "visible" })
+        await page.getByRole("button", { name: "New session here" }).click()
+        const cancelConfirm = page.getByRole("alertdialog")
+        await cancelConfirm.waitFor({ state: "visible" })
+        await cancelConfirm.getByRole("button", { name: "Cancel" }).click()
+        await cancelConfirm.waitFor({ state: "detached" })
+        const callsAfterCancel = await qaCalls(page)
+        check(
+          "cancelling the preview creates no session and keeps the worktree dialog open",
+          callsAfterCancel.filter((call) => call.kind === "createSession")
+            .length === 1 && (await worktreeSurface.isVisible()),
+          `visible=${await worktreeSurface.isVisible()} calls=${JSON.stringify(callsAfterCancel)}`
+        )
+        await page
+          .getByRole("button", { name: "Close", exact: true })
+          .first()
+          .click()
+        await scopedDialog.waitFor({ state: "detached" })
         check(
           "no page errors",
           opened.pageErrors.length === 0,
@@ -4504,258 +4577,6 @@ if (browser) {
 }
 
 // ---------------------------------------------------------------------------
-// Settings > Agents fit
-// ---------------------------------------------------------------------------
-if (browser) {
-  await run(
-    "Settings > Agents keeps long agent cards inside the panel at 320, 390, and desktop",
-    async ({ check }) => {
-      for (const width of [320, 390, 1280]) {
-        const height = width === 1280 ? 900 : 844
-        const opened = await openPage({ width, height }, "settings")
-        const page = opened.page
-        try {
-          await page
-            .getByRole("heading", { name: "Agents", exact: true })
-            .waitFor({ state: "visible" })
-          const longRow = page
-            .getByRole("button", {
-              name: new RegExp("Orchestrator with an extremely long"),
-            })
-            .first()
-          await longRow.waitFor({ state: "visible" })
-
-          const list = await page.evaluate(() => {
-            const panel = document.querySelector('[role="tabpanel"]')
-            if (!(panel instanceof HTMLElement)) return null
-            const panelRect = panel.getBoundingClientRect()
-            const cards = [
-              ...panel.querySelectorAll('[data-slot="accordion-item"]'),
-            ].map((element) => {
-              const rect = element.getBoundingClientRect()
-              return { left: rect.left, right: rect.right, width: rect.width }
-            })
-            const rows = [...panel.querySelectorAll("li button")].map(
-              (element) => {
-                const rect = element.getBoundingClientRect()
-                return { right: rect.right, width: rect.width }
-              }
-            )
-            // Any visible element wholly outside the panel means a child escaped
-            // the panel, even when the document itself still clips the page.
-            const offenders = [...panel.querySelectorAll("*")]
-              .filter((element) => {
-                const rect = element.getBoundingClientRect()
-                // Skip visually hidden 1px controls and unpainted boxes.
-                if (rect.width <= 1 || rect.height <= 1) return false
-                return (
-                  rect.right > panelRect.right + 1 ||
-                  rect.left < panelRect.left - 1
-                )
-              })
-              .slice(0, 5)
-              .map((element) => ({
-                tag: element.tagName,
-                text: (element.textContent ?? "").trim().slice(0, 40),
-                right: element.getBoundingClientRect().right,
-              }))
-            return {
-              panelLeft: panelRect.left,
-              panelRight: panelRect.right,
-              panelClientWidth: panel.clientWidth,
-              panelScrollWidth: panel.scrollWidth,
-              cards,
-              rows,
-              offenders,
-            }
-          })
-          check(
-            `${width}px: tabpanel has no horizontal overflow`,
-            Boolean(list && list.panelScrollWidth <= list.panelClientWidth + 1),
-            JSON.stringify(
-              list && {
-                client: list.panelClientWidth,
-                scroll: list.panelScrollWidth,
-              }
-            )
-          )
-          const listLeft = list?.panelLeft ?? 0
-          const listRight = list?.panelRight ?? 0
-          check(
-            `${width}px: every agent card stays inside the panel`,
-            Boolean(
-              list &&
-              list.cards.length >= 2 &&
-              list.cards.every(
-                (card) =>
-                  card.left >= listLeft - 1 && card.right <= listRight + 1
-              )
-            ),
-            JSON.stringify(list?.cards)
-          )
-          check(
-            `${width}px: agent rows stay inside the card`,
-            Boolean(
-              list &&
-              list.rows.length >= 2 &&
-              list.rows.every((row) => row.right <= listRight + 1)
-            ),
-            JSON.stringify(list?.rows)
-          )
-          check(
-            `${width}px: no descendant escapes the panel`,
-            Boolean(list && list.offenders.length === 0),
-            JSON.stringify(list?.offenders)
-          )
-          const pageOverflow = await page.evaluate(
-            () => document.documentElement.scrollWidth - window.innerWidth
-          )
-          check(
-            `${width}px: page has no horizontal overflow`,
-            pageOverflow <= 0,
-            `overflow=${pageOverflow}`
-          )
-
-          // The long identifier must stay inside its row, truncating where the
-          // row is too narrow and simply fitting on a wide desktop card.
-          const modelFit = await longRow.evaluate((element) => {
-            const spans = [...element.querySelectorAll("span")]
-            const model = spans.find((span) =>
-              span.textContent?.includes("commandcode/")
-            )
-            if (!model) return null
-            return {
-              fits: model.scrollWidth <= model.clientWidth + 1,
-              clips: getComputedStyle(model).overflow === "hidden",
-              inside:
-                model.getBoundingClientRect().right <=
-                element.getBoundingClientRect().right + 1,
-            }
-          })
-          check(
-            `${width}px: long model id stays inside its row`,
-            Boolean(
-              modelFit && (modelFit.fits || modelFit.clips) && modelFit.inside
-            ),
-            JSON.stringify(modelFit)
-          )
-          if (width < 500) {
-            check(
-              `${width}px: long model id is truncated, not widened`,
-              Boolean(modelFit && !modelFit.fits && modelFit.clips),
-              JSON.stringify(modelFit)
-            )
-          }
-
-          await page.screenshot({
-            path: join(shotDir, `settings-agents-list-${width}.png`),
-            fullPage: true,
-          })
-
-          await longRow.click()
-          await page
-            .getByRole("button", { name: "Back to all agents" })
-            .waitFor({ state: "visible" })
-          const detail = await page.evaluate(() => {
-            const panel = document.querySelector('[role="tabpanel"]')
-            if (!(panel instanceof HTMLElement)) return null
-            const panelRect = panel.getBoundingClientRect()
-            const offenders = [...panel.querySelectorAll("*")]
-              .filter((element) => {
-                const rect = element.getBoundingClientRect()
-                // Skip visually hidden 1px controls and unpainted boxes.
-                if (rect.width <= 1 || rect.height <= 1) return false
-                return (
-                  rect.right > panelRect.right + 1 ||
-                  rect.left < panelRect.left - 1
-                )
-              })
-              .slice(0, 5)
-              .map((element) => ({
-                tag: element.tagName,
-                text: (element.textContent ?? "").trim().slice(0, 40),
-                right: element.getBoundingClientRect().right,
-              }))
-            const fieldsets = [...panel.querySelectorAll("fieldset")].map(
-              (element) => {
-                const rect = element.getBoundingClientRect()
-                return { left: rect.left, right: rect.right }
-              }
-            )
-            return {
-              panelLeft: panelRect.left,
-              panelRight: panelRect.right,
-              panelClientWidth: panel.clientWidth,
-              panelScrollWidth: panel.scrollWidth,
-              fieldsets,
-              offenders,
-            }
-          })
-          check(
-            `${width}px: detail tabpanel has no horizontal overflow`,
-            Boolean(
-              detail && detail.panelScrollWidth <= detail.panelClientWidth + 1
-            ),
-            JSON.stringify(
-              detail && {
-                client: detail.panelClientWidth,
-                scroll: detail.panelScrollWidth,
-              }
-            )
-          )
-          const detailLeft = detail?.panelLeft ?? 0
-          const detailRight = detail?.panelRight ?? 0
-          check(
-            `${width}px: detail fields stay inside the panel`,
-            Boolean(
-              detail &&
-              detail.fieldsets.length >= 1 &&
-              detail.fieldsets.every(
-                (fieldset) =>
-                  fieldset.left >= detailLeft - 1 &&
-                  fieldset.right <= detailRight + 1
-              )
-            ),
-            JSON.stringify(detail?.fieldsets)
-          )
-          check(
-            `${width}px: no detail descendant escapes the panel`,
-            Boolean(detail && detail.offenders.length === 0),
-            JSON.stringify(detail?.offenders)
-          )
-          const detailPageOverflow = await page.evaluate(
-            () => document.documentElement.scrollWidth - window.innerWidth
-          )
-          check(
-            `${width}px: detail page has no horizontal overflow`,
-            detailPageOverflow <= 0,
-            `overflow=${detailPageOverflow}`
-          )
-
-          await page.screenshot({
-            path: join(shotDir, `settings-agents-detail-${width}.png`),
-            fullPage: true,
-          })
-          check(
-            `${width}px: no page errors`,
-            opened.pageErrors.length === 0,
-            opened.pageErrors.join(" | ")
-          )
-          mergeDiagnostics(
-            results.find((result) =>
-              result.name.startsWith("Settings > Agents keeps")
-            )!,
-            opened
-          )
-        } finally {
-          await opened.context.close()
-        }
-      }
-    }
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Desktop question dialog overflow
 // ---------------------------------------------------------------------------
 if (browser) {
@@ -4976,6 +4797,7 @@ const report = {
   executablePath,
   summary: { passed, failed, blocked, total: results.length },
   requests,
+  catalogRequests,
   notFound,
   results,
 }

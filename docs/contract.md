@@ -118,6 +118,23 @@ of blinking the whole app into the password gate.
   UI host's home directory (or `OPENCODE_UI_SESSION_HOME`) for the New Session folder default; it
   contains no credentials or engine state.
 
+## Sources beyond the engine API [app layer]
+
+Most browser-facing data is proxied from the engine API. The known exceptions, detailed in their
+own sections, are:
+
+- Notes storage and the Notes change stream (`/api/ui/notes/*`) are served locally; enabling the
+  Notes MCP server writes `mcp.servers.notes` into the engine's global config through an atomic
+  JSONC edit.
+- Legacy notes are imported once from the engine SQLite `kv` table, read-only
+  (`OPENCODE_ENGINE_DB_PATH`); that database is never written.
+- Artifacts are delivered from verified local files through opaque `/api/ui/artifacts/*` and
+  `/api/ui/project-artifacts/*` capabilities; no engine configuration is changed.
+- `GET /api/ui/environment` reports the UI host home (or `OPENCODE_UI_SESSION_HOME`) for the New
+  Session default.
+- `/highlights` fetches the public upstream changelog from GitHub with a credential-free, bounded
+  request; it is not an engine API call.
+
 ## App-layer Engine Connections API [app layer]
 
 Mounted under `/api/ui/connections` before the generic engine proxy; body limit 16 KiB. Saved
@@ -138,8 +155,8 @@ engine-dependent routes return 503 and the authenticated home screen links to Se
 - `DELETE /api/ui/connections/:id` → deletes an inactive profile or the last profile. Switch
   away from an active profile before deleting it if other profiles are saved.
 - `POST /api/ui/connections/:id/activate` → resolves credentials, switches the live proxy, PTY
-  WebSocket bridge, notifications watcher, artifact delivery, plugins API, and agent-config target,
-  and persists `activeId`.
+  WebSocket bridge, notifications watcher, artifact delivery, and plugins API, and persists
+  `activeId`.
 - `POST /api/ui/connections/test` → probes `GET <engineUrl>/api/info` (`redirect: "manual"`,
   `proxy: false`, 5 s timeout) and returns `{ ok, reachable, authenticated, status, version, latencyMs, unencryptedRemote, error }`. Reusing a saved password via `profileId` is allowed only when `engineUrl` matches that profile's saved origin.
 
@@ -194,7 +211,8 @@ and an engine restart may be required.
   `installed`; otherwise 409
   `{ error: { code: "plugin_not_installed" } }` and nothing is persisted.
   The global config directory follows `$OPENCODE_CONFIG_DIR` → `$XDG_CONFIG_HOME/opencode` →
-  `~/.config/opencode`; `opencode.jsonc` is preferred when present, else `opencode.json`. The edit
+  `~/.config/opencode` (this still applies to the Notes MCP registration after removal of the
+  agent-config editor); `opencode.jsonc` is preferred when present, else `opencode.json`. The edit
   keeps all other keys, servers, and comments (`jsonc-parser`) and is written atomically (private
   temp file, fsync, rename, directory fsync). A config write failure → 500
   `{ error: { code: "config_write_failed" } }` and the engine is not touched. The whole settle pass
@@ -234,12 +252,14 @@ and an engine restart may be required.
 
 The gateway applies the auth gate to HTTP requests and WebSocket upgrades before dispatch; denied
 upgrades receive a bare 401. Within `web-dispatch.ts` the order is: request security, auth endpoints,
-Notes API, Plugins API, session shortcuts (`/api/ui/session-shortcuts`), agents, notifications,
+Notes API, Plugins API, session shortcuts (`/api/ui/session-shortcuts`), notifications,
 artifacts (`/api/ui` fallback), engine proxy (`/api*` and `/openapi.json`), then static frontend
 assets. `/api/pair` is an allowlisted native prefix that flows through the same engine proxy and
 guards; `/api/debug` is rejected by request security, including the heap-dump endpoint. Notes and
 Plugins branches are skipped when those services are not installed. Notes events and
-`/api/event` disable the request timeout.
+`/api/event` disable the request timeout. The former `/api/ui/agents` and `/api/ui/agents/default`
+file-editor endpoints are removed and explicitly answer 404; no app-layer agent-config editor
+remains.
 
 ## API contract [source/spec; runtime exercised only for info, spec, auth, SSE]
 
@@ -279,9 +299,9 @@ Plugins branches are skipped when those services are not installed. Notes events
   `GET /api/fs/find?location[directory]=<abs>&query=...&type=file&limit=...`
   returns ranked entries. `GET /api/fs/read/<wildcard>?location[directory]=<abs>` streams raw bytes
   with ETag/Last-Modified and single-range support. The client requests a bounded first range and
-  never uses `POST /api/experimental/fs/write` or a file editor. The server's location scope is
-  authoritative; the client also rejects absolute/traversal paths, encodes every segment, and
-  claims no new security boundary beyond backend auth.
+  never uses `POST /api/experimental/fs/write`, and the app exposes no file-editor endpoint. The
+  server's location scope is authoritative; the client also rejects absolute/traversal paths,
+  encodes every segment, and claims no new security boundary beyond backend auth.
 - **Diffs:** `GET /api/session/{sid}/diff?from=<userMessageID>&to=<userMessageID>&context=N`
   returns `FileDiffInfo[]` (`file`, `patch`, `additions`, `deletions`, `status`) for a native
   session turn; omitting `from` uses the newest user turn. `GET /api/vcs/diff?location[directory]=<abs>&mode=working&context=N`
@@ -338,7 +358,9 @@ Plugins branches are skipped when those services are not installed. Notes events
   Ended/full content is durable, but the global SSE remains volatile and does not replay.
 - **Models/agents:** `GET /api/model`, `/api/model/default`, `/api/agent` require
   `location[directory]`; set via `POST /api/session/{sid}/model` with `{model}` and
-  `/agent` with `{agent}`.
+  `/agent` with `{agent}`. New-session and composer agent/model/variant choices come from these
+  engine catalogs at the destination (target) session location, not from a local config editor;
+  variants are the ones reported by the model entries.
 - **Experimental log:** `GET /api/experimental/session/{sid}/log?after=seq&follow=true`
   is implemented in v2.1.4 source [source `packages/core/src/session.ts:179-183`,
   `packages/server/src/handlers/session.ts:581-589`, protocol

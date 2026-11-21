@@ -24,9 +24,6 @@ mock.module("@/components/theme-select", () => ({
   AppearancePanel: () => React.createElement("p", null, "Appearance controls"),
 }))
 // Sections are separately tested; this suite targets the workspace chrome.
-mock.module("@/components/agent-config-settings", () => ({
-  AgentConfigSettings: () => React.createElement("p", null, "Agent controls"),
-}))
 mock.module("@/components/keybindings-settings", () => ({
   KeybindingsSettings: () => React.createElement("p", null, "Key controls"),
 }))
@@ -103,35 +100,6 @@ function Harness() {
       { type: "button", id: "close-settings", onClick: settings.closeSettings },
       "Close settings"
     ),
-    React.createElement(
-      "button",
-      {
-        type: "button",
-        id: "mark-dirty",
-        onClick: () => settings.setAgentDirty(true),
-      },
-      "Mark dirty"
-    ),
-    React.createElement(
-      "button",
-      { type: "button", id: "request-close", onClick: settings.requestClose },
-      "Request close"
-    ),
-    React.createElement(
-      "button",
-      { type: "button", id: "keep-editing", onClick: settings.keepEditing },
-      "Keep editing"
-    ),
-    React.createElement(
-      "button",
-      { type: "button", id: "discard", onClick: settings.confirmDiscard },
-      "Discard"
-    ),
-    React.createElement(
-      "span",
-      { id: "confirm-state" },
-      settings.confirmOpen ? "confirming" : "idle"
-    ),
     settings.open
       ? React.createElement(SettingsWorkspace, { nav: {} })
       : null
@@ -179,7 +147,6 @@ test("the tab bar renders every section in registry order with icon and label", 
   try {
     expect(tabs(root).map((item) => item.props.id)).toEqual([
       "settings-tab-appearance",
-      "settings-tab-agents",
       "settings-tab-alerts",
       "settings-tab-plugins",
       "settings-tab-connection",
@@ -187,7 +154,6 @@ test("the tab bar renders every section in registry order with icon and label", 
     ])
     for (const [id, label] of [
       ["appearance", "Appearance"],
-      ["agents", "Agents"],
       ["alerts", "Alerts"],
       ["plugins", "Plugins"],
       ["connection", "Connections"],
@@ -230,7 +196,7 @@ test("clicking a tab switches content immediately with no back navigation", asyn
     expect(selectedTabs(root)).toEqual(["settings-tab-access"])
     expect(text(root.toJSON())).not.toContain("All settings")
     // Every tab stays reachable in one tap.
-    expect(tabs(root)).toHaveLength(6)
+    expect(tabs(root)).toHaveLength(5)
   } finally {
     await act(async () => root.unmount())
   }
@@ -252,52 +218,6 @@ test("reopening after visiting another section starts at Appearance again", asyn
   }
 })
 
-test("unsaved agent edits guard tab switches until confirmed", async () => {
-  const root = await mount()
-  try {
-    await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
-    await act(async () => button(root, "Plugins").props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "confirming",
-    ])
-    // The tab does not change while the confirmation is pending.
-    expect(headings(root)).toEqual(["Appearance"])
-
-    await act(async () => root.root.findByProps({ id: "keep-editing" }).props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "idle",
-    ])
-    expect(headings(root)).toEqual(["Appearance"])
-
-    await act(async () => button(root, "Plugins").props.onClick())
-    await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "idle",
-    ])
-    expect(headings(root)).toEqual(["Plugins"])
-    expect(selectedTabs(root)).toEqual(["settings-tab-plugins"])
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
-test("unsaved agent edits guard closing the workspace", async () => {
-  const root = await mount()
-  try {
-    await act(async () => root.root.findByProps({ id: "mark-dirty" }).props.onClick())
-    await act(async () => root.root.findByProps({ id: "request-close" }).props.onClick())
-    expect(root.root.findByProps({ id: "confirm-state" }).children).toEqual([
-      "confirming",
-    ])
-    expect(tabs(root)).toHaveLength(6)
-
-    await act(async () => root.root.findByProps({ id: "discard" }).props.onClick())
-    expect(button(root, "Open settings")).toBeDefined()
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
-
 test("arrow keys, Home and End move selection with roving tab focus", async () => {
   const root = await mount()
   try {
@@ -310,15 +230,15 @@ test("arrow keys, Home and End move selection with roving tab focus", async () =
     ).toHaveLength(1)
 
     await pressKey(root, "ArrowRight")
-    expect(selectedTabs(root)).toEqual(["settings-tab-agents"])
-    expect(tabByID(root, "agents").props.tabIndex).toBe(0)
+    expect(selectedTabs(root)).toEqual(["settings-tab-alerts"])
+    expect(tabByID(root, "alerts").props.tabIndex).toBe(0)
     expect(tabByID(root, "appearance").props.tabIndex).toBe(-1)
 
     await pressKey(root, "ArrowRight")
-    expect(selectedTabs(root)).toEqual(["settings-tab-alerts"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-plugins"])
 
     await pressKey(root, "ArrowLeft")
-    expect(selectedTabs(root)).toEqual(["settings-tab-agents"])
+    expect(selectedTabs(root)).toEqual(["settings-tab-alerts"])
 
     await pressKey(root, "End")
     expect(selectedTabs(root)).toEqual(["settings-tab-access"])
@@ -359,7 +279,7 @@ test("the content grid cannot be widened by nowrap section rows", async () => {
     new URL("../src/components/settings-workspace.tsx", import.meta.url)
   ).text()
   // A bare `grid` uses an auto track whose min-content is the widest nowrap
-  // descendant, which pushes long agent cards past the mobile panel.
+  // descendant, which pushes long section rows past the mobile panel.
   const gridClasses = source.match(/<div className="(grid [^"]*)">/)?.[1] ?? ""
   expect(gridClasses).toContain("grid-cols-1")
   expect(gridClasses).toContain("min-w-0")
@@ -519,7 +439,7 @@ test("RTL keeps wheel scrolling pointing at the end of the strip", async () => {
 test("the app main pane can shrink below its content min-width", async () => {
   const app = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text()
   const main = app.slice(app.indexOf("<main"), app.indexOf("</main>"))
-  // Row-flex item: without min-w-0 the nowrap truncate rows in Settings >
-  // Agents push the pane's min-content past the viewport on mobile.
+  // Row-flex item: without min-w-0 the nowrap truncate rows in Settings push
+  // the pane's min-content past the viewport on mobile.
   expect(main).toContain("min-w-0")
 })

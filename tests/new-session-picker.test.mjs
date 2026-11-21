@@ -18,6 +18,29 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const PROJECT_DIR = "/repo/alpha"
 const CHILD_DIR = "/repo/alpha/src"
+const BETA_DIR = "/repo/beta"
+const BETA_AGENTS = [{ id: "beta-agent", mode: "primary", hidden: false }]
+const BETA_MODELS = [
+  {
+    id: "beta-model",
+    providerID: "opencode",
+    enabled: true,
+    status: "active",
+    variants: [],
+  },
+]
+// Nested folders may carry their own .opencode config, agents and models even
+// though location.get still resolves them to the same project.
+const CHILD_AGENTS = [{ id: "nested-agent", mode: "primary", hidden: false }]
+const CHILD_MODELS = [
+  {
+    id: "nested-model",
+    providerID: "opencode",
+    enabled: true,
+    status: "active",
+    variants: [],
+  },
+]
 const AGENTS = [
   { id: "build", name: "Build", mode: "primary", hidden: false },
   { id: "plan", name: "Plan", mode: "primary", hidden: false },
@@ -43,6 +66,17 @@ const MODELS = [
 
 const locationGet = mock(async ({ location }) => {
   const directory = location.directory
+  // The engine normalizes a trailing slash in the submitted folder.
+  if (directory === `${PROJECT_DIR}/`) {
+    return {
+      directory: PROJECT_DIR,
+      project: {
+        id: "p-alpha",
+        directory: PROJECT_DIR,
+        canonical: PROJECT_DIR,
+      },
+    }
+  }
   if (directory === PROJECT_DIR || directory.startsWith(`${PROJECT_DIR}/`)) {
     return {
       directory,
@@ -50,6 +84,16 @@ const locationGet = mock(async ({ location }) => {
         id: "p-alpha",
         directory: PROJECT_DIR,
         canonical: PROJECT_DIR,
+      },
+    }
+  }
+  if (directory === BETA_DIR) {
+    return {
+      directory,
+      project: {
+        id: "p-beta",
+        directory: BETA_DIR,
+        canonical: BETA_DIR,
       },
     }
   }
@@ -67,21 +111,39 @@ const fileList = mock(async ({ location }) => {
   }
   return { data: listings[location.directory] ?? [] }
 })
+const catalogFor = (directory) => {
+  if (directory === PROJECT_DIR) return { agents: AGENTS, models: MODELS, defaultAgent: null, defaultModel: MODELS[0] }
+  if (directory === CHILD_DIR) return { agents: CHILD_AGENTS, models: CHILD_MODELS, defaultAgent: "nested-agent", defaultModel: CHILD_MODELS[0] }
+  if (directory === BETA_DIR) return { agents: BETA_AGENTS, models: BETA_MODELS, defaultAgent: null, defaultModel: BETA_MODELS[0] }
+  return { agents: [], models: [], defaultAgent: null, defaultModel: null }
+}
 const agentList = mock(async ({ location }) => ({
-  // Only the canonical project directory has a real catalog. Subfolders and
-  // parents return an empty catalog, reproducing the reported picker failure.
-  data: location.directory === PROJECT_DIR ? AGENTS : [],
+  data: catalogFor(location.directory).agents,
 }))
 const modelList = mock(async ({ location }) => ({
-  data: location.directory === PROJECT_DIR ? MODELS : [],
+  data: catalogFor(location.directory).models,
+}))
+const configGet = mock(async ({ location }) => {
+  const defaultAgent = catalogFor(location.directory).defaultAgent
+  return defaultAgent
+    ? [{ type: "document", info: { default_agent: defaultAgent } }]
+    : []
+})
+const modelDefault = mock(async ({ location }) => ({
+  data: catalogFor(location.directory).defaultModel,
 }))
 
+mock.module("@/lib/connections", () => ({
+  ENGINE_CONNECTION_CHANGED: "opencode-ui:engine-connection-changed",
+  listConnections: async () => ({ active: null, profiles: [] }),
+}))
 mock.module("@/lib/opencode", () => ({
   openCode: {
     location: { get: locationGet },
     file: { list: fileList },
     agent: { list: agentList },
-    model: { list: modelList },
+    config: { get: configGet },
+    model: { list: modelList, default: modelDefault },
   },
   errorMessage: (failure) => String(failure?.message ?? failure),
 }))
@@ -132,9 +194,19 @@ const { NewSessionDialog } = await import(
 function nav() {
   return {
     createSession: mock(async () => true),
+    // Intentionally different from the destination catalog so a regression
+    // that reads the current-location catalog is visible in the picker.
     configEntries: [],
-    agents: AGENTS,
-    models: MODELS,
+    agents: [{ id: "current-agent", mode: "primary", hidden: false }],
+    models: [
+      {
+        id: "current-model",
+        providerID: "current",
+        enabled: true,
+        status: "active",
+        variants: [],
+      },
+    ],
     agentsStatus: "ready",
     modelsStatus: "ready",
     connection: "connected",
@@ -196,7 +268,7 @@ afterAll(() => {
   else globalThis.window = previousWindow
 })
 
-test("agent picker stays populated while browsing deeper and up to parent folders", async () => {
+test("parent and nested destinations read their own location-scoped catalogs", async () => {
   let root
   await act(async () => {
     root = create(
@@ -208,53 +280,189 @@ test("agent picker stays populated while browsing deeper and up to parent folder
       })
     )
   })
-  await settle()
+  await settle(6)
+  const directoryInput = () =>
+    root.root.findAll(
+      (node) => node.type === "input" && node.props.id === "new-session-directory"
+    )[0]
+  const browseTo = async (directory) => {
+    const input = directoryInput()
+    expect(input, "directory input must exist").toBeDefined()
+    await act(async () =>
+      input.props.onChange({
+        target: { value: directory },
+        currentTarget: { value: directory },
+      })
+    )
+    await settle(6)
+  }
+  const modelPicker = () =>
+    root.root.findAll((node) => node.props["data-picker"] === "Model")[0]
+  const modelOptionValues = () =>
+    modelPicker()
+      .findAll((node) => typeof node.props["data-option"] === "string")
+      .map((node) => node.props["data-option"])
   try {
-    expectAgentPickerReady(root, "initial project folder")
-    await selectDifferentAgent(root, "initial project folder")
-    const assertBrowseKeepsPicker = async (directory, step) => {
-      const before = agentPicker(root).props["data-value"]
-      await browseTo(directory)
-      expectAgentPickerReady(root, step)
-      expect(agentPicker(root).props["data-value"], `${step}: browsing must not reset the agent`).toBe(before)
+    // Parent folder: parent agents/models and the engine default model.
+    expectAgentPickerReady(root, "parent folder")
+    expect(modelOptionValues(root)).toEqual([
+      "opencode/deepseek-v4.1-flash-free",
+    ])
+    expect(modelPicker().props["data-value"]).toBe(
+      "opencode/deepseek-v4.1-flash-free"
+    )
+    expect(buttonByText(root, "Create session").props.disabled).toBe(false)
+
+    // Nested folder: its own config selects a nested agent and model, even
+    // though location.get still reports the same project id.
+    await browseTo(CHILD_DIR)
+    expect(agentOptionValues(root)).toEqual(["nested-agent"])
+    expect(agentPicker(root).props["data-value"]).toBe("nested-agent")
+    expect(modelOptionValues()).toEqual(["opencode/nested-model"])
+    expect(modelPicker().props["data-value"]).toBe("opencode/nested-model")
+    expect(buttonByText(root, "Create session").props.disabled).toBe(false)
+
+    // All four catalogs were read at the exact nested destination directory.
+    for (const read of [agentList, modelList, configGet, modelDefault]) {
+      expect(
+        read.mock.calls.some(
+          ([arg]) => arg.location.directory === CHILD_DIR
+        )
+      ).toBe(true)
     }
 
-    const directoryInput = () =>
-      root.root.findAll(
+    // Back to the parent restores the parent catalog.
+    await browseTo(PROJECT_DIR)
+    expectAgentPickerReady(root, "parent folder again")
+    expect(modelPicker().props["data-value"]).toBe(
+      "opencode/deepseek-v4.1-flash-free"
+    )
+
+    // An unresolvable folder keeps the previous preview visible but never
+    // lets that stale catalog authorize creation.
+    await browseTo("/repo")
+    expect(buttonByText(root, "Create session").props.disabled).toBe(true)
+    expect(textOf(root.toJSON())).toContain(
+      "Selected session folder unavailable."
+    )
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("an engine-normalized destination still authorizes creation", async () => {
+  const rawDirectory = `${PROJECT_DIR}/`
+  let root
+  await act(async () => {
+    root = create(
+      createElement(NewSessionDialog, {
+        nav: nav(),
+        open: true,
+        onOpenChange: () => {},
+        initialDirectory: rawDirectory,
+      })
+    )
+  })
+  await settle(6)
+  try {
+    expectAgentPickerReady(root, "trailing-slash destination")
+    expect(buttonByText(root, "Create session").props.disabled).toBe(false)
+    // Catalogs are read at the engine-resolved directory, not the raw input.
+    expect(agentList.mock.calls.some(([arg]) => arg.location.directory === PROJECT_DIR)).toBe(true)
+    expect(agentList.mock.calls.every(([arg]) => arg.location.directory !== rawDirectory)).toBe(true)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("the picker reads the destination catalog and makes the engine default explicit", async () => {
+  let root
+  await act(async () => {
+    root = create(
+      createElement(NewSessionDialog, {
+        nav: nav(),
+        open: true,
+        onOpenChange: () => {},
+        initialDirectory: PROJECT_DIR,
+      })
+    )
+  })
+  await settle(6)
+  try {
+    expectAgentPickerReady(root, "destination catalog")
+    for (const read of [agentList, modelList, configGet, modelDefault]) {
+      expect(read.mock.calls.length).toBeGreaterThan(0)
+      expect(read.mock.calls.some(([arg]) => arg.location.directory === PROJECT_DIR)).toBe(true)
+    }
+    const rendered = textOf(root.toJSON())
+    expect(rendered).toContain("Engine default model: opencode/deepseek-v4.1-flash-free")
+    expect(rendered).not.toContain("current-model")
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+test("an explicit model choice is preserved only while it stays available at the destination", async () => {
+  let root
+  await act(async () => {
+    root = create(
+      createElement(NewSessionDialog, {
+        nav: nav(),
+        open: true,
+        onOpenChange: () => {},
+        initialDirectory: PROJECT_DIR,
+      })
+    )
+  })
+  await settle(6)
+  try {
+    const modelPicker = () =>
+      root.root.findAll((node) => node.props["data-picker"] === "Model")[0]
+    const option = (value) =>
+      modelPicker().findAll(
+        (node) => node.props["data-option"] === value
+      )[0]
+    const choose = async (value) => {
+      await act(async () => option(value).props.onClick())
+      await settle(4)
+    }
+    const browseTo = async (directory) => {
+      const input = root.root.findAll(
         (node) => node.type === "input" && node.props.id === "new-session-directory"
       )[0]
-    const browseTo = async (directory) => {
-      const input = directoryInput()
-      expect(input, "directory input must exist").toBeDefined()
       await act(async () =>
         input.props.onChange({
           target: { value: directory },
           currentTarget: { value: directory },
         })
       )
-      await settle()
+      await settle(6)
     }
 
-    // Deeper: location.get still resolves the project, but agent/model.list
-    // for this subfolder return an empty catalog.
-    await assertBrowseKeepsPicker(CHILD_DIR, "after drilling into subfolder")
-    await selectDifferentAgent(root, "after drilling into subfolder")
-
-    // Parent once: back to the project root.
-    await assertBrowseKeepsPicker(PROJECT_DIR, "after one parent click")
-    await selectDifferentAgent(root, "after one parent click")
-
-    // Parent twice: above the project root, where location.get rejects.
-    await assertBrowseKeepsPicker("/repo", "after two parent clicks")
-    await selectDifferentAgent(root, "after two parent clicks")
-
-    // Creation stays gated on a resolvable folder even though the picker
-    // (agent/model preview) remains bound to the project catalog.
-    const createButton = buttonByText(root, "Create session")
-    expect(createButton.props.disabled).toBe(true)
-    expect(JSON.stringify(root.toJSON())).toContain(
-      "Selected session folder unavailable."
+    // Make the engine default an explicit user choice before switching project.
+    await choose("opencode/deepseek-v4.1-flash-free")
+    await browseTo(BETA_DIR)
+    expect(textOf(root.toJSON())).toContain(
+      "Your Agent or Model choice is unavailable in this folder. Choose another."
     )
+    expect(buttonByText(root, "Create session").props.disabled).toBe(true)
+    expect(modelPicker().findAll((node) => typeof node.props["data-option"] === "string").map(
+      (node) => node.props["data-option"]
+    )).toEqual(["opencode/beta-model"])
+
+    // Picking a valid agent and model in the new destination re-enables
+    // creation without discarding the explicit model choice.
+    const agentPickerNode = () =>
+      root.root.findAll((node) => node.props["data-picker"] === "Agent")[0]
+    await act(async () =>
+      agentPickerNode()
+        .findAll((node) => node.props["data-option"] === "beta-agent")[0]
+        .props.onClick()
+    )
+    await settle(4)
+    await choose("opencode/beta-model")
+    expect(modelPicker().props["data-value"]).toBe("opencode/beta-model")
+    expect(buttonByText(root, "Create session").props.disabled).toBe(false)
   } finally {
     await act(async () => root.unmount())
   }

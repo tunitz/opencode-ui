@@ -25,16 +25,19 @@ import {
   type SessionStatsInfo,
   type TokenUsageInfo,
 } from "@/lib/opencode"
-import { agentModelDefaults } from "@/lib/session-selection"
 import { mergeRefreshedSessions } from "@/lib/session-refresh"
 import { createStreamWatchdog } from "@/lib/stream-watchdog"
 import { useShallowMemo } from "@/lib/use-shallow-memo"
 import { recordPerfMark } from "@/lib/perf-probe"
 import {
   agentCatalogCache,
+  catalogCacheKey,
+  configCatalogCache,
   modelCatalogCache,
-  prefetchTargetCatalog,
+  modelDefaultCache,
+  setCatalogConnection,
 } from "@/lib/use-target-catalog"
+import { useActiveConnection } from "@/lib/use-active-connection"
 import {
   applySessionTitle,
   descendantSessionIDs,
@@ -143,9 +146,6 @@ const SESSION_LIMIT = 50
 export const SESSION_INITIAL_PAGE_SIZE = 20
 const SESSION_PAGE_SIZE = 10
 const MESSAGE_LIMIT = 50
-// Catalog caches are keyed by directory; this sentinel stands for the
-// all-projects (`location: undefined`) catalog read.
-const ALL_PROJECTS_CATALOG_KEY = "__all_projects__"
 const EMPTY_ATTACHMENTS: ComposerAttachment[] = []
 const DESKTOP_VIEWPORT_QUERY = "(min-width: 768px)"
 const DESKTOP_INSPECTOR_COLLAPSED_KEY =
@@ -324,9 +324,8 @@ export type OpenCodeController = OpenCodeState & {
   removeAttachment: (attachmentID: string, sessionID?: string) => void
   attachProjectFile: (relativePath: string) => Promise<string | null>
   interruptSession: () => Promise<string | null>
+  /** Switching the agent never changes the session model. */
   switchAgent: (agentID: string) => Promise<string | null>
-  /** Switch agent and apply that agent's catalog model/variant when available. */
-  switchAgentWithDefaults: (agentID: string) => Promise<string | null>
   switchModel: (model: ModelRef) => Promise<string | null>
   replyPermission: (
     requestID: string,
@@ -375,6 +374,11 @@ export function withSessionSnapshot(
 }
 
 export function useOpenCode(engineEnabled = true): OpenCodeController {
+  const { connectionId, ready: connectionReady } = useActiveConnection()
+  // Before the profile lookup settles, "no id yet" is not the same as a local
+  // engine. Keep catalogs in a pending namespace so a late profile cannot
+  // reuse entries read under the wrong connection.
+  const catalogConnection = connectionReady ? connectionId : undefined
   const sessionListListeners = useRef(new Set<(change: SessionListChange) => void>())
   const pendingSessionLookup = useRef<{ sessionID: string; changed: boolean } | null>(null)
   const subscribeSessionListChanges = useCallback((listener: (change: SessionListChange) => void) => {
@@ -627,6 +631,7 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   const pendingRequest = useRef(0)
   const catalogRequest = useRef(0)
   const catalogDirectoryRef = useRef<string | null>(null)
+  const catalogConnectionRef = useRef<string | null | undefined>(undefined)
   const commandRequest = useRef(0)
   const commandsDirectoryRef = useRef<string | null>(null)
   const permissionBusyRef = useRef<Record<string, true>>({})
@@ -789,6 +794,13 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     },
     [clearReconnectTimer, setStream]
   )
+
+  // Catalog cache keys are namespaced by the active engine profile. Switching
+  // profiles must invalidate the namespace before any new read, even when the
+  // directory path is identical.
+  useEffect(() => {
+    setCatalogConnection(catalogConnection)
+  }, [catalogConnection])
 
   const selectSession = useCallback((sessionID: string) => {
     // Any newer explicit selection supersedes an in-flight notification
@@ -1282,23 +1294,26 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       : undefined
     const request = ++catalogRequest.current
     const changedDirectory = catalogDirectoryRef.current !== directory
+    const changedConnection =
+      catalogConnectionRef.current !== catalogConnection
     catalogDirectoryRef.current = directory
+    catalogConnectionRef.current = catalogConnection
 
-    if (changedDirectory) {
+    if (changedDirectory || changedConnection) {
       setAgents([])
       setModels([])
       setConfigEntries([])
     }
 
-    setAgentsStatus((current) => (!changedDirectory && current === "ready" ? current : "loading"))
+    setAgentsStatus((current) => (!changedDirectory && !changedConnection && current === "ready" ? current : "loading"))
     setAgentsError(null)
-    setModelsStatus((current) => (!changedDirectory && current === "ready" ? current : "loading"))
+    setModelsStatus((current) => (!changedDirectory && !changedConnection && current === "ready" ? current : "loading"))
     setModelsError(null)
 
-    // Agent/model reads share the caches used by the new-session/worktree
-    // pickers, so a wake/refetch cycle does not issue duplicate native catalog
-    // reads. Config stays direct: it is advisory and not cached.
-    const cacheKey = directory || ALL_PROJECTS_CATALOG_KEY
+    // Agent/model/config reads share the connection-scoped caches used by the
+    // new-session/worktree pickers, so a wake/refetch cycle does not issue
+    // duplicate native catalog reads.
+    const cacheKey = catalogCacheKey(directory || null)
     const [agentsResult, modelsResult, configResult] = await Promise.allSettled([
       agentCatalogCache.get(cacheKey, () =>
         openCode.agent.list(location).then((response) => response.data)
@@ -1306,7 +1321,12 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       modelCatalogCache.get(cacheKey, () =>
         openCode.model.list(location).then((response) => response.data)
       ),
-      openCode.config.get(location),
+      configCatalogCache.get(cacheKey, () => openCode.config.get(location)),
+      // Warm the engine default for the destination; the new-session picker
+      // reads the same connection-scoped entry.
+      modelDefaultCache.get(cacheKey, () =>
+        openCode.model.default(location).then((response) => response.data)
+      ),
     ])
 
     // A location switch can finish older requests later; only the newest
@@ -1336,7 +1356,14 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     setConfigEntries(
       configResult.status === "fulfilled" ? configResult.value : []
     )
-  }, [])
+  }, [catalogConnection])
+
+  // A profile switch keeps the same directory path; reload its catalogs from
+  // the new engine instead of reusing the previous profile's state.
+  useEffect(() => {
+    if (connection !== "connected") return
+    void loadCatalogs(directoryRef.current || undefined)
+  }, [connection, catalogConnection, loadCatalogs])
 
   const loadPending = useCallback(async (sessionID: string) => {
     const request = ++pendingRequest.current
@@ -2208,6 +2235,8 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     liveRunStore.reset()
     agentCatalogCache.invalidate()
     modelCatalogCache.invalidate()
+    configCatalogCache.invalidate()
+    modelDefaultCache.invalidate()
     activeSessionRef.current = null
     directoryRef.current = ""
     locationRef.current = null
@@ -2366,11 +2395,9 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       setSessionsHasMore(false)
 
       try {
-        const resolvedPromise = openCode.location.get({
+        const resolved = await openCode.location.get({
           location: { directory: project.canonical },
         })
-        prefetchTargetCatalog(project.canonical)
-        const resolved = await resolvedPromise
         commitLocation(resolved)
         await Promise.all([
           loadSessions({
@@ -2476,10 +2503,10 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
           return false
         }
 
-        // The New session dialog always resolves and supplies the model. Never
-        // substitute a different model here: saved defaults that are missing
-        // from the target catalog must block creation instead of silently
-        // falling back to the free model.
+        // The New session dialog always resolves and supplies the model at the
+        // destination. Never substitute a different model here: a missing or
+        // unavailable choice must block creation instead of silently falling
+        // back to a hardcoded default.
         const selectedModel = selection?.model ?? null
 
         if (!selectedModel) {
@@ -3534,18 +3561,6 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     }
   }, [])
 
-  const switchAgentWithDefaults = useCallback(
-    async (agentID: string): Promise<string | null> => {
-      const failure = await switchAgent(agentID)
-      if (failure) return failure
-      const agent = agents.find((candidate) => candidate.id === agentID) ?? null
-      const model = agentModelDefaults(agent, models)
-      if (!model) return null
-      return switchModel(model)
-    },
-    [agents, models, switchAgent, switchModel]
-  )
-
   const replyPermission = useCallback(
     async (requestID: string, decision: PermissionReply) => {
       const sessionID = activeSessionRef.current
@@ -3804,9 +3819,11 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
       setCatalogEpoch((current) => current + 1)
       // A configuration reload can change the catalog; drop any cached catalog
       // for this directory so the reload is authoritative, not a stale SWR hit.
-      const cacheKey = commandDirectory || ALL_PROJECTS_CATALOG_KEY
+      const cacheKey = catalogCacheKey(commandDirectory || null)
       agentCatalogCache.invalidate(cacheKey)
       modelCatalogCache.invalidate(cacheKey)
+      configCatalogCache.invalidate(cacheKey)
+      modelDefaultCache.invalidate(cacheKey)
       await loadCatalogs(commandDirectory || undefined)
       refreshSessions()
       return null
@@ -3816,9 +3833,11 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
   }, [commandDirectory, loadCatalogs, refreshSessions])
 
   const retryCatalogs = useCallback(() => {
-    const cacheKey = commandDirectory || ALL_PROJECTS_CATALOG_KEY
+    const cacheKey = catalogCacheKey(commandDirectory || null)
     agentCatalogCache.invalidate(cacheKey)
     modelCatalogCache.invalidate(cacheKey)
+    configCatalogCache.invalidate(cacheKey)
+    modelDefaultCache.invalidate(cacheKey)
     void loadCatalogs(commandDirectory || undefined)
   }, [commandDirectory, loadCatalogs])
 
@@ -3928,7 +3947,6 @@ export function useOpenCode(engineEnabled = true): OpenCodeController {
     sendPrompt,
     interruptSession,
     switchAgent,
-    switchAgentWithDefaults,
     switchModel,
     replyPermission,
     replyForm,

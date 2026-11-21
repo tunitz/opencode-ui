@@ -1,5 +1,4 @@
 import type { AgentInfo, ConfigEntry, ModelInfo, ModelRef } from "@/lib/opencode"
-import { isVerifiedFreeModel } from "@/lib/free-model"
 
 /**
  * Pure helpers for agent/model/variant selection. The backend contract is the
@@ -49,9 +48,6 @@ function agentIndex(agents: readonly AgentInfo[]): Map<string, AgentInfo> {
   return index
 }
 
-const freeModelByCatalog = new WeakMap<readonly ModelInfo[], ModelInfo | null>()
-
-
 export function modelRefKey(model: ModelRef | null | undefined): string {
   return model ? modelKey(model) : ""
 }
@@ -98,8 +94,18 @@ export function selectableAgents(agents: AgentInfo[]): AgentInfo[] {
     .toSorted((a, b) => a.id.localeCompare(b.id))
 }
 
-function isSelectableAgent(agent: AgentInfo): boolean {
+function isPrimaryCapable(agent: AgentInfo): boolean {
   return !agent.hidden && agent.mode !== "subagent"
+}
+
+/**
+ * Agents that can own a top-level session: primary and `all` agents that are
+ * visible. Subagents are internal and hidden entries must never be chosen.
+ */
+export function primaryCapableAgents(
+  agents: readonly AgentInfo[]
+): AgentInfo[] {
+  return agents.filter(isPrimaryCapable)
 }
 
 /**
@@ -130,50 +136,42 @@ export function effectiveDefaultAgent(
 
   if (configured) {
     const match = agentIndex(agents).get(configured)
-    if (match && isSelectableAgent(match)) return configured
+    if (match && isPrimaryCapable(match)) return configured
   }
 
   // The backend's Agent.list() puts its selected default first. Use that raw
   // order (not the alphabetically sorted option order) as the fallback.
-  return agents.find(isSelectableAgent)?.id ?? null
+  return primaryCapableAgents(agents)[0]?.id ?? null
 }
 
 /**
- * New-session default: the verified zero-cost model when it is present in the
- * live catalog, otherwise null so we never silently select a paid/unknown
- * model as a new session's default.
- */
-export function defaultNewSessionModel(models: ModelInfo[]): ModelRef | null {
-  let free = freeModelByCatalog.get(models)
-  if (free === undefined) {
-    free =
-      models.find((model) =>
-        isVerifiedFreeModel({ providerID: model.providerID, id: model.id })
-      ) ?? null
-    freeModelByCatalog.set(models, free)
-  }
-
-  return free
-    ? { providerID: free.providerID, id: free.id }
-    : null
-}
-
-/**
- * The model an agent asks for, only when it is genuinely selectable in the
- * supplied catalog. An unavailable agent model is reported as absent rather
- * than silently replaced with another (possibly paid) model.
+ * The model an agent configured, copied verbatim including its variant.
+ *
+ * Availability is deliberately not decided here: an unsupported variant or a
+ * model missing from this location must stay visible so the UI can flag it as
+ * unavailable, instead of being silently swapped for a different model.
  */
 export function agentModelDefaults(
-  agent: AgentInfo | null | undefined,
-  models: ModelInfo[]
+  agent: AgentInfo | null | undefined
 ): ModelRef | null {
-  if (!agent?.model) return null
-  const info = modelIndex(models).get(modelRefKey(agent.model))
-  if (!info) return null
-  const variant = agent.model.variant
-  return variant && variantsForModel(info).includes(variant)
-    ? { ...agent.model, variant }
-    : buildModelRef(info)
+  return agent?.model ? { ...agent.model } : null
+}
+
+/**
+ * True when a model reference can actually be selected at this location:
+ * present in the catalog, enabled, not deprecated, and with a supported
+ * variant when one is configured.
+ */
+export function isModelRefSelectable(
+  model: ModelRef | null | undefined,
+  models: readonly ModelInfo[]
+): boolean {
+  if (!model) return false
+  const info = modelIndex(models).get(modelKey(model))
+  if (!info || info.enabled === false || info.status === "deprecated") {
+    return false
+  }
+  return !model.variant || variantsForModel(info).includes(model.variant)
 }
 
 /** True when a session's model exists in the loaded catalog (honest availability). */

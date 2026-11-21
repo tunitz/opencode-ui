@@ -9,17 +9,6 @@ import {
   type ReactNode,
 } from "react"
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-
 /**
  * The app shell has exactly one main workspace. Chat stays mounted so streams
  * and component state survive; each workspace owns its own scroll and draft
@@ -29,17 +18,8 @@ export const WORKSPACE_IDS = ["chat", "notes", "settings"] as const
 
 export type WorkspaceID = (typeof WORKSPACE_IDS)[number]
 
-export const WORKSPACE_LABELS: Record<WorkspaceID, string> = {
-  chat: "Conversation",
-  notes: "Notes",
-  settings: "Settings",
-}
-
-/** Returns true while leaving this workspace would discard unsaved work. */
-export type WorkspaceGuard = () => boolean
-
 export type WorkspaceTransition = {
-  /** Runs only once the transition is committed (immediately or after confirmation). */
+  /** Runs once the transition is committed. */
   onCommit?: () => void
   /** Runs after the transition commits, for navigation that belongs with it. */
   run?: () => void
@@ -53,19 +33,10 @@ export type WorkspaceTransition = {
 
 export type WorkspaceCoordinator = {
   active: WorkspaceID
-  /** A transition waiting for the user to confirm leaving unsaved work. */
-  pendingTarget: WorkspaceID | null
-  /**
-   * Ask to make `target` the active workspace. Returns false only when the
-   * transition was refused outright; a queued confirmation counts as accepted.
-   */
+  /** Make `target` active and run its callbacks. Transitions are always accepted. */
   requestWorkspace: (target: WorkspaceID, options?: WorkspaceTransition) => boolean
-  /** Commit a transition without consulting the current workspace's guard. */
+  /** Commit a transition directly, without callbacks (e.g. plugin shutdown). */
   forceWorkspace: (target: WorkspaceID) => void
-  /** Register the guard for one workspace; returns an unregister function. */
-  registerGuard: (id: WorkspaceID, guard: WorkspaceGuard) => () => void
-  confirmLeave: () => void
-  keepEditing: () => void
 }
 
 const WorkspaceContext = createContext<WorkspaceCoordinator | null>(null)
@@ -114,20 +85,14 @@ function focusChat(): void {
 }
 
 /**
- * Owns the chat/notes/settings discriminator and the one confirmation
- * used by every exit path. Workspaces register a synchronous dirty check; the
- * coordinator keeps transitions pending until the user chooses. It moves focus
- * into the active pane, but never owns chat scroll or virtualized offsets.
+ * Owns the chat/notes/settings discriminator. Workspaces are mutually
+ * exclusive; callers run their own navigation with the transition callbacks.
+ * Focus moves into the active pane, but the coordinator never owns chat scroll
+ * or virtualized offsets.
  */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [active, setActive] = useState<WorkspaceID>("chat")
-  const [pendingTarget, setPendingTarget] = useState<WorkspaceID | null>(null)
   const activeRef = useRef<WorkspaceID>("chat")
-  const pendingRef = useRef<{
-    target: WorkspaceID
-    options?: WorkspaceTransition
-  } | null>(null)
-  const guards = useRef(new Map<WorkspaceID, WorkspaceGuard>())
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const previousActiveRef = useRef<WorkspaceID>("chat")
 
@@ -139,8 +104,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return
       }
       activeRef.current = target
-      pendingRef.current = null
-      setPendingTarget(null)
       setActive(target)
       options?.onCommit?.()
       options?.run?.()
@@ -150,23 +113,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const requestWorkspace = useCallback(
     (target: WorkspaceID, options?: WorkspaceTransition) => {
-      // A pending confirmation owns the next transition. Do not retarget it
-      // with another click, and do not run same-target work behind the dialog.
-      if (pendingRef.current) return false
-      if (target === activeRef.current) {
-        options?.onCommit?.()
-        options?.run?.()
-        return true
-      }
-      // Capture the trigger before a confirmation dialog can take focus.
+      // Capture the trigger before focus moves into the destination pane.
       if (activeRef.current === "chat" && target !== "chat") {
         returnFocusRef.current = options?.returnFocus ?? activeElement()
-      }
-      const guard = guards.current.get(activeRef.current)
-      if (guard?.()) {
-        pendingRef.current = { target, options }
-        setPendingTarget(target)
-        return true
       }
       commit(target, options)
       return true
@@ -180,28 +129,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [commit]
   )
-
-  const registerGuard = useCallback(
-    (id: WorkspaceID, guard: WorkspaceGuard) => {
-      guards.current.set(id, guard)
-      return () => {
-        if (guards.current.get(id) === guard) guards.current.delete(id)
-      }
-    },
-    []
-  )
-
-  const keepEditing = useCallback(() => {
-    pendingRef.current = null
-    setPendingTarget(null)
-  }, [])
-
-  const confirmLeave = useCallback(() => {
-    const transition = pendingRef.current
-    pendingRef.current = null
-    setPendingTarget(null)
-    if (transition) commit(transition.target, transition.options)
-  }, [commit])
 
   // Focus moves into the newly active workspace before paint, and back to the
   // trigger (or the chat pane) on return. The initial chat mount never steals
@@ -223,51 +150,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [active])
 
   const value = useMemo<WorkspaceCoordinator>(
-    () => ({
-      active,
-      pendingTarget,
-      requestWorkspace,
-      forceWorkspace,
-      registerGuard,
-      confirmLeave,
-      keepEditing,
-    }),
-    [
-      active,
-      pendingTarget,
-      requestWorkspace,
-      forceWorkspace,
-      registerGuard,
-      confirmLeave,
-      keepEditing,
-    ]
+    () => ({ active, requestWorkspace, forceWorkspace }),
+    [active, requestWorkspace, forceWorkspace]
   )
 
   return (
     <WorkspaceContext.Provider value={value}>
       {children}
-      <AlertDialog
-        open={pendingTarget !== null}
-        onOpenChange={(next) => {
-          if (!next) keepEditing()
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Leave {WORKSPACE_LABELS[active]} anyway? The latest edit may not
-              be saved.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={confirmLeave}>
-              Leave anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </WorkspaceContext.Provider>
   )
 }

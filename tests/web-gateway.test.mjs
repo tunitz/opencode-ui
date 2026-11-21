@@ -7,7 +7,7 @@ describe("gateway composition", () => {
   test("routes WebSocket upgrades to the bridge before HTTP dispatch", async () => {
     let called = false
     const gateway = createWebGateway({
-      agents: handler("agent"), artifacts: handler("artifact"), notifications: handler("notification"),
+      artifacts: handler("artifact"), notifications: handler("notification"),
       engine: handler("engine"), frontend: handler("frontend"),
       bridge: { upgrade: async () => { called = true; return new Response(null, { status: 403 }) } },
     })
@@ -19,7 +19,7 @@ describe("gateway composition", () => {
     let timeout
     const gateway = createWebGateway({
       security: { allowedHosts: ["localhost"] },
-      agents: handler("agent"), artifacts: handler("artifact"), notifications: handler("notification"),
+      artifacts: handler("artifact"), notifications: handler("notification"),
       engine: handler("engine"), frontend: handler("frontend"),
       bridge: { upgrade: async () => new Response(null, { status: 400 }) },
     })

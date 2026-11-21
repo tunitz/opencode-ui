@@ -9,8 +9,6 @@ import {
   type ParseError,
 } from "jsonc-parser"
 
-import { resolveAgentConfigDirectory } from "./agent-config.ts"
-
 export const PLUGINS_ROUTE = "/api/ui/plugins"
 export const PLUGINS_BODY_LIMIT = 8 * 1024
 export const NOTES_PLUGIN_ID = "notes"
@@ -27,6 +25,21 @@ const MAX_CONFIG_WRITE_ATTEMPTS = 3
 const CONFIG_LOCK_NAME = ".opencode-ui-config.lock"
 const CONFIG_LOCK_TIMEOUT_MS = 3_000
 const CONFIG_LOCK_POLL_MS = 25
+
+/**
+ * Global OpenCode configuration directory. Honours the engine's
+ * `OPENCODE_CONFIG_DIR` and `XDG_CONFIG_HOME` overrides so plugin MCP entries
+ * are written where the running engine will read them.
+ */
+export function resolveOpenCodeConfigDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir()
+): string {
+  const explicit = env.OPENCODE_CONFIG_DIR?.trim()
+  if (explicit) return resolve(explicit)
+  const xdg = env.XDG_CONFIG_HOME?.trim()
+  return join(xdg ? resolve(xdg) : join(home, ".config"), "opencode")
+}
 
 type PluginDescriptor = {
   id: string
@@ -720,7 +733,7 @@ export function createPluginsApi(options: PluginsApiOptions): PluginsApi {
   /** One bounded wait budget for the in-process queue and the file lock. */
   const configWaitMs = options.configLockTimeoutMs ?? CONFIG_LOCK_TIMEOUT_MS
   const env = options.env ?? process.env
-  const configDirectory = resolveAgentConfigDirectory(
+  const configDirectory = resolveOpenCodeConfigDirectory(
     env,
     options.home ?? homedir()
   )

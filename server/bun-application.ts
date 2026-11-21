@@ -15,7 +15,6 @@ export function createBunApplication(options: {
   getTarget?: () => { target: string; authorization: string } | null
   directory: string
   security: Required<Pick<SecurityOptions, "allowedHosts" | "allowedOrigins">> & SecurityOptions
-  agents: Service
   artifacts: Service
   notifications: Service
   /** Optional; existing deployments without a password keep the previous pass-through behavior. */
@@ -61,7 +60,7 @@ export function createBunApplication(options: {
     plugins: options.plugins && withEngine(options.plugins),
     sessionShortcuts: options.sessionShortcuts?.handleRequest,
     environment: createUiEnvironmentHandler(options.sessionHome),
-    agents: withEngine(options.agents), artifacts: withEngine(options.artifacts),
+    artifacts: withEngine(options.artifacts),
     notifications: options.notifications.handleRequest,
     engine: (request) => {
       const current = resolveTarget()

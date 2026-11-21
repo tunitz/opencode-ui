@@ -165,7 +165,6 @@ describe("engine connections service", () => {
       },
       directory,
       security: { allowedHosts: ["127.0.0.1"], allowedOrigins: [origin] },
-      agents: noopService,
       artifacts: noopService,
       notifications: noopService,
       connections,

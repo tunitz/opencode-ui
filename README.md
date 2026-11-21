@@ -10,7 +10,7 @@ tools, providers, and history.
 - Files, working-tree diffs, permissions, forms, and session settings.
 - Structured tool output, artifacts, Markdown, tables, and images.
 - Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
-- A Settings workspace for appearance, agents, alerts, plugins, engine connections, and access.
+- A Settings workspace for appearance, alerts, plugins, engine connections, and access.
 - Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
 - Optional Web Push notifications.
 - First-run UI password setup; any saved engine credential stays on the UI server.
@@ -25,6 +25,11 @@ The UI server serves the built frontend, proxies HTTP and event-stream traffic, 
 engine credential server-side. It also serves the Notes API and manages registration of the
 optional Notes MCP server in the engine's configuration. The engine is a separate dependency; this
 project does not install, start, or modify it.
+
+Almost all browser-facing data comes from the engine API. The deliberate app-layer exceptions are
+the local Notes store and its MCP registration, a one-time read-only import of legacy engine notes,
+verified local artifact delivery, and the UI host home default for New Session; `/highlights` reads
+the public upstream changelog from GitHub.
 
 ## Prerequisites
 
@@ -138,7 +143,9 @@ Common environment variables include:
 - `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
   `~/.local/state/opencode-ui/notifications/state.json`.
 - `OPENCODE_UI_VAPID_SUBJECT`: Web Push contact URI; set an appropriate contact for your use.
-- `OPENCODE_CONFIG_DIR`: local agent configuration directory.
+- `OPENCODE_CONFIG_DIR`: engine global config directory for the Notes MCP registration
+  (`opencode.jsonc` or `opencode.json`); overrides `$XDG_CONFIG_HOME/opencode`, otherwise
+  `~/.config/opencode`.
 
 Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL creates
 a separate storage scope, and preferences are not shared across devices.

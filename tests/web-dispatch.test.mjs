@@ -5,7 +5,7 @@ const handler = (name) => async () => new Response(name)
 const security = { allowedHosts: ["example.test"], allowedOrigins: ["https://example.test"] }
 const dispatch = createWebDispatcher({
   security,
-  agents: handler("agents"), notifications: handler("notifications"), artifacts: handler("artifacts"),
+  notifications: handler("notifications"), artifacts: handler("artifacts"),
   engine: handler("engine"), frontend: handler("frontend"),
 })
 const request = (path, init = {}) => new Request(`https://example.test${path}`, {
@@ -14,13 +14,27 @@ const request = (path, init = {}) => new Request(`https://example.test${path}`, 
 const withUiApis = createWebDispatcher({
   security,
   notes: handler("notes"), plugins: handler("plugins"),
-  agents: handler("agents"), notifications: handler("notifications"), artifacts: handler("artifacts"),
+  notifications: handler("notifications"), artifacts: handler("artifacts"),
   engine: handler("engine"), frontend: handler("frontend"),
 })
 describe("Web gateway dispatch", () => {
   test("dispatches specific UI handlers before artifacts and engine", async () => {
-    for (const [path, expected] of [["/api/ui/agents", "agents"], ["/api/ui/notifications/state", "notifications"], ["/api/ui/artifacts/resolve", "artifacts"], ["/api/event", "engine"], ["/", "frontend"]]) {
+    for (const [path, expected] of [["/api/ui/notifications/state", "notifications"], ["/api/ui/artifacts/resolve", "artifacts"], ["/api/event", "engine"], ["/", "frontend"]]) {
       expect(await (await dispatch(request(path))).text()).toBe(expected)
+    }
+  })
+  test("retired agents endpoints return 404 for every method without forwarding", async () => {
+    for (const path of ["/api/ui/agents", "/api/ui/agents/default"]) {
+      for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+        const response = await dispatch(request(path, { method }))
+        expect(response.status).toBe(404)
+        expect(await response.text()).toBe("Not Found\n")
+        expect(response.headers.get("cache-control")).toBe("no-store")
+      }
+      // Mounting the other UI APIs must not revive the retired route.
+      expect((await withUiApis(request(path, { method: "PUT" }))).status).toBe(404)
+      // Host/origin checks still run before the tombstone.
+      expect((await dispatch(request(path, { headers: { origin: "https://evil.test" } }))).status).toBe(403)
     }
   })
   test("routes notes and plugins before the artifact fallback", async () => {

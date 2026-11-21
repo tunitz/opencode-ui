@@ -202,7 +202,7 @@ describe("project attachment paths and delivery", () => {
   })
   test("gateway retains host/origin/cross-site/JSON checks, route and method ownership", async () => {
     const f = fixture(); const stub = () => new Response("unused")
-    const dispatch = createWebDispatcher({ security: { allowedHosts: ["example.test"], allowedOrigins: ["https://example.test"] }, agents: stub, notifications: stub, artifacts: f.service.handleRequest, engine: stub, frontend: stub })
+    const dispatch = createWebDispatcher({ security: { allowedHosts: ["example.test"], allowedOrigins: ["https://example.test"] }, notifications: stub, artifacts: f.service.handleRequest, engine: stub, frontend: stub })
     for (const [headers, status] of [[{ origin: "https://evil.test" }, 403], [{ origin: "" }, 403], [{ host: "evil.test" }, 403], [{ "sec-fetch-site": "cross-site" }, 403], [{ "content-type": "text/plain" }, 415]]) {
       const base = resolveRequest(); const response = await dispatch(new Request(base, { headers: { ...Object.fromEntries(base.headers), ...headers } }))
       expect(response.status).toBe(status)

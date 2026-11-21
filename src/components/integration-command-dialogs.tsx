@@ -63,7 +63,12 @@ import {
 } from "@/lib/integration-status"
 import { mcpVisibleStatusError } from "@/lib/mcp-config"
 import { buildStatsTokenChart } from "@/lib/stats-chart"
-import { createWorktreeSession } from "@/lib/worktree-session"
+import {
+  createWorktreeSession,
+  resolveWorktreeSelection,
+  type WorktreeSelection,
+} from "@/lib/worktree-session"
+import { useActiveConnection } from "@/lib/use-active-connection"
 import type { OpenCodeController } from "@/lib/use-opencode"
 import {
   worktreeDisplayName,
@@ -636,7 +641,33 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
   const [sessionDirectory, setSessionDirectory] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [sessionCreateFailed, setSessionCreateFailed] = useState(false)
+  const [sessionPreview, setSessionPreview] = useState<{
+    directory: string
+    projectID: string
+    selection: WorktreeSelection
+    scope: { connectionId: string | null; generation: number; ready: boolean }
+  } | null>(null)
   const sessionPending = useRef(false)
+  const { connectionId, ready: connectionReady, generation } =
+    useActiveConnection()
+  const previewScopeRef = useRef({
+    connectionId,
+    generation,
+    ready: connectionReady,
+  })
+  useEffect(() => {
+    previewScopeRef.current = {
+      connectionId,
+      generation,
+      ready: connectionReady,
+    }
+  }, [connectionId, generation, connectionReady])
+  const previewStale = Boolean(
+    sessionPreview &&
+      (sessionPreview.scope.connectionId !== connectionId ||
+        sessionPreview.scope.generation !== generation ||
+        sessionPreview.scope.ready !== connectionReady)
+  )
   const [force, setForce] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showAllWorktrees, setShowAllWorktrees] = useState(false)
@@ -814,18 +845,65 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
 
   async function startSession() {
     if (!target || sessionPending.current || nav.creating || nav.connection !== "connected") return
+    if (!connectionReady) {
+      setSessionError("The engine connection is still being identified. Try again.")
+      return
+    }
     sessionPending.current = true
     setSessionDirectory(target.directory)
     setSessionError(null)
     setSessionCreateFailed(false)
+    const scope = { ...previewScopeRef.current }
     try {
-      const result = await createWorktreeSession(
+      // Resolve at the destination first and show the engine choice before any
+      // session is created; it may be a paid model.
+      const preview = await resolveWorktreeSelection(
         target.directory,
         target.projectID,
-        nav.agents,
-        nav.configEntries,
+        openCode
+      )
+      // A profile switch while the preview was in flight must not resurrect a
+      // model choice resolved against the previous engine.
+      if (
+        scope.connectionId !== previewScopeRef.current.connectionId ||
+        scope.generation !== previewScopeRef.current.generation ||
+        scope.ready !== previewScopeRef.current.ready
+      ) {
+        return
+      }
+      if (!preview.selection) {
+        setSessionError(preview.error)
+        return
+      }
+      setSessionPreview({
+        directory: target.directory,
+        projectID: target.projectID,
+        selection: preview.selection,
+        scope,
+      })
+    } catch (failure) {
+      setSessionError(`Could not prepare session: ${errorMessage(failure)}`)
+    } finally {
+      sessionPending.current = false
+      setSessionDirectory(null)
+    }
+  }
+
+  async function confirmSession() {
+    const preview = sessionPreview
+    if (!preview || previewStale || sessionPending.current || nav.creating) return
+    setSessionPreview(null)
+    sessionPending.current = true
+    setSessionDirectory(preview.directory)
+    setSessionError(null)
+    setSessionCreateFailed(false)
+    try {
+      const result = await createWorktreeSession(
+        preview.directory,
+        preview.projectID,
         nav.createSession,
-        openCode.location
+        openCode,
+        preview.selection
       )
       if (!result.created) {
         setSessionError(result.error)
@@ -833,7 +911,11 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
         return
       }
       onSessionCreated?.()
-      onResult("Session created in the worktree.")
+      onResult(
+        result.model
+          ? `Session created in the worktree with ${result.model.providerID}/${result.model.id}.`
+          : "Session created in the worktree."
+      )
       onClose()
     } catch (failure) {
       setSessionError(`Could not prepare session: ${errorMessage(failure)}`)
@@ -1037,6 +1119,38 @@ function WorktreesDialog({ nav, onClose, onResult, worktreeProjectID, onSessionC
             <AlertDialogAction variant="destructive" disabled={deleting} aria-busy={deleting} onClick={() => void remove()}>
               {deleting ? <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" /> : null}
               Remove worktree
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={sessionPreview !== null && !previewStale}
+        onOpenChange={(open) => {
+          if (!open) setSessionPreview(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start a session here?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Agent: {sessionPreview?.selection.agentID ?? "Engine default"}. Model:{" "}
+              {sessionPreview
+                ? `${sessionPreview.selection.model.providerID}/${sessionPreview.selection.model.id}${sessionPreview.selection.model.variant ? ` · ${sessionPreview.selection.model.variant}` : ""}`
+                : ""}
+              .{" "}
+              {sessionPreview?.selection.modelSource === "engine-default"
+                ? "This is the engine default model and may incur costs."
+                : "Model use may incur costs."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmSession()}
+              aria-busy={nav.creating || Boolean(sessionDirectory)}
+            >
+              Start session
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

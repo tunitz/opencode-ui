@@ -1,7 +1,6 @@
 import type { ComponentType } from "react"
 import {
   BellIcon,
-  BotIcon,
   PaletteIcon,
   PlugIcon,
   ServerIcon,
@@ -9,16 +8,12 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
-import { AgentConfigSettings } from "@/components/agent-config-settings"
 import { NotificationsSettings } from "@/components/notifications-settings"
 import { AppearancePanel } from "@/components/theme-select"
 import { SettingsAccessSection } from "@/components/settings-access-section"
 import { SettingsConnectionSection } from "@/components/settings-connection-section"
 import { SettingsPluginsSection } from "@/components/settings-plugins-section"
-import {
-  useSettingsWorkspace,
-  type SettingsSectionID,
-} from "@/components/settings-context"
+import type { SettingsSectionID } from "@/components/settings-context"
 import type { OpenCodeController } from "@/lib/use-opencode"
 
 export type SettingsSectionProps = { nav: OpenCodeController }
@@ -36,17 +31,6 @@ function AppearanceSection() {
   return <AppearancePanel />
 }
 
-function AgentsSection({ nav }: SettingsSectionProps) {
-  const { setAgentDirty } = useSettingsWorkspace()
-  return (
-    <AgentConfigSettings
-      nav={nav}
-      active
-      onDirtyChange={setAgentDirty}
-    />
-  )
-}
-
 /**
  * Settings sections in display order. Each `Component` receives `{ nav }` and
  * renders only its content; the workspace owns the heading, scrolling and the
@@ -58,13 +42,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
     label: "Appearance",
     Icon: PaletteIcon,
     Component: AppearanceSection,
-  },
-  {
-    id: "agents",
-    label: "Agents",
-    description: "Changes save automatically.",
-    Icon: BotIcon,
-    Component: AgentsSection,
   },
   {
     id: "alerts",

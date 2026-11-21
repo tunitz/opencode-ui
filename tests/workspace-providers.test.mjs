@@ -86,48 +86,16 @@ function Harness() {
   const workspace = useWorkspace()
   const notes = useNotesWorkspace()
   const settings = useSettingsWorkspace()
-  const pending = settings.confirmChange
   return React.createElement(
     React.Fragment,
     null,
     React.createElement("span", { id: "active" }, workspace.active),
-    React.createElement("span", { id: "pending" }, workspace.pendingTarget ?? "none"),
     React.createElement("span", { id: "section" }, settings.section),
-    React.createElement("span", { id: "dirty" }, settings.agentDirty ? "dirty" : "clean"),
-    React.createElement(
-      "span",
-      { id: "confirm" },
-      pending
-        ? pending.kind === "section"
-          ? `section:${pending.id}`
-          : "close"
-        : "none"
-    ),
     React.createElement("span", { id: "notes-open" }, notes.open ? "open" : "closed"),
-    React.createElement(
-      "button",
-      { id: "open-settings", type: "button", onClick: () => settings.openSettings() },
-      "settings"
-    ),
-    React.createElement(
-      "button",
-      { id: "open-workspace", type: "button", onClick: () => workspace.requestWorkspace("notes") },
-      "settings"
-    ),
     React.createElement(
       "button",
       { id: "open-notes", type: "button", onClick: () => notes.openNotes() },
       "notes"
-    ),
-    React.createElement(
-      "button",
-      { id: "open-keys", type: "button", onClick: () => settings.openSettings("keys") },
-      "keys"
-    ),
-    React.createElement(
-      "button",
-      { id: "mark-dirty", type: "button", onClick: () => settings.setAgentDirty(true) },
-      "dirty"
     )
   )
 }
@@ -153,33 +121,6 @@ async function mount() {
   })
   return root
 }
-
-test("reopening an active dirty Settings keeps edits and routes sections through the guard", async () => {
-  const root = await mount()
-  try {
-    await click(root, "open-settings")
-    await click(root, "mark-dirty")
-    expect(state(root, "dirty")).toBe("dirty")
-
-    await click(root, "open-keys")
-    expect(state(root, "section")).toBe("appearance")
-    expect(state(root, "dirty")).toBe("dirty")
-    expect(state(root, "confirm")).toBe("section:keys")
-
-    // A plain reopen must not reset the section or discard the pending edit.
-    await click(root, "open-settings")
-    expect(state(root, "section")).toBe("appearance")
-    expect(state(root, "dirty")).toBe("dirty")
-
-    // The shared guard still protects leaving Settings afterwards.
-    await click(root, "open-workspace")
-    expect(state(root, "active")).toBe("settings")
-    expect(state(root, "pending")).toBe("notes")
-    expect(state(root, "dirty")).toBe("dirty")
-  } finally {
-    await act(async () => root.unmount())
-  }
-})
 
 test("openNotes remains unavailable while the plugin is disabled", async () => {
   const root = await mount()

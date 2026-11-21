@@ -21,7 +21,7 @@ test("assembled gateway serves assets, guarded APIs, notifications, streams and 
   const security = { allowedHosts: ["127.0.0.1"], allowedOrigins: ["http://trusted.test"] }
   const notifications = createNotificationService({ stateFile: join(dir, "state.json"), startWatcher: false, opencodeBaseUrl: target, sendPush: async () => {} })
   const stub = { handleRequest: async () => new Response("stub") }
-  const app = createBunApplication({ target, authorization: "Basic fake-test-value", directory: "dist-bun-build", security, notifications, agents: stub, artifacts: stub })
+  const app = createBunApplication({ target, authorization: "Basic fake-test-value", directory: "dist-bun-build", security, notifications, artifacts: stub })
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch, websocket: app.websocket })
   const base = `http://127.0.0.1:${server.port}`
   let ws
@@ -39,6 +39,10 @@ test("assembled gateway serves assets, guarded APIs, notifications, streams and 
     assert.equal(receivedAuth, "Basic fake-test-value")
     const health = await fetch(`${base}/api/ui/notifications/health`)
     assert.deepEqual(await health.json(), { ready: true, watcher: "idle", devices: 0 })
+    for (const path of ["/api/ui/agents", "/api/ui/agents/default"]) {
+      const retired = await fetch(`${base}${path}`, { headers: { origin: "http://trusted.test" } })
+      assert.equal(retired.status, 404)
+    }
     ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/pty/example/connect`, { headers: { origin: "http://trusted.test" } })
     ws.binaryType = "arraybuffer"
     await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })

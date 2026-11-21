@@ -14,12 +14,29 @@ const worktree = {
   refresh: mock(async () => undefined),
 }
 const createWorktreeSession = mock(async () => ({ created: true, error: null }))
+const resolveWorktreeSelection = mock(async () => ({
+  selection: {
+    agentID: "build",
+    model: { providerID: "p", id: "m" },
+    modelSource: "engine-default",
+  },
+  error: null,
+}))
 
 mock.module("@/lib/opencode", () => ({
   openCode: { worktree, location: { get: mock(async () => ({ project: { id: "p-alpha" } })) } },
   errorMessage: (failure) => String(failure?.message ?? failure),
 }))
-mock.module("@/lib/worktree-session", () => ({ createWorktreeSession }))
+mock.module("@/lib/worktree-session", () => ({ createWorktreeSession, resolveWorktreeSelection }))
+let activeConnectionId = "profile-a"
+let activeConnectionGeneration = 0
+mock.module("@/lib/use-active-connection", () => ({
+  useActiveConnection: () => ({
+    connectionId: activeConnectionId,
+    ready: true,
+    generation: activeConnectionGeneration,
+  }),
+}))
 mock.module("@/components/ui/button", () => ({
   Button: ({ children, ...props }) => createElement("button", { type: "button", ...props }, children),
 }))
@@ -152,6 +169,15 @@ beforeEach(() => {
   worktree.refresh.mockClear()
   createWorktreeSession.mockClear()
   createWorktreeSession.mockImplementation(async () => ({ created: true, error: null }))
+  resolveWorktreeSelection.mockClear()
+  resolveWorktreeSelection.mockImplementation(async () => ({
+    selection: {
+      agentID: "build",
+      model: { providerID: "p", id: "m" },
+      modelSource: "engine-default",
+    },
+    error: null,
+  }))
 })
 
 afterAll(() => {
@@ -317,13 +343,21 @@ test("a custom path resolves to the nearest known project and gates the session 
 
     await act(async () => primaryButton().props.onClick())
     await settle(4)
+    // The engine choice is shown before any session creation.
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+    expect(actionButton("Start session")).toBeDefined()
+    const previewText = textOf(root.root)
+    expect(previewText).toContain("Model:")
+    expect(previewText).toContain("p/m")
+    expect(previewText).toContain("may incur costs")
+    await act(async () => actionButton("Start session").props.onClick())
+    await settle(4)
     expect(createWorktreeSession).toHaveBeenLastCalledWith(
       "/repo/alpha/worktrees/two",
       "p-alpha",
       expect.anything(),
       expect.anything(),
-      expect.anything(),
-      expect.anything()
+      expect.objectContaining({ model: { providerID: "p", id: "m" } })
     )
     expect(onSessionCreated).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -366,5 +400,207 @@ test("removing a contextual worktree keeps the confirmation and force opt-in", a
   } finally {
     await act(async () => root.unmount())
     globalThis.fetch = previousFetch
+  }
+})
+
+function worktreeButtons(root) {
+  return root.root.findAllByType("button")
+}
+function worktreeButton(root, label) {
+  return worktreeButtons(root).find((button) => textOf(button).includes(label))
+}
+
+test("a connection switch invalidates an unconfirmed worktree preview", async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  activeConnectionId = "profile-a"
+  activeConnectionGeneration = 7
+  const navA = nav()
+  const { root } = await mountDialog({ nav: navA })
+  try {
+    const input = root.root.findByType("input")
+    await act(async () =>
+      input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
+    )
+    await act(async () => worktreeButton(root, "New session here").props.onClick())
+    await settle(4)
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+    expect(worktreeButton(root, "Start session")).toBeDefined()
+
+    // Same path and project, different engine profile/generation.
+    activeConnectionId = "profile-b"
+    activeConnectionGeneration = 8
+    await act(async () =>
+      root.update(
+        createElement(IntegrationCommandDialogs, {
+          kind: "worktrees",
+          nav: navA,
+          worktreeProjectID: "p-alpha",
+          onClose: () => {},
+          onResult: () => {},
+          onSessionCreated: () => {},
+        })
+      )
+    )
+    await settle(2)
+    expect(worktreeButton(root, "Start session")).toBeUndefined()
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+
+    // A fresh preview under the new profile still works.
+    await act(async () => worktreeButton(root, "New session here").props.onClick())
+    await settle(4)
+    const start = worktreeButton(root, "Start session")
+    expect(start).toBeDefined()
+    await act(async () => start.props.onClick())
+    await settle(4)
+    expect(createWorktreeSession).toHaveBeenCalledTimes(1)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    activeConnectionId = "profile-a"
+    activeConnectionGeneration = 0
+  }
+})
+
+test("an unrelated catalog epoch update leaves the worktree preview open", async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  activeConnectionId = "profile-a"
+  activeConnectionGeneration = 11
+  const navA = { ...nav(), catalogEpoch: 1 }
+  const { root } = await mountDialog({ nav: navA })
+  try {
+    const input = root.root.findByType("input")
+    await act(async () =>
+      input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
+    )
+    await act(async () => worktreeButton(root, "New session here").props.onClick())
+    await settle(4)
+    expect(worktreeButton(root, "Start session")).toBeDefined()
+
+    // Slash-command catalog loads bump catalogEpoch; connection is unchanged.
+    await act(async () =>
+      root.update(
+        createElement(IntegrationCommandDialogs, {
+          kind: "worktrees",
+          nav: { ...navA, catalogEpoch: 9 },
+          worktreeProjectID: "p-alpha",
+          onClose: () => {},
+          onResult: () => {},
+          onSessionCreated: () => {},
+        })
+      )
+    )
+    await settle(2)
+    expect(worktreeButton(root, "Start session")).toBeDefined()
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    activeConnectionGeneration = 0
+  }
+})
+
+test("an in-flight worktree preview cannot resurrect after a connection switch", async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  activeConnectionId = "profile-a"
+  activeConnectionGeneration = 20
+  const navA = nav()
+  let release
+  resolveWorktreeSelection.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve
+      })
+  )
+  const { root } = await mountDialog({ nav: navA })
+  try {
+    const input = root.root.findByType("input")
+    await act(async () =>
+      input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
+    )
+    await act(async () => worktreeButton(root, "New session here").props.onClick())
+
+    activeConnectionId = "profile-b"
+    activeConnectionGeneration = 21
+    await act(async () =>
+      root.update(
+        createElement(IntegrationCommandDialogs, {
+          kind: "worktrees",
+          nav: navA,
+          worktreeProjectID: "p-alpha",
+          onClose: () => {},
+          onResult: () => {},
+          onSessionCreated: () => {},
+        })
+      )
+    )
+    await act(async () => {
+      release({
+        selection: {
+          agentID: "build",
+          model: { providerID: "old-engine", id: "stale-model" },
+          modelSource: "engine-default",
+        },
+        error: null,
+      })
+      await Promise.resolve()
+    })
+    await settle(4)
+    expect(worktreeButton(root, "Start session")).toBeUndefined()
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    activeConnectionId = "profile-a"
+    activeConnectionGeneration = 0
+  }
+})
+
+test("A→B→A still invalidates a worktree preview from the first profile", async () => {
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = treeFetch({}).fetch
+  activeConnectionId = "profile-a"
+  activeConnectionGeneration = 30
+  const { root } = await mountDialog()
+  const rerender = () =>
+    root.update(
+      createElement(IntegrationCommandDialogs, {
+        kind: "worktrees",
+        nav: nav(),
+        worktreeProjectID: "p-alpha",
+        onClose: () => {},
+        onResult: () => {},
+        onSessionCreated: () => {},
+      })
+    )
+  try {
+    const input = root.root.findByType("input")
+    await act(async () =>
+      input.props.onChange({ target: { value: "/repo/alpha/worktrees/two" } })
+    )
+    await act(async () => worktreeButton(root, "New session here").props.onClick())
+    await settle(4)
+    expect(worktreeButton(root, "Start session")).toBeDefined()
+
+    await act(async () => {
+      activeConnectionId = "profile-b"
+      activeConnectionGeneration = 31
+      rerender()
+    })
+    await act(async () => {
+      activeConnectionId = "profile-a"
+      activeConnectionGeneration = 32
+      rerender()
+    })
+    await settle(2)
+    expect(worktreeButton(root, "Start session")).toBeUndefined()
+    expect(createWorktreeSession).not.toHaveBeenCalled()
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = previousFetch
+    activeConnectionId = "profile-a"
+    activeConnectionGeneration = 0
   }
 })

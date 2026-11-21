@@ -1,6 +1,5 @@
 import { readFile, stat } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import { createAgentConfigService } from "./agent-config.ts"
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createAuthService } from "./auth.ts"
 import { createEngineConnectionsService } from "./engine-connections.ts"
@@ -200,9 +199,6 @@ export async function startBunServer(options: BunServerOptions = {}) {
     required: true,
     cookieName: process.env.OPENCODE_UI_SESSION_COOKIE,
   })
-  const agents = createAgentConfigService({
-    getTarget: upstream,
-  })
   const artifacts = createArtifactDelivery({
     getTarget: upstream,
     roots,
@@ -227,7 +223,6 @@ export async function startBunServer(options: BunServerOptions = {}) {
       return current ? { target: current.engineUrl, authorization: current.authorization } : null
     },
     directory,
-    agents,
     artifacts,
     notifications,
     auth,

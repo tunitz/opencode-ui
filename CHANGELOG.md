@@ -38,6 +38,14 @@ All notable changes to this project are documented in this file.
 - Notes follow a `todo` → `in-progress` → `finished` lifecycle, with `finished` only after verified
   work; `idea`, `blocked`, `cancelled`, and `archived` complete the seven-status model.
 - Appearance controls moved from the sidebar into Settings → Appearance.
+- Agent, model, and variant choices for New Session and the composer now come from the engine API
+  at the destination/session location; there is no local agent catalog.
+
+### Removed
+
+- Settings → Agents and the `/api/ui/agents` / `/api/ui/agents/default` file-editor endpoints. The
+  `/agents` slash command still opens the current-session agent picker. `OPENCODE_CONFIG_DIR`
+  remains in use for the Notes MCP registration.
 
 ### Fixed
 

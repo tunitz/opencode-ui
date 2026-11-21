@@ -11,20 +11,9 @@ import {
 
 import { useOptionalNotesWorkspace } from "@/components/notes-sidebar"
 import { useOptionalWorkspace } from "@/components/workspace-context"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 
 export const SETTINGS_SECTION_IDS = [
   "appearance",
-  "agents",
   "alerts",
   "plugins",
   "connection",
@@ -33,10 +22,6 @@ export const SETTINGS_SECTION_IDS = [
 
 export type SettingsSectionID = (typeof SETTINGS_SECTION_IDS)[number]
 
-type PendingChange =
-  | { kind: "section"; id: SettingsSectionID }
-  | { kind: "close" }
-
 export type SettingsWorkspaceContextValue = {
   /** The Settings workspace is the active main pane. */
   open: boolean
@@ -44,18 +29,12 @@ export type SettingsWorkspaceContextValue = {
   section: SettingsSectionID
   /** Open the workspace, optionally deep-linking to a section. Closes Notes. */
   openSettings: (section?: SettingsSectionID) => void
-  /** Close through the shared transition; the shell's guard applies. */
+  /** Close through the shared workspace transition. */
   closeSettings: () => void
-  /** Close, confirming first while agent edits are still saving. */
+  /** Request a close; through the shared coordinator in the app shell. */
   requestClose: () => void
-  /** Select a tab, confirming first while agent edits are still saving. */
+  /** Select a tab. */
   selectSection: (section: SettingsSectionID) => void
-  agentDirty: boolean
-  setAgentDirty: (dirty: boolean) => void
-  confirmOpen: boolean
-  confirmChange: PendingChange | null
-  keepEditing: () => void
-  confirmDiscard: () => void
 }
 
 const SettingsWorkspaceContext =
@@ -80,19 +59,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const [openRequested, setOpenRequested] = useState(false)
   const [section, setSection] = useState<SettingsSectionID>("appearance")
-  const [agentDirty, setAgentDirtyState] = useState(false)
-  const [pendingChange, setPendingChange] = useState<PendingChange | null>(null)
   // Inside the app shell the shared discriminator decides; standalone fixtures
   // keep the local request so Settings can be tested on its own.
   const open = workspace ? workspace.active === "settings" : openRequested && !notesOpen
 
   const returnFocusRef = useRef<HTMLElement | null>(null)
-  const agentDirtyRef = useRef(false)
-
-  const setAgentDirty = useCallback((dirty: boolean) => {
-    agentDirtyRef.current = dirty
-    setAgentDirtyState(dirty)
-  }, [])
 
   const restoreFocus = useCallback(() => {
     const target = returnFocusRef.current
@@ -113,18 +84,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       return
     }
     setOpenRequested(false)
-    setPendingChange(null)
-    setAgentDirty(false)
     restoreFocus()
-  }, [restoreFocus, setAgentDirty, workspace])
+  }, [restoreFocus, workspace])
 
   const selectSection = useCallback(
     (next: SettingsSectionID) => {
       if (next === section) return
-      if (agentDirtyRef.current) {
-        setPendingChange({ kind: "section", id: next })
-        return
-      }
       setSection(next)
     },
     [section]
@@ -132,10 +97,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   const openSettings = useCallback(
     (nextSection?: SettingsSectionID) => {
-      // A pending departure owns the next transition; do not edit behind it.
-      if (workspace?.pendingTarget) return
-      // Already open: keep the current section and dirty state. A deep link is
-      // a section selection, so it goes through the same unsaved-edit guard.
+      // Already open: keep the current section. A deep link is a section
+      // selection, so it goes through the same path as clicking a tab.
       if (open) {
         if (nextSection) selectSection(nextSection)
         return
@@ -143,8 +106,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       const commit = () => {
         // A fresh open always starts at Appearance; a deep link selects its section.
         setSection(nextSection ?? "appearance")
-        setPendingChange(null)
-        setAgentDirty(false)
       }
       if (workspace) {
         workspace.requestWorkspace("settings", { onCommit: commit })
@@ -160,7 +121,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       commit()
       setOpenRequested(true)
     },
-    [closeNotes, open, selectSection, setAgentDirty, workspace]
+    [closeNotes, open, selectSection, workspace]
   )
 
   // Without the shared coordinator Notes still wins the main pane; drop the
@@ -169,55 +130,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     if (workspace || !notesOpen || !openRequested) return
     /* eslint-disable react-hooks/set-state-in-effect -- reconcile against the Notes workspace, which is external state */
     setOpenRequested(false)
-    setPendingChange(null)
-    setAgentDirty(false)
     /* eslint-enable react-hooks/set-state-in-effect */
-  }, [notesOpen, openRequested, setAgentDirty, workspace])
-
-  // The shell consults this before every transition away from Settings.
-  useEffect(() => {
-    if (!workspace) return
-    return workspace.registerGuard("settings", () => agentDirtyRef.current)
-  }, [workspace])
-
-  // A committed transition away from Settings ends any tab-switch prompt and
-  // releases the dirty flag; the user already chose to leave.
-  const wasOpen = useRef(open)
-  useEffect(() => {
-    if (wasOpen.current === open) return
-    wasOpen.current = open
-    if (open) return
-    /* eslint-disable react-hooks/set-state-in-effect -- the shared workspace transition is external state */
-    setPendingChange(null)
-    setAgentDirty(false)
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open, setAgentDirty])
-
-  const requestClose = useCallback(() => {
-    if (workspace) {
-      workspace.requestWorkspace("chat")
-      return
-    }
-    if (agentDirtyRef.current) {
-      setPendingChange({ kind: "close" })
-      return
-    }
-    closeNow()
-  }, [closeNow, workspace])
-
-  const keepEditing = useCallback(() => setPendingChange(null), [])
-
-  const confirmDiscard = useCallback(() => {
-    const change = pendingChange
-    setPendingChange(null)
-    setAgentDirty(false)
-    if (!change) return
-    if (change.kind === "close") {
-      closeNow()
-      return
-    }
-    setSection(change.id)
-  }, [pendingChange, setAgentDirty, closeNow])
+  }, [notesOpen, openRequested, workspace])
 
   const value = useMemo<SettingsWorkspaceContextValue>(
     () => ({
@@ -225,61 +139,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       section,
       openSettings,
       closeSettings: closeNow,
-      requestClose,
+      requestClose: closeNow,
       selectSection,
-      agentDirty,
-      setAgentDirty,
-      confirmOpen: pendingChange !== null,
-      confirmChange: pendingChange,
-      keepEditing,
-      confirmDiscard,
     }),
-    [
-      open,
-      section,
-      openSettings,
-      closeNow,
-      requestClose,
-      selectSection,
-      agentDirty,
-      setAgentDirty,
-      pendingChange,
-      keepEditing,
-      confirmDiscard,
-    ]
+    [open, section, openSettings, closeNow, selectSection]
   )
 
   return (
     <SettingsWorkspaceContext.Provider value={value}>
       {children}
-      <AlertDialog
-        open={pendingChange !== null}
-        onOpenChange={(next) => {
-          if (!next) setPendingChange(null)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Changes are still saving</AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingChange?.kind === "section"
-                ? "Switch tabs anyway? The latest edit may not be saved."
-                : "Close Settings anyway? The latest edit may not be saved."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={confirmDiscard}
-            >
-              {pendingChange?.kind === "section"
-                ? "Switch anyway"
-                : "Close anyway"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </SettingsWorkspaceContext.Provider>
   )
 }
