@@ -1,0 +1,90 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/home/tunitz/Projects/opencode-ui",
+  "unit": "plugins/notes/src/note-ops.ts",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "note-ops-rs",
+  "exports": [
+    {
+      "name": "validatedBase64ByteLength",
+      "file": "plugins/notes/src/note-ops.ts",
+      "line": 48,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "searchNoteTexts",
+      "file": "plugins/notes/src/note-ops.ts",
+      "line": 59,
+      "params": [
+        {
+          "name": "titles",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "bodies",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "query",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "NoteSearchHit[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "filterNoteTexts",
+      "file": "plugins/notes/src/note-ops.ts",
+      "line": 90,
+      "params": [
+        {
+          "name": "titles",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "bodies",
+          "ts_type": "string[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "query",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

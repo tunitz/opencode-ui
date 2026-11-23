@@ -1,6 +1,11 @@
 import { migrateEngineData } from "./core/migrate.js"
 import { resolveDataDir } from "./fs-utils.js"
 import {
+  filterNoteTexts,
+  searchNoteTexts,
+  validatedBase64ByteLength,
+} from "./note-ops.js"
+import {
   FileNotesStore,
   compareNotes,
   type NotesStore,
@@ -141,9 +146,6 @@ function projectDirectory(value: unknown): string | null | undefined {
 const MIME_SHAPE =
   /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i
 
-const BASE64_SHAPE =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
-
 /** Inline-active types are refused; attachments are downloadable data, not a document surface. */
 const ACTIVE_MIME_TYPES = new Set([
   "image/svg+xml",
@@ -211,11 +213,9 @@ function attachmentData(
 ): { data: string; size: number } {
   if (typeof value !== "string" || !value)
     invalid("data", "data must be a non-empty base64 string")
-  if (value.length % 4 !== 0 || !BASE64_SHAPE.test(value))
-    invalid("data", "data must be valid base64")
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0
-  const size = (value.length / 4) * 3 - padding
-  if (size <= 0) invalid("data", "data must not be empty")
+  const size = validatedBase64ByteLength(value)
+  if (size < 0) invalid("data", "data must be valid base64")
+  if (size === 0) invalid("data", "data must not be empty")
   if (size > LIMITS.attachmentFileSize) {
     throw new NotesError(
       "limit_exceeded",
@@ -282,40 +282,6 @@ function optionalConnectionId(value: unknown): string | null | undefined {
   if (typeof value !== "string" || !value.trim())
     invalid("connectionId", "connectionId must be a non-empty string or null")
   return value
-}
-
-function collapseWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim()
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) return 0
-  let count = 0
-  let index = 0
-  while (index <= haystack.length) {
-    const found = haystack.indexOf(needle, index)
-    if (found === -1) break
-    count++
-    index = found + needle.length
-  }
-  return count
-}
-
-function buildSnippet(
-  collapsedBody: string,
-  collapsedLowerBody: string,
-  lowerQuery: string
-): string {
-  const index = collapsedLowerBody.indexOf(lowerQuery)
-  if (index === -1) return ""
-  const start = Math.max(0, index - 80)
-  const end = Math.min(
-    collapsedBody.length,
-    index + lowerQuery.length + 80
-  )
-  return `${start > 0 ? "…" : ""}${collapsedBody.slice(start, end)}${
-    end < collapsedBody.length ? "…" : ""
-  }`
 }
 
 function compareSpaces(a: Space, b: Space): number {
@@ -465,14 +431,12 @@ export class NotesService {
       this.store.listSpaces(),
     ])
     const spaceByID = new Map(spaces.map((space) => [space.id, space]))
-    const filtered = notes.filter((note) => {
+    const candidates = notes.filter((note) => {
       if (input.spaceID !== undefined && note.spaceID !== input.spaceID)
         return false
       if (status && note.status !== status) return false
       if (statuses && !statuses.includes(note.status)) return false
       if (pinned !== undefined && note.pinned !== pinned) return false
-      if (query && !`${note.title}\n${note.body}`.toLowerCase().includes(query))
-        return false
       if (note.spaceID !== null) {
         const space = spaceByID.get(note.spaceID)
         if (effectiveScope !== undefined) {
@@ -486,6 +450,13 @@ export class NotesService {
       }
       return true
     })
+    const filtered = query
+      ? filterNoteTexts(
+          candidates.map((note) => note.title),
+          candidates.map((note) => note.body),
+          query
+        ).map((index) => candidates[index]!)
+      : candidates
     filtered.sort(compareNotes)
     const page = filtered.slice(offset, offset + limit)
     return {
@@ -944,10 +915,7 @@ export class NotesService {
   async search(input: SearchInput, scope?: Scope): Promise<SearchOutput> {
     await this.ready()
     const effectiveScope = this.scopeOf(scope)
-    const query = collapseWhitespace(
-      requiredText(input.query, "query", LIMITS.query)
-    )
-    const lowerQuery = query.toLowerCase()
+    const query = requiredText(input.query, "query", LIMITS.query)
     const statuses = optionalStatuses(input.statuses)
     const pinned = optionalBoolean(input.pinned, "pinned")
     const directory = optionalDirectory(input.directory)
@@ -969,7 +937,9 @@ export class NotesService {
       this.store.listSpaces(),
     ])
     const spaceByID = new Map(spaces.map((space) => [space.id, space]))
-    const results: SearchResult[] = []
+    const candidates: Note[] = []
+    const titles: string[] = []
+    const bodies: string[] = []
     for (const note of notes) {
       if (input.spaceID !== undefined && note.spaceID !== input.spaceID)
         continue
@@ -986,18 +956,16 @@ export class NotesService {
             continue
         }
       }
-      const titleMatch = note.title.toLowerCase().includes(lowerQuery)
-      const collapsedBody = collapseWhitespace(note.body)
-      const lowerBody = collapsedBody.toLowerCase()
-      const occurrences = countOccurrences(lowerBody, lowerQuery)
-      if (!titleMatch && occurrences === 0) continue
-      const score = (titleMatch ? 100 : 0) + Math.min(occurrences, 5) * 10
-      results.push({
-        note: { ...note, body: "" },
-        score,
-        snippet: buildSnippet(collapsedBody, lowerBody, lowerQuery),
-      })
+      candidates.push(note)
+      titles.push(note.title)
+      bodies.push(note.body)
     }
+    const hits = searchNoteTexts(titles, bodies, query)
+    const results: SearchResult[] = hits.map((hit) => ({
+      note: { ...candidates[hit.index]!, body: "" },
+      score: hit.score,
+      snippet: hit.snippet,
+    }))
     results.sort(
       (a, b) => b.score - a.score || compareNotes(a.note, b.note)
     )
