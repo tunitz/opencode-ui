@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || github.sha }}
 
@@ -89,7 +89,7 @@ jobs:
       TAG: ${{ needs.release-please.outputs.tag_name }}
     steps:
       - name: Checkout tagged release
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
