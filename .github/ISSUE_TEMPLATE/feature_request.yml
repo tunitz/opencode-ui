@@ -1,0 +1,24 @@
+name: Feature Request
+description: Suggest an improvement or new capability for OpenCode UI
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What workflow or limitation does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should it work from a user or operator perspective?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any workarounds or alternative designs you considered.

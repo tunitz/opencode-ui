@@ -240,7 +240,7 @@ describe("session cookie", () => {
     expect(buildSessionCookie(token, false, name).startsWith(`${name}=`)).toBe(true)
     expect(clearSessionCookie(false, name).startsWith(`${name}=`)).toBe(true)
 
-    const url = "http://192.168.31.10:5182/api/ui/auth/status"
+    const url = "http://192.168.1.10:5182/api/ui/auth/status"
     expect(await auth.authenticate(new Request(url, { headers: { cookie: `${name}=${token}` } }))).toBe(true)
     expect(await auth.authenticate(withCookie(token, url))).toBe(false)
   })

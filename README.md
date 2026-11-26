@@ -1,231 +1,174 @@
 # OpenCode UI
 
-A mobile-first web client for a separately running OpenCode V2 engine. It gives the engine a
-browser interface for conversations and prompts while the engine keeps ownership of sessions,
-tools, providers, and history.
+[![CI](https://github.com/tunitz/opencode-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/tunitz/opencode-ui/actions/workflows/ci.yml)
+[![Release](https://github.com/tunitz/opencode-ui/actions/workflows/release.yml/badge.svg)](https://github.com/tunitz/opencode-ui/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-ghcr.io%2Ftunitz%2Fopencode-ui-2496ED?logo=docker&logoColor=white)](https://github.com/tunitz/opencode-ui/pkgs/container/opencode-ui)
+[![Bun](https://img.shields.io/badge/Bun-1.4.4-f9f1e1?logo=bun&logoColor=000)](https://bun.sh/)
+
+A mobile-first web client for a separately running **OpenCode V2** engine. It provides a responsive browser workspace for conversations, prompts, diffs, terminal access, and project notes while the engine retains ownership of sessions, tools, providers, and history.
+
+![OpenCode UI Desktop Dark](docs/screenshots/desktop-dark.png)
 
 ## Highlights
 
-- Mobile-first conversation, prompt, and session navigation.
-- Files, working-tree diffs, permissions, forms, and session settings.
-- Structured tool output, artifacts, Markdown, tables, and images.
-- Light, Dark, and System themes with keyboard, focus, RTL, and reduced-motion support.
-- A Settings workspace for appearance, alerts, plugins, engine connections, and access.
-- Notes workspace backed by a standalone notes store, plus an optional engine MCP server.
-- Optional Web Push notifications.
-- First-run UI password setup; any saved engine credential stays on the UI server.
+- **Mobile-first conversations & navigation**: Responsive sidebar, session pinning/labels, subagent navigation, and touch-safe composer controls.
+- **Files, diffs & terminal**: Working-tree and turn diffs, file preview, permission/form dialogs, and a lazy xterm browser terminal backed by native PTY WebSockets.
+- **Rich structured output**: Tool call cards, Markdown, tables, code blocks, PDFs, and verified local artifact previews.
+- **Themes & accessibility**: Light, Dark, and System themes with color palettes, keyboard navigation, focus management, RTL, and reduced-motion support.
+- **Settings workspace**: Dedicated panes for appearance, Web Push alerts, plugins, engine connections, and UI access password management.
+- **Built-in Notes & MCP**: Standalone file-backed Notes workspace with revision history, attachments, and an optional stdio MCP server registered in the engine config.
+- **Server-side credential boundary**: First-run UI password setup (argon2id); saved engine credentials remain on the UI server (`0600`) and are injected server-side.
+
+## Screenshots
+
+| Notes Workspace (Light) | Mobile Conversation (Dark) |
+| :---: | :---: |
+| ![Notes Workspace Light](docs/screenshots/desktop-light.png) | ![Mobile Conversation Dark](docs/screenshots/mobile-dark.png) |
 
 ## Architecture
 
 ```text
-Browser  <->  OpenCode UI server  <->  OpenCode V2 engine
+Browser  <──(Session cookie + Host/Origin checks)──>  OpenCode UI server  <──(Proxy + server-side auth)──>  OpenCode V2 engine
+                                                             │
+                                                             ├──> Local Notes store ($XDG_DATA_HOME/opencode-notes/v1)
+                                                             └──> Notes MCP stdio server (plugins/notes/src/mcp/main.ts)
 ```
 
-The UI server serves the built frontend, proxies HTTP and event-stream traffic, and injects the
-engine credential server-side. It also serves the Notes API and manages registration of the
-optional Notes MCP server in the engine's configuration. The engine is a separate dependency; this
-project does not install, start, or modify it.
+The UI server serves the built React frontend, proxies HTTP/SSE/PTY traffic, and injects the saved engine credential server-side. The OpenCode V2 engine is a separate dependency; OpenCode UI does not install or start it.
 
-Almost all browser-facing data comes from the engine API. The deliberate app-layer exceptions are
-the local Notes store and its MCP registration, a one-time read-only import of legacy engine notes,
-verified local artifact delivery, and the UI host home default for New Session; `/highlights` reads
-the public upstream changelog from GitHub.
+Almost all browser-facing data comes from the engine API. Deliberate app-layer exceptions are the local Notes store and MCP registration, a one-time read-only import of legacy engine notes, verified local artifact delivery, and the UI host home default for New Session.
 
 ## Prerequisites
 
-- Install and start the **OpenCode V2 engine** separately, compatible with the pinned
-  `@opencode/client` **2.1.4**. This project does not install or start the engine.
-- [Bun](https://bun.sh/) **1.4.4**. `package.json` declares the exact version; broader
-  compatibility is not established.
+- A running **OpenCode V2 engine** compatible with the pinned `@opencode/client` **2.1.4**.
+- **[Bun](https://bun.sh/) 1.4.4** when running from source (exact version pinned in `package.json`).
 
-If the engine requires a password, enter it privately during connection setup. Never pass it on the
-command line, put it in a URL, or commit it.
+If the engine requires a password, enter it privately in **Settings → Connections** inside the UI. Never pass secrets as CLI flags or commit them.
 
-## Quick start from a checkout
+## Quick Start
+
+### 1. Docker Compose (Recommended)
+
+The Alpine container image (`ghcr.io/tunitz/opencode-ui`) runs as a non-root user on port `5174`, persists auth/connections/notes in a `/data` volume, and maps `host.docker.internal` so a host-running OpenCode engine is reachable via `http://host.docker.internal:8090`:
 
 ```sh
-bun install
+git clone https://github.com/tunitz/opencode-ui.git && cd opencode-ui
+cp .env.example .env
+# For LAN or reverse-proxy access, set OPENCODE_UI_ALLOWED_HOSTS and OPENCODE_UI_ALLOWED_ORIGINS in .env.
+docker compose pull
+docker compose up -d
+```
+
+To build the image locally instead of pulling from GHCR:
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+### 2. Prebuilt Release Binaries
+
+Download the archive for your platform (`linux-x64`, `darwin-arm64`, `windows-x64`) and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/tunitz/opencode-ui/releases):
+
+```sh
+sha256sum -c SHA256SUMS.txt --ignore-missing
+tar -xzf opencode-ui-*-linux-x64.tar.gz
+./opencode-ui
+```
+
+### 3. From Source
+
+```sh
+git clone https://github.com/tunitz/opencode-ui.git && cd opencode-ui
+bun install --frozen-lockfile
 bun run start
 ```
 
-Open <http://127.0.0.1:5174> on the same machine. `bun run start` serves the production build,
-creating it on first run when it is missing. On first visit, set an OpenCode UI password. You can
-change it later in Settings → Access.
+Open <http://127.0.0.1:5174> on the same machine. `bun run start` builds production assets on first run when missing. On first visit, set an OpenCode UI password (changeable later in **Settings → Access**), then open **Settings → Connections → Add connection** and enter your engine URL (and password from `opencode service get password` if required).
 
-After setup, the home screen shows **No available connections** until you add one. Select **Open
-Connection Settings**, then **Add connection**. Enter a name and the HTTP(S) address shown by
-`opencode service status`.
+> Note: The scoped package `@tunitz/opencode-ui` is not published on npm; install via Docker, GitHub Releases, or a source checkout. The unscoped `opencode-ui` npm package is unrelated.
 
-OpenCode V2's background service can generate its own password even if you never set one. If the
-connection test says a password is required, run `opencode service get password` privately on the
-engine machine and enter the result as the required **Engine password**. Use **Test connection** to
-verify, then **Save and connect**. A failed check does not save or activate a connection.
+### Remote & LAN Access
 
-The engine password is separate from the UI access password. The UI no longer reads engine
-registration files. If an existing connection was using a registration file, edit it and enter
-the engine password.
-
-### Remote access
-
-For ordinary LAN use, bind to all interfaces and open the host's LAN IP from another device. No
-allowlist flags are needed:
+For ordinary LAN access, bind to all interfaces; private RFC1918 IPv4 addresses and matching HTTP origins are trusted automatically (no allowlist flags needed):
 
 ```sh
 bun run start --host 0.0.0.0
 ```
 
-Example: if this machine is `192.168.31.10`, visit `http://192.168.31.10:5174`. The server
-automatically trusts its own private RFC1918 IPv4 addresses and derives matching
-`http://<address>:<port>` origins. Tailscale/CGNAT and public addresses are not automatic. Host and
-Origin checks remain enabled; the UI password is still required on a non-loopback bind.
-
-For a custom hostname or an HTTPS reverse proxy, pass the origin; its hostname is trusted
-automatically:
+For example, if your host IP is `192.168.1.10`, visit `http://192.168.1.10:5174`. Tailscale/CGNAT and public hostnames are **not** automatic — pass an explicit origin or host (which replaces automatic LAN trust):
 
 ```sh
-bun run start --host 0.0.0.0 --allowed-origin https://ui.example.test
+bun run start --host 0.0.0.0 --allowed-origin https://ui.example.com
 ```
 
-`--allowed-host` is available when an extra Host header must be trusted. Explicit trust values
-replace the automatic LAN addresses; repeat either flag for multiple values. Use secure transport
-for real credential protection. Set the UI password privately before exposing the service. The
-first visit opens the setup screen when no password is set, or the sign-in screen when one is
-already configured. The setup endpoint works without a session. The direct server derives its
-built-in loopback allowed origins from the resolved `--port`, so changing `--port` on loopback
-also works automatically. Use `bun run start --help` for the complete flag reference.
+Repeat `--allowed-origin` or `--allowed-host` for multiple values, and always terminate HTTPS in front when exposing beyond loopback.
 
-## Published package
+## CLI Options & Environment
 
-`@tunitz/opencode-ui` is not currently published on a package registry, and registry installation
-is unverified. Packaging and registry verification are pending. For now, install and run from a
-checkout as shown above. The unscoped `opencode-ui` package is unrelated; do not install it.
-
-## Common options
-
-The start command accepts these flags (`bun run start:bun` and `bun run preview` are aliases).
-Flags override environment settings. A non-loopback bind works with no trust flags; explicit values
-are for custom hostnames, HTTPS proxies, or non-private networks — see
-[Remote access](#remote-access) and the security boundary below.
+`bun run start` (`start:bun` / `preview`) accepts `--name value` or `--name=value` flags that override environment variables (run `bun run start --help` for the full reference):
 
 | Option | Default and behavior |
 | --- | --- |
 | `--host <host>` | `OPENCODE_UI_HOST`, otherwise `127.0.0.1`. Bind hostname/IP only. |
-| `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174`. Integer from 1 through 65535. |
-| `--engine-url <origin>` | Optional prefill for first-run setup. Does not create a connection. |
-| `--allowed-host <host>` | Repeatable trusted hostname/IP. Derives a matching HTTP origin when non-loopback. Explicit values replace automatic LAN trust. |
-| `--allowed-origin <origin>` | Repeatable trusted HTTP(S) origin. Its hostname is trusted automatically. Explicit values replace automatic LAN trust. |
-| `--artifact-root <path>` | Repeatable artifact roots; replaces `OPENCODE_UI_ARTIFACT_ROOTS` when supplied. `bun run start` otherwise allows `/tmp/opencode/shots`; the CLI allows none. |
-| `--help`, `--version` | Show usage or the package version without reading credentials or starting services. |
+| `--port <port>` | `OPENCODE_UI_PORT`, otherwise `5174` (`1`–`65535`). |
+| `--engine-url <origin>` | Optional prefill for first-run connection setup. |
+| `--allowed-host <host>` | Repeatable trusted Host header (replaces automatic LAN trust). |
+| `--allowed-origin <origin>` | Repeatable trusted HTTP(S) Origin (replaces automatic LAN trust). |
+| `--artifact-root <path>` | Repeatable local artifact roots (`OPENCODE_UI_ARTIFACT_ROOTS`). |
+| `--help`, `--version` | Print usage or package version without starting services. |
 
-Long options accept `--name value` or `--name=value`. Flags override applicable environment
-settings. Run `bun run start --help` for the complete reference.
+Key environment variables (see [.env.example](.env.example)):
 
-## Configuration
+- `OPENCODE_UI_HOST`, `OPENCODE_UI_PORT`: UI listener bind host and port.
+- `OPENCODE_UI_ARTIFACT_ROOTS`: Comma-separated allowed artifact roots (empty disables delivery).
+- `OPENCODE_UI_AUTH_STATE`: Password/session state file (default `~/.local/share/opencode-ui/auth/state.json`).
+- `OPENCODE_UI_CONNECTIONS_STATE`: Saved engine connection profiles (default `~/.local/share/opencode-ui/connections.json`, mode `0600`).
+- `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: Server-wide session pins/labels (default `~/.local/share/opencode-ui/session-shortcuts.json`).
+- `OPENCODE_UI_SESSION_COOKIE`: Session cookie name (default `opencode_ui_session`; override per instance on the same host).
+- `OPENCODE_UI_SESSION_HOME`: Default directory prefilled by New Session.
+- `OPENCODE_NOTES_DATA_DIR`: Notes store directory (default `$XDG_DATA_HOME/opencode-notes/v1`).
+- `OPENCODE_UI_NOTIFICATION_STATE`, `OPENCODE_UI_VAPID_SUBJECT`: Web Push state file and contact URI.
+- `OPENCODE_CONFIG_DIR`: Engine config directory for Notes MCP registration (`opencode.jsonc` / `opencode.json`).
 
-Common environment variables include:
+## Notes & Agent MCP
 
-- `OPENCODE_UI_HOST`, `OPENCODE_UI_PORT`: UI listener.
-- `OPENCODE_UI_ARTIFACT_ROOTS`: comma-separated artifact roots; empty disables delivery.
-- `OPENCODE_UI_AUTH_STATE`: overrides the password/session state file, which defaults to
-  `~/.local/share/opencode-ui/auth/state.json`.
-- `OPENCODE_UI_CONNECTIONS_STATE`: overrides saved local/remote OpenCode engine profiles, which
-  default to `~/.local/share/opencode-ui/connections.json` (mode `0600`).
-- `OPENCODE_UI_SESSION_SHORTCUTS_STATE`: overrides the shared session pins/labels file, which
-  defaults to `~/.local/share/opencode-ui/session-shortcuts.json`. Pins and labels are server-wide
-  rather than browser-local.
-- `OPENCODE_UI_SESSION_HOME`: overrides the home directory prefilled by New Session; otherwise the
-  UI host's home directory is used. Remote engines currently keep their own engine-side location default.
-- `OPENCODE_UI_SESSION_COOKIE`: overrides the session cookie name (default `opencode_ui_session`).
-  Set a distinct name for a second UI instance on the same host, since cookies are scoped to a host
-  and ignore port numbers.
-- `OPENCODE_NOTES_DATA_DIR`: overrides the Notes data directory, which defaults to
-  `$XDG_DATA_HOME/opencode-notes/v1` or `~/.local/share/opencode-notes/v1`.
-- `OPENCODE_UI_NOTIFICATION_STATE`: private notification state; defaults to
-  `~/.local/state/opencode-ui/notifications/state.json`.
-- `OPENCODE_UI_VAPID_SUBJECT`: Web Push contact URI; set an appropriate contact for your use.
-- `OPENCODE_CONFIG_DIR`: engine global config directory for the Notes MCP registration
-  (`opencode.jsonc` or `opencode.json`); overrides `$XDG_CONFIG_HOME/opencode`, otherwise
-  `~/.config/opencode`.
+Notes are built in via the standalone TypeScript core in [plugins/notes/](plugins/notes/README.md) with atomic JSON writes, per-record advisory locks, revision compare-and-set, and 50 history snapshots per note.
 
-Drafts and preferences live in browser-local storage scoped to the origin. Changing the URL creates
-a separate storage scope, and preferences are not shared across devices.
+- Enable agent tools in **Settings → Plugins** to atomically register `mcp.servers.notes` in your engine's global config (`opencode.jsonc` / `opencode.json`).
+- Exposes **15 MCP tools**, **3 prompts** (`notes:capture`, `notes:daily`, `notes:review`), and `notes://` resources over stdio.
+- Notes, spaces, and attachments (max 4 files / 4 MiB each / 8 MiB per note; active SVG/HTML/JS rejected) are stored plaintext on disk (`0700` dir / `0600` files) — do not store secrets in notes.
 
-## Security boundary
+## Security Boundary
 
-The UI has a single required access password, set on first visit. Sessions use an HTTP-only,
-SameSite=Lax cookie
-valid for 30 days; the server stores an argon2id password hash and SHA-256 session-token hashes
-under `~/.local/share/opencode-ui/auth/`, and no password or token is placed in `localStorage` or
-`sessionStorage`. Anyone with the password can exercise the permissions of the engine credential.
-
-`bun run start` binds to loopback by default. A non-loopback bind requires a UI password. With no
-explicit trust flags it trusts this host's private LAN IPv4 addresses and matching HTTP origins; a
-custom hostname or HTTPS proxy needs `--allowed-origin` (or `--allowed-host`). Use secure transport
-such as HTTPS for real credential protection. Allowlists are not authentication or multi-tenant
-isolation. Protect the engine endpoint separately, and do not disable the UI's Host, Origin,
-WebSocket, route, method, JSON-mutation, artifact-provenance, or `no-store` protections.
-
-## Notes
-
-Notes are built in and do not depend on an engine plugin. The internal
-[notes module](plugins/notes/README.md) (`plugins/notes/`) is a standalone TypeScript core
-with a plaintext file store shipped inside this repository. The UI server imports it in-process for
-the notes workspace and `/api/ui/notes/*`; agents use it through an optional MCP stdio server.
-
-The browser Notes workspace and the note reference picker are hidden when the plugin registry
-definitively reports the Notes MCP entry as disabled. A transient or unknown registry state leaves
-them visible rather than hiding them on a failed read.
-
-**Enable agent tools** in Settings → Plugins. Enabling writes an `mcp.servers.notes` entry into the
-engine's global configuration (`opencode.jsonc` or `opencode.json`) through an atomic JSONC edit,
-and disabling removes it; this is not merely an HTTP-only action. The engine must be able to execute
-the registered Bun entry, and it may need a restart before the tools appear; the section reports
-that state. The UI server and the MCP server must resolve the same `OPENCODE_NOTES_DATA_DIR` (or its
-default) to see the same notes. If you previously installed the old notes engine plugin or its
-`~/.config/opencode/plugins/...` symlink, remove it before enabling Notes here.
-
-The MCP server exposes 15 tools (`notes_list`, `notes_get`, `notes_create`, `notes_update`,
-`notes_delete`, `notes_search`, `notes_history`, `notes_restore`, `notes_spaces`,
-`notes_create_space`, `notes_update_space`, `notes_delete_space`, `notes_attachment_create`,
-`notes_attachment_read`, `notes_attachment_delete`), three
-prompts (`notes:capture`, `notes:daily`, `notes:review`), and note/space resources. The
-[notes package README](plugins/notes/README.md) lists arguments and behavior. Browser listings are
-all-project/global; MCP tools are directory-scoped by default (the MCP process's working directory,
-overridable per call with a `directory` argument).
-
-Data lives under `$XDG_DATA_HOME/opencode-notes/v1` (or `~/.local/share/opencode-notes/v1`),
-overridden by `OPENCODE_NOTES_DATA_DIR`. On first use the service imports legacy notes from the
-engine SQLite `kv` table read-only, once, without overwriting existing records;
-`OPENCODE_ENGINE_DB_PATH` selects a non-default database. Writes are atomic JSON with per-record
-locks, revision compare-and-set, and 50 history snapshots per note.
-
-Notes use seven statuses grouped Backlog (`idea`, `todo`), Active (`in-progress`, `blocked`), and
-Done (`finished`, `cancelled`, `archived`). New notes start as `todo`; mark `finished` only after
-verification, with the evidence appended. Spaces are Global (`projectDir: null`, visible in every
-project) or bound to a project directory. Attachments are limited to 4 files per note, 4 MiB per
-file, and 8 MiB per note; SVG, HTML, and JavaScript types are rejected.
-
-The workspace opens from the sidebar. Notes show a read-only Markdown preview with explicit editing;
-bodies can reference project-relative files, and the composer can attach a note as Markdown with its
-attachment manifest. Notes, spaces, and attachments are plaintext on disk, not encrypted and not
-multi-user isolated. Do not store secrets in notes.
+- Single shared UI password hashed with argon2id + HTTP-only `SameSite=Lax` cookie (`30` days), SHA-256 session token hashes on disk, and zero tokens in `localStorage`/`sessionStorage`.
+- Non-loopback binds require a UI password and enforce Host, Origin, WebSocket, route/method, JSON-mutation, artifact-provenance, and `no-store` protections.
+- Allowlists are not multi-tenant isolation; terminate TLS in front for untrusted networks and protect the engine independently. See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Documentation
 
-- [docs/components.md](docs/components.md): component architecture and current surface coverage.
-- [docs/contract.md](docs/contract.md): native OpenCode contract and app-layer security rules.
-- [docs/commands.md](docs/commands.md): slash-command coverage and native command behavior.
-- [plugins/notes/README.md](plugins/notes/README.md): Notes package and MCP tool reference.
-- [CHANGELOG.md](CHANGELOG.md): notable changes.
+- [docs/components.md](docs/components.md) — Component architecture and surface coverage
+- [docs/contract.md](docs/contract.md) — Native OpenCode V2 contract and app-layer security rules
+- [docs/commands.md](docs/commands.md) — Slash-command coverage and native command behavior
+- [plugins/notes/README.md](plugins/notes/README.md) — `@tunitz/opencode-notes` API and MCP tool reference
+- [CHANGELOG.md](CHANGELOG.md) — Release history
 
-## Status and limitations
+## Status & Limitations
 
-- The project is pre-1.0; interfaces and behavior may change.
-- `/terminal` opens a lazy xterm browser terminal backed by native PTY APIs and the same-origin WebSocket bridge; reconnects require explicit Reattach.
-- Notifications are best-effort and depend on browser and OS push delivery.
-- The UI password is one shared access password; it is not multi-tenant isolation.
-- Package publication and registry installation are not verified; packaging checks are pending.
+- Pre-1.0 software; interfaces and behaviors may evolve.
+- `/terminal` reconnects require explicit Reattach.
+- Web Push notifications are best-effort and depend on browser/OS delivery.
+- UI access uses a single shared password (single-operator boundary, not multi-tenant isolation).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, Conventional Commits, and verification commands:
+
+```sh
+mkdir -p /tmp/opencode
+bun run verify && bun test plugins/notes/test && bun run build:bun
+```
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 tunitz

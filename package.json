@@ -12,6 +12,9 @@
     "type": "git",
     "url": "git+https://github.com/tunitz/opencode-ui.git"
   },
+  "bugs": {
+    "url": "https://github.com/tunitz/opencode-ui/issues"
+  },
   "keywords": [
     "opencode",
     "web-client",

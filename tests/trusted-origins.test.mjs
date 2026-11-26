@@ -3,16 +3,16 @@ import { localLanHosts, resolveTrustedOrigins } from "../server/trusted-origins.
 
 const interfaces = {
   lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-  enp3s0: [{ address: "192.168.31.10", family: "IPv4", internal: false }],
+  enp3s0: [{ address: "192.168.1.10", family: "IPv4", internal: false }],
   docker0: [{ address: "172.17.0.1", family: "IPv4", internal: false }],
-  tailscale0: [{ address: "100.67.153.70", family: "IPv4", internal: false }],
+  tailscale0: [{ address: "100.64.0.10", family: "IPv4", internal: false }],
   wan0: [{ address: "203.0.113.5", family: "IPv4", internal: false }],
   wlan0: [{ address: "fd7a:115c::1", family: "IPv6", internal: false }],
 }
 
 describe("local LAN hosts", () => {
   test("keeps only non-internal private IPv4 addresses", () => {
-    expect(localLanHosts(interfaces)).toEqual(["172.17.0.1", "192.168.31.10"])
+    expect(localLanHosts(interfaces)).toEqual(["172.17.0.1", "192.168.1.10"])
   })
 })
 
@@ -21,11 +21,11 @@ describe("trusted origin resolution", () => {
     const trust = resolveTrustedOrigins({
       hostname: "0.0.0.0",
       port: 5174,
-      localHosts: ["192.168.31.10"],
+      localHosts: ["192.168.1.10"],
     })
-    expect(trust.allowedHosts).toContain("192.168.31.10")
-    expect(trust.allowedOrigins).toContain("http://192.168.31.10:5174")
-    expect(trust.allowedHosts).not.toContain("100.67.153.70")
+    expect(trust.allowedHosts).toContain("192.168.1.10")
+    expect(trust.allowedOrigins).toContain("http://192.168.1.10:5174")
+    expect(trust.allowedHosts).not.toContain("100.64.0.10")
   })
 
   test("derives the host from an explicit HTTPS origin", () => {
@@ -42,10 +42,10 @@ describe("trusted origin resolution", () => {
     const trust = resolveTrustedOrigins({
       hostname: "0.0.0.0",
       port: 1234,
-      allowedHosts: ["192.168.31.10"],
+      allowedHosts: ["192.168.1.10"],
     })
-    expect(trust.allowedOrigins).toContain("http://192.168.31.10:1234")
-    expect(trust.allowedHosts).toContain("192.168.31.10")
+    expect(trust.allowedOrigins).toContain("http://192.168.1.10:1234")
+    expect(trust.allowedHosts).toContain("192.168.1.10")
   })
 
   test("explicit values replace automatic LAN trust", () => {
@@ -53,10 +53,10 @@ describe("trusted origin resolution", () => {
       hostname: "0.0.0.0",
       port: 5174,
       allowedOrigins: ["https://ui.example.test"],
-      localHosts: ["192.168.31.10"],
+      localHosts: ["192.168.1.10"],
     })
-    expect(trust.allowedHosts).not.toContain("192.168.31.10")
-    expect(trust.allowedOrigins).not.toContain("http://192.168.31.10:5174")
+    expect(trust.allowedHosts).not.toContain("192.168.1.10")
+    expect(trust.allowedOrigins).not.toContain("http://192.168.1.10:5174")
   })
 
   test("keeps loopback trust on every path", () => {

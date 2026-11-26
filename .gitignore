@@ -17,12 +17,16 @@ vapid-*.json
 
 # ── Local tooling, agent state, scratch ─────────────────────────
 .opencode/
+.claude/
 .code-review-graph/
 .playwright-cli/
 .cache/
 .tmp/
 /scratch/
 /tmp/
+__pycache__/
+*.pyc
+release-artifacts/
 
 # ── Local-only workspaces and notes ─────────────────────────────
 /design/
