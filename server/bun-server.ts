@@ -1,5 +1,6 @@
-import { readFile, stat } from "node:fs/promises"
-import { join, resolve } from "node:path"
+import { stat } from "node:fs/promises"
+import { dirname, join, resolve } from "node:path"
+import packageMetadata from "../package.json" with { type: "json" }
 import { createArtifactDelivery, DEFAULT_ARTIFACT_ROOTS } from "./artifact-delivery.ts"
 import { createAuthService } from "./auth.ts"
 import { createEngineConnectionsService } from "./engine-connections.ts"
@@ -142,6 +143,15 @@ export function serverOptionsFromFlags(flags: CliFlags): BunServerOptions {
   return options
 }
 
+function resolveRuntimeRoot(): string {
+  const explicit = process.env.OPENCODE_UI_ROOT?.trim()
+  if (explicit) return resolve(explicit)
+  if (import.meta.dirname.startsWith("/$bunfs") || /^[A-Za-z]:[\\/]+~BUN/i.test(import.meta.dirname)) {
+    return dirname(process.execPath)
+  }
+  return resolve(import.meta.dirname, "..")
+}
+
 // Kept separate from the build so importing build tooling never reads credentials
 // or starts the notification watcher.
 export async function startBunServer(options: BunServerOptions = {}) {
@@ -169,7 +179,11 @@ export async function startBunServer(options: BunServerOptions = {}) {
     (!security.allowedHosts.some((host) => !isLoopbackHost(host)) || !security.allowedOrigins.some((origin) => !isLoopbackHost(new URL(origin).hostname)))) {
     throw new BunConfigurationError("Non-loopback binding needs a trusted non-loopback host and origin. Add local private IPv4 addresses, or pass explicit non-loopback --allowed-host/--allowed-origin. The required UI password gate is a shared access boundary, not tenant isolation; use secure transport.")
   }
-  const directory = options.assetDirectory ?? resolve(import.meta.dirname, process.env.OPENCODE_UI_BUILD_TARGET === "dev" ? "../dist-bun-dev" : "../dist-bun-build")
+  const runtimeRoot = resolveRuntimeRoot()
+  const envAssetDir = process.env.OPENCODE_UI_ASSET_DIR?.trim()
+  const directory = options.assetDirectory ?? (envAssetDir
+    ? resolve(envAssetDir)
+    : resolve(runtimeRoot, process.env.OPENCODE_UI_BUILD_TARGET === "dev" ? "dist-bun-dev" : "dist-bun-build"))
   if (options.assetDirectory) {
     try {
       if (!(await stat(directory)).isDirectory() || !(await stat(join(directory, "index.html"))).isFile()) throw new Error("Missing assets")
@@ -177,7 +191,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
       throw new BunConfigurationError("Packaged frontend assets are unavailable. Reinstall OpenCode UI; release packages must include a production build.")
     }
   } else {
-    await ensureFrontendAssets({ directory, repoRoot: resolve(import.meta.dirname, "..") })
+    await ensureFrontendAssets({ directory, repoRoot: runtimeRoot })
     try {
       if (!(await stat(directory)).isDirectory()) throw new Error("Missing assets")
     } catch {
@@ -214,7 +228,7 @@ export async function startBunServer(options: BunServerOptions = {}) {
     authorization: "",
     getTarget: () => activeEngine() ?? { engineUrl: "", authorization: "" },
     getConnectionId: () => activeEngine()?.id ?? null,
-    repoRoot: resolve(import.meta.dirname, ".."),
+    repoRoot: runtimeRoot,
   })
   const sessionShortcuts = createSessionShortcutsService()
   const application = createBunApplication({
@@ -263,8 +277,7 @@ if (import.meta.main) {
     if (flags.help) {
       console.log(SERVER_HELP)
     } else if (flags.version) {
-      const metadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
-      console.log(metadata.version)
+      console.log(packageMetadata.version)
     } else {
       await startBunServer(serverOptionsFromFlags(flags))
     }
