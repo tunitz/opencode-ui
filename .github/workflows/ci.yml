@@ -30,6 +30,7 @@ jobs:
 
       - name: Verify types, lint, and tests
         run: |
+          mkdir -p /tmp/opencode
           bun run verify
           bun test plugins/notes/test
 
