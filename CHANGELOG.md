@@ -58,6 +58,32 @@ All notable changes to this project are documented in this file.
 - Removed the spurious "Switch notes project?" confirmation; drafts survive project switches through
   the per-directory adapter cache, and native `window.confirm` is no longer used.
 
+## [0.1.1](https://github.com/tunitz/opencode-ui/compare/v0.1.0...v0.1.1) (2026-11-26)
+
+
+### Features
+
+* complete browser slash command parity ([a177b10](https://github.com/tunitz/opencode-ui/commit/a177b109fba5aa16988849b53a83e43ce11664ec))
+* **docker:** add Alpine Docker deployment, GHCR CI, and Release Please ([16625f2](https://github.com/tunitz/opencode-ui/commit/16625f2dfc27090dd5ccd7c24fd2dad4d7a9ecd3))
+* **docker:** add Alpine Docker deployment, GHCR CI, and Release Please ([e5fee20](https://github.com/tunitz/opencode-ui/commit/e5fee2058d5bd60c67795bb1104ed1748ba44054))
+* full UI/UX and security audit fixes plus configurable engine connections ([cf4d4b4](https://github.com/tunitz/opencode-ui/commit/cf4d4b49fee58f998e2176b0b354812f6303aa94))
+* render HealthVault tool results as cards and tables ([f056ccb](https://github.com/tunitz/opencode-ui/commit/f056ccbcd81a658feb2be175393b9c52b18aab0d))
+
+
+### Bug Fixes
+
+* add clipboard fallback for code block copy button ([4549857](https://github.com/tunitz/opencode-ui/commit/4549857d36f7147699defde797ec5432100daa4a))
+* **ci:** create /tmp/opencode before running tests ([f1c0696](https://github.com/tunitz/opencode-ui/commit/f1c0696d7d12924a1329a9e1ccfe222dcaf6c564))
+* enlarge desktop dialogs and repair copy actions ([4039f6f](https://github.com/tunitz/opencode-ui/commit/4039f6f624b3d95d0709edeb835835005586646f))
+* keep long question text inside the pending requests dialog ([b57f1a2](https://github.com/tunitz/opencode-ui/commit/b57f1a2c72c94323c4a577d30fcb9f02bd414a29))
+* open pickers at top and align agents model picker ([7d1af35](https://github.com/tunitz/opencode-ui/commit/7d1af35ed183f5c500c249bf438bd33069c1489e))
+* repair new-session picker, context strip, and model favorites ([92997bc](https://github.com/tunitz/opencode-ui/commit/92997bc715656975192786b37643a07f0299f0c7))
+
+
+### Performance Improvements
+
+* full low-end-device performance pass ([7ea9c5a](https://github.com/tunitz/opencode-ui/commit/7ea9c5aac2fd326457a9c055d66240b4e691760f))
+
 ## 0.1.0 — 2026-11-09
 
 ### Added
