@@ -1,0 +1,22 @@
+# Docker build context exclusions
+.git
+**/.git
+.github
+node_modules
+**/node_modules
+dist
+dist-*
+dist-bun-*
+tests
+docs
+rust
+.env*
+*.md
+*.log
+.playwright-cli
+.cache
+.tmp
+Dockerfile
+compose*.yaml
+release-please-config.json
+.release-please-manifest.json

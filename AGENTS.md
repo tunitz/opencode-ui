@@ -206,3 +206,19 @@ ships the UI server modules together with the internal `plugins/notes` sources d
 [docs/contract.md](docs/contract.md), and [docs/commands.md](docs/commands.md) describe
 implementation details and historical decisions; environment-specific examples are not universal
 requirements.
+
+## Git, Docker & Release Workflow
+
+- **Docker**: `Dockerfile` builds a minimal `oven/bun:1.4.4-alpine` runtime image with `dist/server.js`, `dist-bun-build/`, and `plugins/notes/`.
+- **Compose**: `compose.yaml` pulls `ghcr.io/tunitz/opencode-ui:${IMAGE_TAG:-latest}` on bridge networking (`5174:5174`) with `host.docker.internal:host-gateway` and a `/data` volume; `compose.build.yaml` overrides it for local builds (`docker compose -f compose.yaml -f compose.build.yaml up -d --build`).
+- **CI & Releases**: `.github/workflows/ci.yml` runs `bun run verify`, `bun test plugins/notes/test`, production builds, and a Docker build check on PRs to `main`. `.github/workflows/release.yml` runs Release Please on `main`, publishes `ghcr.io/tunitz/opencode-ui` (`linux/amd64`) to GHCR, and attaches cross-compiled Bun release archives (`linux-x64`, `darwin-arm64`, `windows-x64`) + `SHA256SUMS.txt`.
+
+### Mandatory Git & Branching Rules
+
+1. **Never commit or push directly to `main`.** All changes must go through a feature branch and Pull Request.
+2. **Pull `main` first** before starting any work:
+   ```sh
+   git checkout main && git pull --ff-only origin main
+   ```
+3. **Create a `feature/<name>` branch** for all changes (e.g., `feature/add-theme-toggle`), and push only `feature/<name>`.
+4. **Use Conventional Commits** (`feat:`, `fix:`, `chore:`, `docs:`, `feat!:`) so Release Please auto-versions releases accurately.

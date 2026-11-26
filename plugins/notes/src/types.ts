@@ -1,9 +1,4 @@
-import { createRequire } from "node:module"
-
-const packageMetadata = createRequire(import.meta.url)("../package.json") as {
-  name: string
-  version: string
-}
+import packageMetadata from "../package.json" with { type: "json" }
 
 export const PACKAGE_NAME = packageMetadata.name
 export const PACKAGE_VERSION = packageMetadata.version

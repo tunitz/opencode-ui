@@ -3,10 +3,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { createRequire } from "node:module"
-
-const require = createRequire(import.meta.url)
-const webPush = require("web-push") as typeof import("web-push")
+import * as webPush from "web-push"
 
 export type NotificationKind = "completion" | "needs-attention" | "failure"
 

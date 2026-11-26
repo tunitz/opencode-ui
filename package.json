@@ -70,6 +70,8 @@
     "start": "bun server/bun-server.ts",
     "build": "tsc -b && bun scripts/build-bun.ts",
     "build:bun": "bun scripts/build-bun.ts",
+    "build:server:bundle": "bun build --target=bun --minify server/bun-server.ts --outfile dist/server.js",
+    "build:binary": "bun build --compile --target=bun server/bun-server.ts --outfile dist/opencode-ui",
     "prepack": "OPENCODE_UI_BUILD_TARGET=production bun run build:bun",
     "start:bun": "bun server/bun-server.ts",
     "test": "bun test tests --isolate",
