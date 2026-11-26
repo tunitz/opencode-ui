@@ -1,6 +1,6 @@
 {
   "schema": "rust-anything/bridge@1",
-  "root": "/home/tunitz/Projects/opencode-ui",
+  "root": ".",
   "unit": "plugins/notes/src/note-ops.ts",
   "language": "ts",
   "kind": "napi",
