@@ -1,0 +1,22 @@
+{
+  "name": "@tunitz/opencode-notes",
+  "version": "0.2.0",
+  "description": "Standalone notes core with a file-based store, history, search, engine-kv migration, and an MCP stdio server.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mcp": "./src/mcp/server.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "bun test test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
+}

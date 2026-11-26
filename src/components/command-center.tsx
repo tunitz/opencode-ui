@@ -1,0 +1,263 @@
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { SearchIcon } from "lucide-react"
+
+import { projectName } from "@/components/project-select"
+import { SettingsDialog } from "@/components/settings-dialog"
+import { IntegrationCommandDialogs } from "@/components/integration-command-dialogs"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogDescription, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { ResponsiveDialogContent } from "@/components/ui/responsive-dialog-content"
+import type { OpenCodeController } from "@/lib/use-opencode"
+import { isCommandShortcut, isComposerFocusShortcut } from "@/lib/command-center-shortcuts"
+export { isCommandShortcut, isComposerFocusShortcut } from "@/lib/command-center-shortcuts"
+
+type Entry = { id: string; label: string; detail: string; run: () => void }
+
+export function matchesCommand(
+  entry: Pick<Entry, "label" | "detail">,
+  query: string
+) {
+  const text = `${entry.label} ${entry.detail}`.toLocaleLowerCase()
+  return query
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .every((word) => text.includes(word))
+}
+
+export function CommandCenter({
+  nav,
+  closeNotes,
+  focusComposer,
+  openModelSettings,
+}: {
+  nav: OpenCodeController
+  closeNotes: () => void
+  focusComposer: () => void
+  openModelSettings: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [worktreesOpen, setWorktreesOpen] = useState(false)
+  const [actionResult, setActionResult] = useState<string | null>(null)
+  const [query, setQuery] = useState("")
+  const [pending, setPending] = useState<(() => void) | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target instanceof Element ? event.target : null
+      const blocked =
+        open ||
+        settingsOpen ||
+        Boolean(
+          target?.closest(
+            'input, textarea, select, [contenteditable]:not([contenteditable="false"]), .xterm, [role="textbox"]'
+          )
+        ) ||
+        Boolean(
+          document.querySelector(
+            '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [aria-modal="true"], dialog[open]'
+          )
+        )
+      if (isCommandShortcut(event, blocked)) {
+        event.preventDefault()
+        setQuery("")
+        setOpen(true)
+      } else if (nav.activeSession && isComposerFocusShortcut(event, blocked)) {
+        event.preventDefault()
+        focusComposer()
+      }
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [open, settingsOpen, nav.activeSession, focusComposer])
+
+  // `nav` is a fresh controller object on nearly every render (status frames
+  // included). Deferring it keeps the expensive entry list stable while the
+  // user types; the committed value catches up in a low-priority render.
+  const deferredNav = useDeferredValue(nav)
+  const deferredQuery = useDeferredValue(query)
+  const entries = useMemo<Entry[]>(() => {
+    const projectsByID = new Map(
+      deferredNav.projects.map((project) => [project.id, project])
+    )
+    return [
+      {
+        id: "settings",
+        label: "Open settings",
+        detail: "Actions",
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: "refresh-sessions",
+        label: "Refresh sessions",
+        detail: "Actions",
+        run: deferredNav.refreshSessions,
+      },
+      ...(deferredNav.activeSession?.projectID || deferredNav.location?.project.id ? [{
+        id: "worktrees",
+        label: "Manage project worktrees",
+        detail: deferredNav.activeSession ? "Active session's project · isolation and existing worktrees" : "Selected project · isolation and existing worktrees",
+        run: () => setWorktreesOpen(true),
+      }] : []),
+      {
+        id: "all",
+        label: "All projects",
+        detail: "Projects",
+        run: () => {
+          closeNotes()
+          deferredNav.selectAllProjects()
+        },
+      },
+      ...(deferredNav.activeSession
+        ? [{ id: "model-settings", label: "Open model settings", detail: "Session · agent, model and thinking", run: openModelSettings }, ...(["files", "changes"] as const).map((tab) => ({
+            id: `inspector:${tab}`,
+            label: tab === "files" ? "Open files" : "Open working tree",
+            detail: "Session inspector",
+            run: () => {
+              closeNotes()
+              deferredNav.openInspector(tab)
+            },
+          }))]
+        : []),
+      ...deferredNav.projects.map((project) => ({
+        id: `project:${project.id}`,
+        label: projectName(project),
+        detail: `Project · ${project.canonical || project.id}`,
+        run: () => {
+          closeNotes()
+          void deferredNav.selectProject(project.id)
+        },
+      })),
+      ...deferredNav.sessions.map((session) => ({
+        id: `session:${session.id}`,
+        label: session.title?.trim() || "Untitled session",
+        detail: `Session · ${projectName(projectsByID.get(session.projectID) ?? { id: session.projectID, canonical: session.location?.directory, name: undefined })}`,
+        run: () => {
+          closeNotes()
+          deferredNav.selectSession(session.id)
+        },
+      })),
+    ]
+  }, [deferredNav, closeNotes, openModelSettings])
+  const results = useMemo(
+    () => entries.filter((entry) => matchesCommand(entry, deferredQuery)),
+    [entries, deferredQuery]
+  )
+
+  function choose(entry: Entry) {
+    setPending(() => entry.run)
+    setOpen(false)
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-lg"
+        className="size-11 shrink-0"
+        aria-label="Open command center"
+        onClick={() => {
+          setQuery("")
+          setOpen(true)
+        }}
+      >
+        <SearchIcon aria-hidden="true" className="size-5" />
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        onOpenChangeComplete={(next) => {
+          if (!next) {
+            setPending(null)
+            pending?.()
+          }
+        }}
+      >
+        <ResponsiveDialogContent
+          className="flex max-h-[min(36rem,85vh)] flex-col gap-3 sm:max-w-lg md:max-w-2xl [&>[data-command-results]]:shrink"
+          initialFocus={inputRef}
+        >
+          <DialogTitle>Command center</DialogTitle>
+          <DialogDescription>
+            Search loaded sessions and projects, or open an action. Ctrl or ⌘ K
+            opens this when outside an input. Alt+Shift+C focuses the composer
+            when a session is selected and no input or dialog is active.
+          </DialogDescription>
+          <Input
+            ref={inputRef}
+            aria-label="Search command center"
+            placeholder="Search sessions, projects, and actions"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return
+              if (event.key === "ArrowDown") {
+                event.preventDefault()
+                listRef.current
+                  ?.querySelector<HTMLButtonElement>("button")
+                  ?.focus()
+              }
+              if (event.key === "Enter") {
+                // Resolve against the live query so a fast Enter can't act on a
+                // still-pending deferred result list.
+                const first = entries.find((entry) =>
+                  matchesCommand(entry, query)
+                )
+                if (first) {
+                  event.preventDefault()
+                  choose(first)
+                }
+              }
+            }}
+          />
+          <div
+            ref={listRef}
+            data-command-results
+            className="min-h-0 flex-1 overflow-y-auto"
+            aria-label="Command results"
+          >
+            {results.length ? (
+              results.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className="flex min-h-11 w-full flex-col items-start justify-center rounded-md px-3 py-2 text-start hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                  onClick={() => choose(entry)}
+                >
+                  <span className="w-full truncate font-medium" dir="auto">
+                    {entry.label}
+                  </span>
+                  <span
+                    className="w-full truncate text-xs text-muted-foreground"
+                    dir="auto"
+                  >
+                    {entry.detail}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p
+                role="status"
+                className="px-3 py-4 text-sm text-muted-foreground"
+              >
+                No matching loaded items.
+              </p>
+            )}
+          </div>
+        </ResponsiveDialogContent>
+      </Dialog>
+      <SettingsDialog
+        nav={nav}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+      />
+      <IntegrationCommandDialogs kind={worktreesOpen ? "worktrees" : null} nav={nav} onClose={() => setWorktreesOpen(false)} onResult={(message) => setActionResult(message)} onSessionCreated={closeNotes} />
+      {actionResult ? <p role="status" className="sr-only">{actionResult}</p> : null}
+    </>
+  )
+}

@@ -1,0 +1,136 @@
+name: Release & Publish Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_latest:
+        description: Also tag pushed main image as latest
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      major: ${{ steps.release.outputs.major }}
+      minor: ${{ steps.release.outputs.minor }}
+    steps:
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  docker:
+    needs: release-please
+    if: ${{ always() && needs.release-please.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.release_created == 'true' && needs.release-please.outputs.tag_name || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/tunitz/opencode-ui
+          tags: |
+            type=raw,value=main
+            type=sha,prefix=sha-
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }},enable=${{ needs.release-please.outputs.release_created == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }},enable=${{ needs.release-please.outputs.release_created == 'true' }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.tag_name }},enable=${{ needs.release-please.outputs.release_created == 'true' }}
+            type=raw,value=latest,enable=${{ needs.release-please.outputs.release_created == 'true' || inputs.publish_latest == true }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release-assets:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - name: Checkout tagged release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Install dependencies and build frontend
+        run: |
+          bun install --frozen-lockfile
+          OPENCODE_UI_BUILD_TARGET=production bun run build:bun
+
+      - name: Build cross-platform Bun executables
+        run: |
+          mkdir -p release-artifacts
+          for pair in \
+            "linux-x64:bun-linux-x64:opencode-ui" \
+            "darwin-arm64:bun-darwin-arm64:opencode-ui" \
+            "windows-x64:bun-windows-x64:opencode-ui.exe"; do
+            os_arch="${pair%%:*}"
+            rest="${pair#*:}"
+            bun_target="${rest%%:*}"
+            bin_name="${rest#*:}"
+
+            stage="stage-${os_arch}"
+            rm -rf "${stage}"
+            mkdir -p "${stage}/plugins/notes"
+            bun build --compile --target="${bun_target}" server/bun-server.ts --outfile "${stage}/${bin_name}"
+            cp -R dist-bun-build "${stage}/dist-bun-build"
+            cp -R plugins/notes/src "${stage}/plugins/notes/src"
+            cp plugins/notes/package.json "${stage}/plugins/notes/package.json"
+            cp .env.example "${stage}/.env.example"
+
+            if [ "${os_arch}" = "windows-x64" ]; then
+              (cd "${stage}" && zip -r "../release-artifacts/opencode-ui-${TAG}-${os_arch}.zip" .)
+            else
+              tar -C "${stage}" -czf "release-artifacts/opencode-ui-${TAG}-${os_arch}.tar.gz" .
+            fi
+          done
+          (cd release-artifacts && sha256sum * > SHA256SUMS.txt)
+
+      - name: Upload release assets
+        run: gh release upload "${TAG}" release-artifacts/* --clobber

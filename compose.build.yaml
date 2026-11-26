@@ -1,0 +1,6 @@
+# Optional override to build locally instead of pulling from GHCR:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+services:
+  opencode-ui:
+    build:
+      context: .
